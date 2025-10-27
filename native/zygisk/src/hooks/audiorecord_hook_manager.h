@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <sys/types.h>
 
 #include "hooks/hook_manager.h"
 #include "runtime/inline_hook.h"
