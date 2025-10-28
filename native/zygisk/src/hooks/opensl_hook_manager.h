@@ -3,7 +3,12 @@
 #include <cstdint>
 #include <string>
 
+#ifdef __ANDROID__
 #include <SLES/OpenSLES.h>
+#else
+using SLresult = int;
+constexpr SLresult SL_RESULT_SUCCESS = 0;
+#endif
 
 #include "hooks/hook_manager.h"
 #include "runtime/inline_hook.h"

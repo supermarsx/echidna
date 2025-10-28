@@ -7,7 +7,9 @@
 #define ANDROID_LOG_INFO 0
 #endif
 
+#ifdef __ANDROID__
 #include <SLES/OpenSLES.h>
+#endif
 
 #include <string>
 
