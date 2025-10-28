@@ -22,8 +22,7 @@ ReadFn gOriginalRead = nullptr;
 
 ssize_t ForwardRead(void *instance, void *buffer, size_t bytes, bool blocking) {
     auto &state = state::SharedState::instance();
-    state.refreshFromSharedMemory();
-    const std::string process = utils::CurrentProcessName();
+    const std::string &process = utils::CachedProcessName();
     if (!state.hooksEnabled() || !state.isProcessWhitelisted(process)) {
         return gOriginalRead ? gOriginalRead(instance, buffer, bytes, blocking) : 0;
     }

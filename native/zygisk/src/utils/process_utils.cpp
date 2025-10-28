@@ -12,5 +12,10 @@ std::string CurrentProcessName() {
     return value;
 }
 
+const std::string &CachedProcessName() {
+    static const std::string process = CurrentProcessName();
+    return process;
+}
+
 }  // namespace utils
 }  // namespace echidna

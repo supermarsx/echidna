@@ -23,8 +23,7 @@ BufferCallback gOriginalCallback = nullptr;
 
 SLresult ForwardCallback(void *caller, void *context, void *buffer, uint32_t size) {
     auto &state = state::SharedState::instance();
-    state.refreshFromSharedMemory();
-    const std::string process = utils::CurrentProcessName();
+    const std::string &process = utils::CachedProcessName();
     if (!state.hooksEnabled() || !state.isProcessWhitelisted(process)) {
         return gOriginalCallback ? gOriginalCallback(caller, context, buffer, size)
                                  : SL_RESULT_SUCCESS;

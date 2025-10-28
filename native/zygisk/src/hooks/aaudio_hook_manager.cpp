@@ -23,8 +23,7 @@ Callback gOriginalCallback = nullptr;
 
 int ForwardCallback(void *stream, void *user, void *audio_data, int32_t num_frames) {
     auto &state = state::SharedState::instance();
-    state.refreshFromSharedMemory();
-    const std::string process = utils::CurrentProcessName();
+    const std::string &process = utils::CachedProcessName();
     if (!state.hooksEnabled() || !state.isProcessWhitelisted(process)) {
         return gOriginalCallback ? gOriginalCallback(stream, user, audio_data, num_frames) : 0;
     }
