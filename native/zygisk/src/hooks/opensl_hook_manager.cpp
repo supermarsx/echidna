@@ -7,6 +7,8 @@
 #define ANDROID_LOG_INFO 0
 #endif
 
+#include <SLES/OpenSLES.h>
+
 #include <string>
 
 #include "state/shared_state.h"
@@ -16,23 +18,20 @@ namespace echidna {
 namespace hooks {
 
 namespace {
-using BufferCallback = void (*)(void *, void *, void *, uint32_t);
+using BufferCallback = SLresult (*)(void *, void *, void *, uint32_t);
 BufferCallback gOriginalCallback = nullptr;
 
-void ForwardCallback(void *caller, void *context, void *buffer, uint32_t size) {
+SLresult ForwardCallback(void *caller, void *context, void *buffer, uint32_t size) {
     auto &state = state::SharedState::instance();
     state.refreshFromSharedMemory();
     const std::string process = utils::CurrentProcessName();
     if (!state.hooksEnabled() || !state.isProcessWhitelisted(process)) {
-        if (gOriginalCallback) {
-            gOriginalCallback(caller, context, buffer, size);
-        }
-        return;
+        return gOriginalCallback ? gOriginalCallback(caller, context, buffer, size)
+                                 : SL_RESULT_SUCCESS;
     }
     state.setStatus(state::InternalStatus::kHooked);
-    if (gOriginalCallback) {
-        gOriginalCallback(caller, context, buffer, size);
-    }
+    return gOriginalCallback ? gOriginalCallback(caller, context, buffer, size)
+                             : SL_RESULT_SUCCESS;
 }
 
 }  // namespace
@@ -62,8 +61,9 @@ bool OpenSLHookManager::install() {
     return false;
 }
 
-void OpenSLHookManager::Replacement(void *caller, void *context, void *buffer, uint32_t size) {
-    ForwardCallback(caller, context, buffer, size);
+SLresult OpenSLHookManager::Replacement(void *caller, void *context, void *buffer,
+                                        uint32_t size) {
+    return ForwardCallback(caller, context, buffer, size);
 }
 
 }  // namespace hooks
