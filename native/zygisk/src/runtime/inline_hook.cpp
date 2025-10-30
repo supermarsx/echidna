@@ -92,6 +92,21 @@ struct RelocationResult {
     std::vector<TestBranchFixup> test_branch_fixups;
     std::vector<std::pair<uintptr_t, size_t>> original_address_map;
     std::vector<InternalBranchFixup> internal_branch_fixups;
+    struct PendingConditionalStub {
+        size_t fixup_index;
+        uint64_t target;
+    };
+    struct PendingCompareStub {
+        size_t fixup_index;
+        uint64_t target;
+    };
+    struct PendingTestStub {
+        size_t fixup_index;
+        uint64_t target;
+    };
+    std::vector<PendingConditionalStub> pending_conditional_stubs;
+    std::vector<PendingCompareStub> pending_compare_stubs;
+    std::vector<PendingTestStub> pending_test_stubs;
     uintptr_t original_start = 0;
     size_t original_size = 0;
 };
@@ -129,34 +144,54 @@ void AppendBranchTo(RelocationResult &result, uint64_t target, bool link) {
 void AppendBranchStub(RelocationResult &result, uint64_t target, uint32_t original) {
     BranchFixup fixup{
         .instruction_index = result.instructions.size(),
-        .target_instruction_index = result.instructions.size() + 1,
+        .target_instruction_index = 0,
         .original = original,
     };
     result.instructions.push_back(0);
     result.branch_fixups.push_back(fixup);
-    AppendBranchTo(result, target, false);
+    result.pending_conditional_stubs.push_back(
+        {.fixup_index = result.branch_fixups.size() - 1, .target = target});
 }
 
 void AppendCompareBranchStub(RelocationResult &result, uint64_t target, uint32_t original) {
     CompareBranchFixup fixup{
         .instruction_index = result.instructions.size(),
-        .target_instruction_index = result.instructions.size() + 1,
+        .target_instruction_index = 0,
         .original = original,
     };
     result.instructions.push_back(0);
     result.compare_branch_fixups.push_back(fixup);
-    AppendBranchTo(result, target, false);
+    result.pending_compare_stubs.push_back(
+        {.fixup_index = result.compare_branch_fixups.size() - 1, .target = target});
 }
 
 void AppendTestBranchStub(RelocationResult &result, uint64_t target, uint32_t original) {
     TestBranchFixup fixup{
         .instruction_index = result.instructions.size(),
-        .target_instruction_index = result.instructions.size() + 1,
+        .target_instruction_index = 0,
         .original = original,
     };
     result.instructions.push_back(0);
     result.test_branch_fixups.push_back(fixup);
-    AppendBranchTo(result, target, false);
+    result.pending_test_stubs.push_back(
+        {.fixup_index = result.test_branch_fixups.size() - 1, .target = target});
+}
+
+void EmitPendingBranchStubs(RelocationResult &result) {
+    auto emit = [&](auto &pending, auto &fixups) {
+        for (const auto &entry : pending) {
+            size_t stub_index = result.instructions.size();
+            AppendBranchTo(result, entry.target, false);
+            if (entry.fixup_index < fixups.size()) {
+                fixups[entry.fixup_index].target_instruction_index = stub_index;
+            }
+        }
+        pending.clear();
+    };
+
+    emit(result.pending_conditional_stubs, result.branch_fixups);
+    emit(result.pending_compare_stubs, result.compare_branch_fixups);
+    emit(result.pending_test_stubs, result.test_branch_fixups);
 }
 
 bool RelocateInstruction(uint32_t instruction, uintptr_t pc, RelocationResult &result) {
@@ -457,6 +492,8 @@ bool InlineHook::install(void *target, void *replacement, void **original) {
         }
         relocation.original_address_map.emplace_back(pc + offset, relocated_index);
     }
+
+    EmitPendingBranchStubs(relocation);
 
     // Append branch back to the original function after the patched bytes.
     AppendLiteralLoad(relocation, kAArch64ScratchRegister,
