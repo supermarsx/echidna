@@ -5,6 +5,7 @@
 #include <cstring>
 #include <optional>
 #include <vector>
+#include <utility>
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -77,6 +78,11 @@ struct TestBranchFixup {
     uint32_t original;
 };
 
+struct InternalBranchFixup {
+    size_t literal_index;
+    uintptr_t target_address;
+};
+
 struct RelocationResult {
     std::vector<uint32_t> instructions;
     std::vector<uint64_t> literals;
@@ -84,9 +90,13 @@ struct RelocationResult {
     std::vector<BranchFixup> branch_fixups;
     std::vector<CompareBranchFixup> compare_branch_fixups;
     std::vector<TestBranchFixup> test_branch_fixups;
+    std::vector<std::pair<uintptr_t, size_t>> original_address_map;
+    std::vector<InternalBranchFixup> internal_branch_fixups;
+    uintptr_t original_start = 0;
+    size_t original_size = 0;
 };
 
-void AppendLiteralLoad(RelocationResult &result, uint32_t rt, uint64_t value) {
+size_t AppendLiteralLoad(RelocationResult &result, uint32_t rt, uint64_t value) {
     LiteralFixup fixup{
         .instruction_index = result.instructions.size(),
         .literal_index = result.literals.size(),
@@ -95,10 +105,23 @@ void AppendLiteralLoad(RelocationResult &result, uint32_t rt, uint64_t value) {
     result.instructions.push_back(0);
     result.literal_fixups.push_back(fixup);
     result.literals.push_back(value);
+    return fixup.literal_index;
 }
 
 void AppendBranchTo(RelocationResult &result, uint64_t target, bool link) {
-    AppendLiteralLoad(result, kAArch64ScratchRegister, target);
+    bool target_in_relocated_range =
+        target >= result.original_start &&
+        target < (result.original_start + result.original_size);
+    uint64_t literal_value = target;
+    if (target_in_relocated_range) {
+        literal_value = 0;
+    }
+    size_t literal_index =
+        AppendLiteralLoad(result, kAArch64ScratchRegister, literal_value);
+    if (target_in_relocated_range) {
+        result.internal_branch_fixups.push_back(
+            {.literal_index = literal_index, .target_address = static_cast<uintptr_t>(target)});
+    }
     result.instructions.push_back(link ? EncodeBlr(kAArch64ScratchRegister)
                                        : EncodeBr(kAArch64ScratchRegister));
 }
@@ -228,6 +251,16 @@ bool RelocateInstruction(uint32_t instruction, uintptr_t pc, RelocationResult &r
     return true;
 }
 
+std::optional<size_t> FindInstructionIndex(const RelocationResult &result,
+                                          uintptr_t original_address) {
+    for (const auto &entry : result.original_address_map) {
+        if (entry.first == original_address) {
+            return entry.second;
+        }
+    }
+    return std::nullopt;
+}
+
 bool FinalizeRelocation(RelocationResult &result, void *trampoline_base) {
     unsigned char *base = static_cast<unsigned char *>(trampoline_base);
     uintptr_t code_size_bytes = result.instructions.size() * kAArch64InstructionSize;
@@ -236,6 +269,19 @@ bool FinalizeRelocation(RelocationResult &result, void *trampoline_base) {
     for (size_t i = 0; i < result.instructions.size(); ++i) {
         std::memcpy(base + i * kAArch64InstructionSize, &result.instructions[i],
                     sizeof(uint32_t));
+    }
+
+    for (const auto &fixup : result.internal_branch_fixups) {
+        auto target_index = FindInstructionIndex(result, fixup.target_address);
+        if (!target_index.has_value()) {
+            return false;
+        }
+        uintptr_t relocated_address = reinterpret_cast<uintptr_t>(base) +
+                                      target_index.value() * kAArch64InstructionSize;
+        if (fixup.literal_index >= result.literals.size()) {
+            return false;
+        }
+        result.literals[fixup.literal_index] = relocated_address;
     }
 
     // Write literal values
@@ -397,15 +443,19 @@ bool InlineHook::install(void *target, void *replacement, void **original) {
 #if defined(__aarch64__)
     patch_size_ = kAArch64HookSize;
     RelocationResult relocation;
+    relocation.original_start = reinterpret_cast<uintptr_t>(target_);
+    relocation.original_size = patch_size_;
     unsigned char *source = static_cast<unsigned char *>(target_);
     uintptr_t pc = reinterpret_cast<uintptr_t>(source);
     for (size_t offset = 0; offset < patch_size_; offset += kAArch64InstructionSize) {
         uint32_t instruction;
         std::memcpy(&instruction, source + offset, sizeof(uint32_t));
         uintptr_t instruction_pc = pc + offset + kAArch64InstructionSize;
+        size_t relocated_index = relocation.instructions.size();
         if (!RelocateInstruction(instruction, instruction_pc, relocation)) {
             return false;
         }
+        relocation.original_address_map.emplace_back(pc + offset, relocated_index);
     }
 
     // Append branch back to the original function after the patched bytes.
