@@ -13,6 +13,7 @@
 namespace echidna {
 namespace runtime {
 
+#if defined(__aarch64__)
 namespace {
 constexpr uint32_t kAArch64LdrX16Literal = 0x58000050;  // LDR X16, #8
 constexpr uint32_t kAArch64BrX16 = 0xD61F0200;          // BR X16
@@ -442,8 +443,8 @@ size_t CalculateTrampolineSize(const RelocationResult &result) {
     return static_cast<size_t>(total);
 }
 
-#endif
 }  // namespace
+#endif  // defined(__aarch64__)
 
 InlineHook::InlineHook()
     : installed_(false), target_(nullptr), trampoline_(nullptr), trampoline_size_(0), patch_size_(0) {}
