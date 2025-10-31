@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -81,9 +82,11 @@ ech_dsp_status_t DspEngine::ProcessBlock(const float *input,
   }
 
   config::ProcessingMode mode;
+  uint32_t block_timeout_ms;
   {
     std::lock_guard<std::mutex> lock(preset_mutex_);
     mode = processing_mode_;
+    block_timeout_ms = preset_.block_ms;
   }
 
   if (mode == config::ProcessingMode::kSynchronous) {
@@ -91,13 +94,18 @@ ech_dsp_status_t DspEngine::ProcessBlock(const float *input,
   }
 
   auto block = std::make_shared<runtime::AudioBlock>(sample_rate_, channels_, frames);
+  block->cancelled.store(false, std::memory_order_relaxed);
   std::memcpy(block->data.data(), input, sizeof(float) * frames * channels_);
   if (!input_queue_.push(block)) {
     return ProcessInternal(input, output, frames);
   }
   auto processed =
-      output_queue_.pop_wait(std::chrono::milliseconds(preset_.block_ms));
+      output_queue_.pop_wait(std::chrono::milliseconds(block_timeout_ms));
   if (!processed) {
+    block->cancelled.store(true, std::memory_order_release);
+    // Ensure no stale hybrid output is returned on the next call.
+    while (output_queue_.pop()) {
+    }
     return ProcessInternal(input, output, frames);
   }
   if (processed->data.size() < frames * channels_) {
@@ -192,13 +200,25 @@ void DspEngine::WorkerLoop() {
     if (!block) {
       continue;
     }
+    if (block->cancelled.load(std::memory_order_acquire)) {
+      continue;
+    }
     std::vector<float> output(block->frames * block->channels);
     if (ProcessInternal(block->data.data(), output.data(), block->frames) !=
         ECH_DSP_STATUS_OK) {
       continue;
     }
+    if (block->cancelled.load(std::memory_order_acquire)) {
+      continue;
+    }
     block->data = std::move(output);
-    while (!output_queue_.push(block) && worker_running_) {
+    while (worker_running_) {
+      if (block->cancelled.load(std::memory_order_acquire)) {
+        break;
+      }
+      if (output_queue_.push(block)) {
+        break;
+      }
       std::this_thread::yield();
     }
   }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -15,16 +16,22 @@ struct AudioBlock {
   uint32_t channels{0};
   size_t frames{0};
   std::vector<float> data;
+  std::atomic<bool> cancelled{false};
 
   AudioBlock() = default;
   AudioBlock(uint32_t sr, uint32_t ch, size_t fr)
-      : sample_rate(sr), channels(ch), frames(fr), data(fr * ch) {}
+      : sample_rate(sr),
+        channels(ch),
+        frames(fr),
+        data(fr * ch),
+        cancelled(false) {}
 
   void resize(uint32_t sr, uint32_t ch, size_t fr) {
     sample_rate = sr;
     channels = ch;
     frames = fr;
     data.resize(fr * ch);
+    cancelled.store(false, std::memory_order_relaxed);
   }
 };
 
