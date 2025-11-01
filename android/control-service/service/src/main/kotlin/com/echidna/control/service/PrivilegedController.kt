@@ -1,7 +1,6 @@
 package com.echidna.control.service
 
 import android.util.Log
-import java.io.File
 
 private const val PRIV_TAG = "EchidnaPriv"
 private const val MODULE_ID = "echidna-control"
@@ -49,7 +48,7 @@ class PrivilegedController(
     }
 
     fun refreshStatus(): ModuleStatus {
-        val installed = File("/data/adb/modules/$MODULE_ID/module.prop").exists()
+        val (installed, installError) = queryModuleInstallationState()
         val zygiskActive = queryZygisk()
         val selinuxState = selinuxChecker.evaluate()
         val status = ModuleStatus(
@@ -57,7 +56,7 @@ class PrivilegedController(
             zygiskEnabled = zygiskActive,
             selinuxState = selinuxState,
             javaFallbackActive = selinuxState == SelinuxState.ENFORCING_JAVA_ONLY,
-            lastError = null,
+            lastError = installError,
         )
         cachedStatus = status
         return status
@@ -98,5 +97,23 @@ class PrivilegedController(
             return false
         }
         return result.stdout.contains("enabled", ignoreCase = true)
+    }
+
+    private fun queryModuleInstallationState(): Pair<Boolean, String?> {
+        val command = "test -f /data/adb/modules/$MODULE_ID/module.prop"
+        val result = rootExecutor.runCommand(command)
+        if (result.exitCode == 0) {
+            return true to null
+        }
+        if (result.exitCode == 1) {
+            return false to null
+        }
+        val message = if (result.stderr.isNotEmpty()) {
+            "unable to verify module installation: ${result.stderr}"
+        } else {
+            "unable to verify module installation (exit ${result.exitCode})"
+        }
+        Log.w(PRIV_TAG, message)
+        return false to message
     }
 }

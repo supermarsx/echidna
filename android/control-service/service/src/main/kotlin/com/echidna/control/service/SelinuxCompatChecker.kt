@@ -7,6 +7,7 @@ import android.util.Log
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
 private const val TAG = "EchidnaSelinux"
 
@@ -25,8 +26,7 @@ class SelinuxCompatChecker(private val context: Context) {
         }
 
         val policyToolPresent = hasMagiskPolicyBinary()
-        val hasRoot = context.packageManager.hasSystemFeature("android.software.device_admin") ||
-            File("/sbin/su").exists() || File("/system/xbin/su").exists()
+        val hasRoot = hasRootAccess()
 
         return if (policyToolPresent && hasRoot) {
             Log.i(TAG, "magiskpolicy available; attempting enforcing mode policy patch")
@@ -59,6 +59,34 @@ class SelinuxCompatChecker(private val context: Context) {
             process.waitFor()
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 reader.readLine() != null
+            }
+        } catch (ignored: Exception) {
+            false
+        } finally {
+            process?.destroy()
+        }
+    }
+
+    private fun hasRootAccess(): Boolean {
+        if (context.packageManager.hasSystemFeature("android.software.device_admin")) {
+            return true
+        }
+        val suCandidates = listOf(
+            "/sbin/su",
+            "/system/xbin/su",
+            "/system/bin/su",
+        )
+        if (suCandidates.any { File(it).canExecute() }) {
+            return true
+        }
+        var process: Process? = null
+        return try {
+            process = Runtime.getRuntime().exec(arrayOf("su", "-c", "exit"))
+            if (!process.waitFor(1, TimeUnit.SECONDS)) {
+                process.destroy()
+                false
+            } else {
+                process.exitValue() == 0
             }
         } catch (ignored: Exception) {
             false
