@@ -35,6 +35,7 @@ public final class AudioRecordHook {
             hookByteArray(audioRecordClass, moduleState);
             hookByteArrayWithMode(audioRecordClass, moduleState);
             hookShortArray(audioRecordClass, moduleState);
+            hookShortArrayWithMode(audioRecordClass, moduleState);
             hookFloatArray(audioRecordClass, moduleState);
             hookByteBuffer(audioRecordClass, moduleState);
         } catch (XposedHelpers.ClassNotFoundError error) {
@@ -83,6 +84,21 @@ public final class AudioRecordHook {
                     new ShortArrayReadHook(state));
         } catch (NoSuchMethodError ignored) {
             XposedBridge.log(TAG + ": short[] read offset/size missing");
+        }
+    }
+
+    private static void hookShortArrayWithMode(Class<?> audioRecordClass, ModuleState state) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    audioRecordClass,
+                    "read",
+                    short[].class,
+                    int.class,
+                    int.class,
+                    int.class,
+                    new ShortArrayReadHook(state));
+        } catch (NoSuchMethodError ignored) {
+            // Available on API 23+.
         }
     }
 
