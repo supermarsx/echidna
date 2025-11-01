@@ -1,6 +1,5 @@
 package com.echidna.control.service
 
-import android.content.Context
 import android.os.Build
 import android.os.SELinux
 import android.util.Log
@@ -14,7 +13,7 @@ private const val TAG = "EchidnaSelinux"
 /**
  * Evaluates whether SELinux tweaks are possible on the current device.
  */
-class SelinuxCompatChecker(private val context: Context) {
+class SelinuxCompatChecker {
     fun evaluate(): SelinuxState {
         if (!SELinux.isSELinuxEnabled()) {
             Log.w(TAG, "SELinux appears to be disabled; falling back to permissive flow")
@@ -68,9 +67,6 @@ class SelinuxCompatChecker(private val context: Context) {
     }
 
     private fun hasRootAccess(): Boolean {
-        if (context.packageManager.hasSystemFeature("android.software.device_admin")) {
-            return true
-        }
         val suCandidates = listOf(
             "/sbin/su",
             "/system/xbin/su",
