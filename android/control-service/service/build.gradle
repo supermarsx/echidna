@@ -27,6 +27,12 @@ android {
         buildConfig = false
     }
 
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+
     lint {
         warningsAsErrors true
         abortOnError false

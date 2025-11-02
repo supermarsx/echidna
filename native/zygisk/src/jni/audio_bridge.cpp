@@ -49,11 +49,11 @@ class FloatSharedBuffer {
             return false;
         }
         converter(data_, samples);
-        const auto status = echidna_process_block(
+        const auto result = echidna_process_block(
                 data_, nullptr, static_cast<uint32_t>(frames),
                 static_cast<uint32_t>(sample_rate),
                 static_cast<uint32_t>(channel_count));
-        return status != ECHIDNA_STATUS_ERROR;
+        return result == ECHIDNA_RESULT_OK;
     }
 
     bool copyAndForward(const float *input,
@@ -63,11 +63,11 @@ class FloatSharedBuffer {
         if (!input || frames == 0 || channel_count <= 0) {
             return false;
         }
-        const auto status = echidna_process_block(
+        const auto result = echidna_process_block(
                 input, nullptr, static_cast<uint32_t>(frames),
                 static_cast<uint32_t>(sample_rate),
                 static_cast<uint32_t>(channel_count));
-        return status != ECHIDNA_STATUS_ERROR;
+        return result == ECHIDNA_RESULT_OK;
     }
 
   private:

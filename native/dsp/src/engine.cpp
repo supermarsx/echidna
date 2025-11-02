@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -17,7 +18,13 @@ DspEngine::DspEngine(uint32_t sample_rate,
       channels_(channels),
       quality_mode_(quality),
       input_queue_(8),
-      output_queue_(8) {}
+      output_queue_(8) {
+  const char *plugin_dir = std::getenv("ECHIDNA_PLUGIN_DIR");
+  if (!plugin_dir || plugin_dir[0] == '\0') {
+    plugin_dir = "/data/local/tmp/echidna/plugins";
+  }
+  plugin_loader_.LoadFromDirectory(plugin_dir);
+}
 
 DspEngine::~DspEngine() { StopWorker(); }
 
@@ -133,6 +140,8 @@ ech_dsp_status_t DspEngine::ProcessInternal(const float *input,
   autotune_.process(ctx);
   reverb_.process(ctx);
 
+  plugin_loader_.ProcessAll(ctx);
+
   mix_.process_buffers(dry_buffer_.data(), wet_buffer_.data(), output, frames);
   return ECH_DSP_STATUS_OK;
 }
@@ -170,6 +179,9 @@ void DspEngine::ApplyPresetLocked() {
   reverb_.reset();
 
   mix_.prepare(sample_rate_, channels_);
+
+  plugin_loader_.PrepareAll(sample_rate_, channels_);
+  plugin_loader_.ResetAll();
 }
 
 void DspEngine::StartWorker() {

@@ -24,7 +24,8 @@ set(ECHIDNA_DSP_SOURCES
     src/effects/formant_shifter.cpp
     src/effects/auto_tune.cpp
     src/effects/reverb.cpp
-    src/effects/mix_bus.cpp)
+    src/effects/mix_bus.cpp
+    src/plugins/plugin_loader.cpp)
 
 add_library(ech_dsp SHARED ${ECHIDNA_DSP_SOURCES})
 
@@ -40,6 +41,7 @@ endif()
 target_include_directories(ech_dsp
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -50,6 +52,12 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)")
   target_compile_definitions(ech_dsp PRIVATE ECHIDNA_DSP_HAS_AVX=1)
 endif()
 
+
+find_library(CRYPTO_LIB crypto)
+if(CRYPTO_LIB)
+  target_link_libraries(ech_dsp PRIVATE ${CRYPTO_LIB})
+  target_compile_definitions(ech_dsp PRIVATE ECHIDNA_HAS_BORINGSSL=1)
+endif()
 install(TARGETS ech_dsp
     LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
