@@ -2,10 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.echidna.control">
 
+    <permission
+        android:name="com.echidna.app.permission.BIND_CONTROL_SERVICE"
+        android:label="Echidna control access"
+        android:protectionLevel="signature" />
+
     <application>
         <service
             android:name=".service.EchidnaControlService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="true"
+            android:permission="com.echidna.app.permission.BIND_CONTROL_SERVICE" />
     </application>
 </manifest>
