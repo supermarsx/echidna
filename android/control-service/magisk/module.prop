@@ -1,0 +1,7 @@
+id=echidna-control
+name=Echidna Control Bridge
+version=0.1.0
+versionCode=1
+author=Echidna Project
+minMagisk=24000
+description=Installs libechidna.so and exposes shared memory sockets for the Echidna Zygisk engine.
