@@ -26,9 +26,10 @@ class PrivilegedController(
             Log.w(PRIV_TAG, "Cannot install module: archive path is empty")
             return updateStatus(lastError = "module archive missing")
         }
-        val escapedPath = moduleArchivePath.trim().replace("\"", "\\\"")
-        val command = "magisk --install-module \"$escapedPath\""
-        val result = rootExecutor.runCommand(command)
+        val sanitizedPath = moduleArchivePath.trim()
+        val result = rootExecutor.runCommand(
+            listOf("magisk", "--install-module", sanitizedPath),
+        )
         if (!result.success) {
             return updateStatus(lastError = "install failed: ${result.stderr}")
         }
@@ -38,8 +39,9 @@ class PrivilegedController(
     }
 
     fun uninstallModule(): ModuleStatus {
-        val command = "magisk --remove-modules $MODULE_ID"
-        val result = rootExecutor.runCommand(command)
+        val result = rootExecutor.runCommand(
+            listOf("magisk", "--remove-modules", MODULE_ID),
+        )
         if (!result.success) {
             return updateStatus(lastError = "uninstall failed: ${result.stderr}")
         }
@@ -69,13 +71,14 @@ class PrivilegedController(
         if (state != SelinuxState.ENFORCING_WITH_POLICY) {
             return state
         }
-        val policyCommand = buildString {
-            append("magiskpolicy --live ")
-            append("'allow zygote zygote process dyntransition' ")
-            append("'allow zygote zygote binder call' ")
-            append("'allow zygote zygote binder transfer'")
-        }
-        val result = rootExecutor.runCommand(policyCommand)
+        val policyArgs = listOf(
+            "magiskpolicy",
+            "--live",
+            "allow zygote zygote process dyntransition",
+            "allow zygote zygote binder call",
+            "allow zygote zygote binder transfer",
+        )
+        val result = rootExecutor.runCommand(policyArgs)
         if (!result.success) {
             Log.w(PRIV_TAG, "Failed to apply SELinux policy: ${result.stderr}")
             return SelinuxState.ENFORCING_JAVA_ONLY
@@ -91,7 +94,7 @@ class PrivilegedController(
     }
 
     private fun queryZygisk(): Boolean {
-        val result = rootExecutor.runCommand("magisk --zygisk")
+        val result = rootExecutor.runCommand(listOf("magisk", "--zygisk"))
         if (!result.success) {
             Log.w(PRIV_TAG, "Unable to query Zygisk: ${result.stderr}")
             return false
@@ -100,8 +103,9 @@ class PrivilegedController(
     }
 
     private fun queryModuleInstallationState(): Pair<Boolean, String?> {
-        val command = "test -f /data/adb/modules/$MODULE_ID/module.prop"
-        val result = rootExecutor.runCommand(command)
+        val result = rootExecutor.runCommand(
+            listOf("test", "-f", "/data/adb/modules/$MODULE_ID/module.prop"),
+        )
         if (result.exitCode == 0) {
             return true to null
         }

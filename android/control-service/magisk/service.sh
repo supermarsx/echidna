@@ -31,7 +31,7 @@ install_library() {
 prepare_socket_endpoint() {
     if [ -S "$SOCKET_PATH" ]; then
         chown root:shell "$SOCKET_PATH" 2>/dev/null || true
-        chmod 0660 "$SOCKET_PATH" 2>/dev/null || true
+        chmod 0666 "$SOCKET_PATH" 2>/dev/null || true
     else
         log "Socket will be created on demand by the Zygisk side"
     fi
