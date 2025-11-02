@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "utils/config_shared_memory.h"
+#include "utils/telemetry_shared_memory.h"
 
 namespace echidna {
 namespace state {
@@ -34,6 +35,9 @@ class SharedState {
     void updateConfiguration(const utils::ConfigurationSnapshot &snapshot);
     void refreshFromSharedMemory();
 
+    utils::TelemetrySharedMemory &telemetry();
+    const utils::TelemetrySharedMemory &telemetry() const;
+
   private:
     SharedState();
 
@@ -42,6 +46,7 @@ class SharedState {
     std::string profile_;
     utils::ConfigSharedMemory shared_memory_;
     utils::ConfigurationSnapshot cached_snapshot_;
+    utils::TelemetrySharedMemory telemetry_memory_;
 };
 
 }  // namespace state

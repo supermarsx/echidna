@@ -35,6 +35,7 @@ import java.util.Locale
 @Composable
 fun EffectsEditorScreen(viewModel: EffectsEditorViewModel) {
     val preset by viewModel.activePreset.collectAsStateWithLifecycle()
+    val warnings by viewModel.warnings.collectAsStateWithLifecycle()
     val modules = preset.modules
 
     LazyColumn(
@@ -44,6 +45,23 @@ fun EffectsEditorScreen(viewModel: EffectsEditorViewModel) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { Text(text = "Effects Chain", style = MaterialTheme.typography.headlineSmall) }
+        if (warnings.isNotEmpty()) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Preset Warnings", style = MaterialTheme.typography.titleMedium)
+                        warnings.forEach { warning ->
+                            val color = when (warning.severity) {
+                                com.echidna.app.model.WarningSeverity.INFO -> MaterialTheme.colorScheme.primary
+                                com.echidna.app.model.WarningSeverity.WARNING -> MaterialTheme.colorScheme.tertiary
+                                com.echidna.app.model.WarningSeverity.CRITICAL -> MaterialTheme.colorScheme.error
+                            }
+                            Text(warning.message, color = color, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
         items(items = modules, key = { it.id }) { module ->
             when (module) {
                     is EffectModule.Gate -> GateCard(module, onToggle = { viewModel.toggleModule(module.id, it) }) { threshold, attack, release, hysteresis ->

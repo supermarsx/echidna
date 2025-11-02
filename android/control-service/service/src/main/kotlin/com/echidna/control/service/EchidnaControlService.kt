@@ -3,9 +3,14 @@ package com.echidna.control.service
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.os.RemoteCallbackList
+import android.os.RemoteException
 import android.util.Log
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Exposes binder entry points for the companion app while dispatching privileged work
@@ -13,8 +18,20 @@ import java.util.concurrent.Executors
  */
 class EchidnaControlService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
+    private val telemetryExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
     private lateinit var profileStore: ProfileStore
     private lateinit var privilegedController: PrivilegedController
+    private lateinit var telemetryExporter: TelemetryExporter
+    private val telemetryCallbacks = object : RemoteCallbackList<IEchidnaTelemetryListener>() {
+        override fun onCallbackDied(callback: IEchidnaTelemetryListener?) {
+            telemetryListenerCount = (telemetryListenerCount - 1).coerceAtLeast(0)
+            if (telemetryListenerCount == 0) {
+                stopTelemetryStreaming()
+            }
+        }
+    }
+    @Volatile private var telemetryListenerCount = 0
+    private var telemetryTask: ScheduledFuture<*>? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -23,6 +40,7 @@ class EchidnaControlService : Service() {
         val rootExecutor = RootCommandExecutor()
         val selinuxChecker = SelinuxCompatChecker(rootExecutor)
         privilegedController = PrivilegedController(rootExecutor, selinuxChecker)
+        telemetryExporter = TelemetryExporter(filesDir)
         executor.execute {
             val selinuxState = privilegedController.applySelinuxTweaks()
             if (selinuxState == SelinuxState.ENFORCING_JAVA_ONLY) {
@@ -39,6 +57,10 @@ class EchidnaControlService : Service() {
         super.onDestroy()
         profileStore.close()
         executor.shutdownNow()
+        telemetryTask?.cancel(true)
+        telemetryExecutor.shutdownNow()
+        telemetryCallbacks.kill()
+        telemetryListenerCount = 0
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -75,6 +97,38 @@ class EchidnaControlService : Service() {
         override fun listProfiles(): Array<String> {
             return profileStore.listProfiles().toTypedArray()
         }
+
+        override fun getTelemetrySnapshot(): String {
+            return telemetryExporter.snapshotJson()
+        }
+
+        override fun isTelemetryOptedIn(): Boolean {
+            return telemetryExporter.isOptedIn()
+        }
+
+        override fun registerTelemetryListener(listener: IEchidnaTelemetryListener?) {
+            if (listener == null) return
+            telemetryCallbacks.register(listener)
+            telemetryListenerCount += 1
+            startTelemetryStreaming()
+        }
+
+        override fun unregisterTelemetryListener(listener: IEchidnaTelemetryListener?) {
+            if (listener == null) return
+            telemetryCallbacks.unregister(listener)
+            telemetryListenerCount = (telemetryListenerCount - 1).coerceAtLeast(0)
+            if (telemetryListenerCount == 0) {
+                stopTelemetryStreaming()
+            }
+        }
+
+        override fun setTelemetryOptIn(enabled: Boolean) {
+            telemetryExporter.setOptIn(enabled)
+        }
+
+        override fun exportTelemetry(includeTrends: Boolean): String {
+            return telemetryExporter.exportAnonymized(includeTrends)
+        }
     }
 
     private fun dispatchPrivileged(action: () -> ModuleStatus) {
@@ -86,6 +140,38 @@ class EchidnaControlService : Service() {
                 Log.d(TAG, "Native engine status: ${status.toJson()}")
             }
         }
+    }
+
+    private fun startTelemetryStreaming() {
+        if (telemetryTask != null && !telemetryTask!!.isCancelled) {
+            return
+        }
+        telemetryTask = telemetryExecutor.scheduleAtFixedRate({
+            val payload = telemetryExporter.snapshotJson()
+            broadcastTelemetry(payload)
+        }, 0, 500, TimeUnit.MILLISECONDS)
+    }
+
+    private fun stopTelemetryStreaming() {
+        telemetryTask?.cancel(true)
+        telemetryTask = null
+    }
+
+    private fun broadcastTelemetry(payload: String) {
+        val count = telemetryCallbacks.beginBroadcast()
+        if (count == 0) {
+            telemetryCallbacks.finishBroadcast()
+            stopTelemetryStreaming()
+            return
+        }
+        for (i in 0 until count) {
+            try {
+                telemetryCallbacks.getBroadcastItem(i)?.onTelemetry(payload)
+            } catch (ex: RemoteException) {
+                Log.w(TAG, "Telemetry callback failed", ex)
+            }
+        }
+        telemetryCallbacks.finishBroadcast()
     }
 
     companion object {

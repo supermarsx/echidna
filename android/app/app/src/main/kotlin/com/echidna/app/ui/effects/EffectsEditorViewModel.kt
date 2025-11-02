@@ -6,12 +6,14 @@ import com.echidna.app.model.EffectModule
 import com.echidna.app.model.MusicalKey
 import com.echidna.app.model.MusicalScale
 import com.echidna.app.model.Preset
+import com.echidna.app.model.PresetWarning
 import kotlinx.coroutines.flow.StateFlow
 
 class EffectsEditorViewModel : ViewModel() {
     private val repo = ControlStateRepository
 
     val activePreset: StateFlow<Preset> = repo.activePreset
+    val warnings: StateFlow<List<PresetWarning>> = repo.presetWarnings
 
     fun toggleModule(moduleId: String, enabled: Boolean) = updateModule(moduleId) {
         when (it) {

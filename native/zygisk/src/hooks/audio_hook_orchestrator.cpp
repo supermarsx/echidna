@@ -1,6 +1,7 @@
 #include "hooks/audio_hook_orchestrator.h"
 
 #include <string>
+#include <time.h>
 
 #include "state/shared_state.h"
 #include "utils/process_utils.h"
@@ -25,14 +26,33 @@ bool AudioHookOrchestrator::installHooks() {
 
     state.setStatus(state::InternalStatus::kWaitingForAttach);
 
-    if (shouldAttemptAAudio() && aaudio_manager_.install()) {
-        return true;
+    auto monotonic_now = []() {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
+    };
+    auto &telemetry = state.telemetry();
+
+    if (shouldAttemptAAudio()) {
+        const bool success = aaudio_manager_.install();
+        telemetry.registerHookResult("AAudio", success, monotonic_now());
+        if (success) {
+            return true;
+        }
     }
-    if (opensl_manager_.install()) {
-        return true;
+    {
+        const bool success = opensl_manager_.install();
+        telemetry.registerHookResult("OpenSL", success, monotonic_now());
+        if (success) {
+            return true;
+        }
     }
-    if (audiorecord_manager_.install()) {
-        return true;
+    {
+        const bool success = audiorecord_manager_.install();
+        telemetry.registerHookResult("AudioRecord", success, monotonic_now());
+        if (success) {
+            return true;
+        }
     }
 
     state.setStatus(state::InternalStatus::kError);

@@ -7,11 +7,14 @@
 #define ANDROID_LOG_INFO 0
 #endif
 
+#include <algorithm>
 #include <string>
+#include <time.h>
 #include <unistd.h>
 
 #include "state/shared_state.h"
 #include "utils/process_utils.h"
+#include "utils/telemetry_shared_memory.h"
 
 namespace echidna {
 namespace hooks {
@@ -26,8 +29,35 @@ ssize_t ForwardRead(void *instance, void *buffer, size_t bytes, bool blocking) {
     if (!state.hooksEnabled() || !state.isProcessWhitelisted(process)) {
         return gOriginalRead ? gOriginalRead(instance, buffer, bytes, blocking) : 0;
     }
+    timespec wall_start{};
+    timespec wall_end{};
+    timespec cpu_start{};
+    timespec cpu_end{};
+    clock_gettime(CLOCK_MONOTONIC, &wall_start);
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
+    ssize_t result = gOriginalRead ? gOriginalRead(instance, buffer, bytes, blocking)
+                                   : static_cast<ssize_t>(bytes);
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
+    clock_gettime(CLOCK_MONOTONIC, &wall_end);
+
+    const int64_t wall_ns_raw = (static_cast<int64_t>(wall_end.tv_sec) - static_cast<int64_t>(wall_start.tv_sec)) *
+                                    1000000000ll +
+                                (static_cast<int64_t>(wall_end.tv_nsec) - static_cast<int64_t>(wall_start.tv_nsec));
+    const int64_t cpu_ns_raw = (static_cast<int64_t>(cpu_end.tv_sec) - static_cast<int64_t>(cpu_start.tv_sec)) *
+                               1000000000ll +
+                               (static_cast<int64_t>(cpu_end.tv_nsec) - static_cast<int64_t>(cpu_start.tv_nsec));
+    const uint32_t wall_us = static_cast<uint32_t>(std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
+    const uint32_t cpu_us = static_cast<uint32_t>(std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
+    const uint64_t timestamp_ns = static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
+                                  static_cast<uint64_t>(wall_end.tv_nsec);
+
+    state.telemetry().recordCallback(timestamp_ns,
+                                     wall_us,
+                                     cpu_us,
+                                     echidna::utils::kTelemetryFlagCallback,
+                                     0);
     state.setStatus(state::InternalStatus::kHooked);
-    return gOriginalRead ? gOriginalRead(instance, buffer, bytes, blocking) : static_cast<ssize_t>(bytes);
+    return result;
 }
 
 }  // namespace

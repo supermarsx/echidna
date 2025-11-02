@@ -64,5 +64,13 @@ void SharedState::refreshFromSharedMemory() {
     updateConfiguration(shared_memory_.snapshot());
 }
 
+utils::TelemetrySharedMemory &SharedState::telemetry() {
+    return telemetry_memory_;
+}
+
+const utils::TelemetrySharedMemory &SharedState::telemetry() const {
+    return telemetry_memory_;
+}
+
 }  // namespace state
 }  // namespace echidna

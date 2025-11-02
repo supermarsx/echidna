@@ -3,16 +3,28 @@ package com.echidna.app.data
 import android.content.Context
 import com.echidna.app.model.AudioStackProbe
 import com.echidna.app.model.CompatibilityResult
+import com.echidna.app.model.CpuHeatPoint
 import com.echidna.app.model.DspMetrics
 import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.EffectModule
+import com.echidna.app.model.FormantState
+import com.echidna.app.model.LatencyBucket
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.MusicalKey
 import com.echidna.app.model.MusicalScale
 import com.echidna.app.model.Preset
+import com.echidna.app.model.PresetValidator
+import com.echidna.app.model.PresetWarning
+import com.echidna.app.model.TelemetrySample
+import com.echidna.app.model.TelemetrySnapshot
+import com.echidna.app.model.TunerState
+import com.echidna.app.system.ControlServiceClient
 import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
+import com.echidna.app.ui.diagnostics.NoteUtils
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +40,7 @@ import kotlinx.coroutines.launch
 object ControlStateRepository {
     private lateinit var context: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private lateinit var serviceClient: ControlServiceClient
 
     private val _masterEnabled = MutableStateFlow(true)
     val masterEnabled: StateFlow<Boolean> = _masterEnabled.asStateFlow()
@@ -39,22 +52,43 @@ object ControlStateRepository {
     val latencyMode: StateFlow<LatencyMode> = _latencyMode.asStateFlow()
 
     private val _engineStatus = MutableStateFlow(
-        EngineStatus(nativeInstalled = true, active = true, selinuxMode = "Enforcing", latencyMs = 18)
+        EngineStatus(nativeInstalled = true, active = true, selinuxMode = "Enforcing", latencyMs = 0)
     )
     val engineStatus: StateFlow<EngineStatus> = _engineStatus.asStateFlow()
 
     private val _metrics = MutableStateFlow(
         DspMetrics(
-            inputRms = -18f,
-            inputPeak = -6f,
-            outputRms = -14f,
-            outputPeak = -3f,
-            cpuLoadPercent = 32f,
-            endToEndLatencyMs = 18f,
+            inputRms = -120f,
+            inputPeak = -120f,
+            outputRms = -120f,
+            outputPeak = -120f,
+            cpuLoadPercent = 0f,
+            endToEndLatencyMs = 0f,
             xruns = 0
         )
     )
     val metrics: StateFlow<DspMetrics> = _metrics.asStateFlow()
+
+    private val _telemetry = MutableStateFlow(defaultTelemetry())
+    val telemetry: StateFlow<TelemetrySnapshot> = _telemetry.asStateFlow()
+
+    private val _latencyHistogram = MutableStateFlow<List<LatencyBucket>>(emptyList())
+    val latencyHistogram: StateFlow<List<LatencyBucket>> = _latencyHistogram.asStateFlow()
+
+    private val _cpuHeatmap = MutableStateFlow<List<CpuHeatPoint>>(emptyList())
+    val cpuHeatmap: StateFlow<List<CpuHeatPoint>> = _cpuHeatmap.asStateFlow()
+
+    private val _tunerState = MutableStateFlow(TunerState("—", 0f, 0f, 0f, 0f))
+    val tunerState: StateFlow<TunerState> = _tunerState.asStateFlow()
+
+    private val _formantState = MutableStateFlow(FormantState(0f, 0f))
+    val formantState: StateFlow<FormantState> = _formantState.asStateFlow()
+
+    private val _presetWarnings = MutableStateFlow<List<PresetWarning>>(emptyList())
+    val presetWarnings: StateFlow<List<PresetWarning>> = _presetWarnings.asStateFlow()
+
+    private val _telemetryOptIn = MutableStateFlow(false)
+    val telemetryOptIn: StateFlow<Boolean> = _telemetryOptIn.asStateFlow()
 
     private val _presets = MutableStateFlow(defaultPresets())
     val presets: StateFlow<List<Preset>> = _presets.asStateFlow()
@@ -80,22 +114,42 @@ object ControlStateRepository {
             context = appContext.applicationContext
             NotificationController.ensureChannel(context)
             NotificationController.updateNotification(context)
+            serviceClient = ControlServiceClient(context)
+            serviceClient.bind()
+            scope.launch {
+                serviceClient.telemetryUpdates.collect { payload ->
+                    TelemetryParser.parse(payload)?.let { applyTelemetry(it) }
+                }
+            }
+            scope.launch {
+                while (true) {
+                    delay(2000)
+                    serviceClient.fetchSnapshot()?.let { snapshot ->
+                        TelemetryParser.parse(snapshot)?.let { applyTelemetry(it) }
+                    }
+                    if (serviceClient.isBound()) {
+                        _telemetryOptIn.value = serviceClient.isTelemetryOptedIn()
+                    }
+                }
+            }
         }
         if (!observersStarted) {
             observersStarted = true
             scope.launch {
                 combine(masterEnabled, activePreset, notificationEnabled) { master, preset, notif ->
                     Triple(master, preset, notif)
-                }.collect { (_, _, notifEnabled) ->
+                }.collect { (_, preset, notifEnabled) ->
                     if (notifEnabled) {
                         NotificationController.updateNotification(context)
                     } else {
                         NotificationController.cancel(context)
                     }
+                    updatePresetWarnings(preset)
                     EchidnaWidgetProvider.updateAll(context)
                 }
             }
         }
+        updatePresetWarnings(activePreset.value)
     }
 
     fun toggleMaster() {
@@ -118,6 +172,7 @@ object ControlStateRepository {
     fun selectPreset(presetId: String) {
         if (_presets.value.any { it.id == presetId }) {
             _activePresetId.value = presetId
+            _presets.value.firstOrNull { it.id == presetId }?.let { updatePresetWarnings(it) }
         }
     }
 
@@ -151,6 +206,7 @@ object ControlStateRepository {
             _presets.value = filtered
             if (_activePresetId.value == id) {
                 _activePresetId.value = filtered.first().id
+                updatePresetWarnings(filtered.first())
             }
             if (_defaultPresetId.value == id) {
                 _defaultPresetId.value = filtered.first().id
@@ -161,7 +217,7 @@ object ControlStateRepository {
     fun updatePreset(preset: Preset) {
         _presets.value = _presets.value.map { if (it.id == preset.id) preset else it }
         if (_activePresetId.value == preset.id) {
-            _activePresetId.value = preset.id
+            updatePresetWarnings(preset)
         }
     }
 
@@ -208,8 +264,88 @@ object ControlStateRepository {
         _engineStatus.value = _engineStatus.value.copy(active = active, lastError = error)
     }
 
-    fun updateMetrics(metrics: DspMetrics) {
-        _metrics.value = metrics
+    fun setTelemetryOptIn(enabled: Boolean) {
+        if (::serviceClient.isInitialized) {
+            serviceClient.setTelemetryOptIn(enabled)
+            _telemetryOptIn.value = enabled
+        }
+    }
+
+    fun exportTelemetry(includeTrends: Boolean = true): String? {
+        return if (::serviceClient.isInitialized) serviceClient.exportTelemetry(includeTrends) else null
+    }
+
+    private fun applyTelemetry(snapshot: TelemetrySnapshot) {
+        _telemetry.value = snapshot
+        _metrics.value = DspMetrics(
+            inputRms = snapshot.inputRms,
+            inputPeak = snapshot.inputPeak,
+            outputRms = snapshot.outputRms,
+            outputPeak = snapshot.outputPeak,
+            cpuLoadPercent = snapshot.averageCpuPercent,
+            endToEndLatencyMs = snapshot.averageLatencyMs,
+            xruns = snapshot.xruns
+        )
+        _engineStatus.value = _engineStatus.value.copy(
+            latencyMs = snapshot.averageLatencyMs.roundToInt(),
+            xruns = snapshot.xruns,
+            lastError = null,
+            active = true
+        )
+        _latencyHistogram.value = buildLatencyHistogram(snapshot.samples)
+        _cpuHeatmap.value = buildCpuHeatmap(snapshot.samples)
+        _tunerState.value = buildTunerState(snapshot)
+        _formantState.value = FormantState(snapshot.formantShiftCents, snapshot.formantWidth)
+    }
+
+    private fun buildLatencyHistogram(samples: List<TelemetrySample>): List<LatencyBucket> {
+        if (samples.isEmpty()) return emptyList()
+        val thresholds = floatArrayOf(5f, 10f, 20f, 40f)
+        val counts = IntArray(thresholds.size + 1)
+        samples.forEach { sample ->
+            val durationMs = sample.durationUs / 1000f
+            var placed = false
+            for (index in thresholds.indices) {
+                if (durationMs <= thresholds[index]) {
+                    counts[index] += 1
+                    placed = true
+                    break
+                }
+            }
+            if (!placed) {
+                counts[counts.lastIndex] += 1
+            }
+        }
+        val labels = listOf("≤5 ms", "≤10 ms", "≤20 ms", "≤40 ms", ">40 ms")
+        return counts.mapIndexed { index, value -> LatencyBucket(labels[index], value) }
+    }
+
+    private fun buildCpuHeatmap(samples: List<TelemetrySample>): List<CpuHeatPoint> {
+        if (samples.isEmpty()) return emptyList()
+        val window = samples.takeLast(64)
+        return window.mapIndexed { index, sample ->
+            val percent = if (sample.durationUs <= 0) 0f else sample.cpuUs.toFloat() / sample.durationUs.toFloat() * 100f
+            CpuHeatPoint(index, percent.coerceIn(0f, 100f))
+        }
+    }
+
+    private fun buildTunerState(snapshot: TelemetrySnapshot): TunerState {
+        val detected = snapshot.detectedPitchHz
+        val target = if (snapshot.targetPitchHz > 0f) snapshot.targetPitchHz
+        else if (detected > 0f) NoteUtils.midiTargetFrequency(detected) else 0f
+        val note = NoteUtils.frequencyToNoteName(if (target > 0f) target else detected)
+        val cents = NoteUtils.centsOff(if (detected > 0f) detected else target, target)
+        val confidence = when {
+            detected <= 0f -> 0f
+            kotlin.math.abs(cents) <= 5f -> 1f
+            kotlin.math.abs(cents) <= 20f -> 0.6f
+            else -> 0.3f
+        }
+        return TunerState(note, cents, detected, target, confidence)
+    }
+
+    private fun updatePresetWarnings(preset: Preset) {
+        _presetWarnings.value = PresetValidator.evaluate(preset)
     }
 
     private fun defaultPresets(): List<Preset> = listOf(
@@ -391,6 +527,24 @@ object ControlStateRepository {
             EffectModule.Reverb(false, 10f, 10f, 0f, 5f),
             EffectModule.Mix(true, 50f, 0f)
         )
+    )
+
+    private fun defaultTelemetry(): TelemetrySnapshot = TelemetrySnapshot(
+        totalCallbacks = 0,
+        averageLatencyMs = 0f,
+        averageCpuPercent = 0f,
+        inputRms = -120f,
+        outputRms = -120f,
+        inputPeak = -120f,
+        outputPeak = -120f,
+        detectedPitchHz = 0f,
+        targetPitchHz = 0f,
+        formantShiftCents = 0f,
+        formantWidth = 0f,
+        xruns = 0,
+        warnings = emptyList(),
+        samples = emptyList(),
+        hooks = emptyList()
     )
 
     private fun band(freq: Float, gain: Float, q: Float) = com.echidna.app.model.Band(freq, gain, q)
