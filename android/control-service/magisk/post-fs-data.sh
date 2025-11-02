@@ -1,5 +1,5 @@
 #!/system/bin/sh
-set -euo pipefail
+set -eu
 
 MODDIR="${0%/*}"
 RUNTIME_DIR="/data/adb/echidna"

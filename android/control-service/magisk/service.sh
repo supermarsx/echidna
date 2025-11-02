@@ -1,5 +1,5 @@
 #!/system/bin/sh
-set -euo pipefail
+set -eu
 
 MODDIR="${0%/*}"
 LIB_SRC="$MODDIR/lib/libechidna.so"
