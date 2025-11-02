@@ -1,19 +1,15 @@
 package com.echidna.control.service
 
-import android.os.Build
 import android.os.SELinux
 import android.util.Log
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
-import java.util.concurrent.TimeUnit
 
 private const val TAG = "EchidnaSelinux"
 
 /**
  * Evaluates whether SELinux tweaks are possible on the current device.
  */
-class SelinuxCompatChecker {
+class SelinuxCompatChecker(private val rootExecutor: RootCommandExecutor) {
     fun evaluate(): SelinuxState {
         if (!SELinux.isSELinuxEnabled()) {
             Log.w(TAG, "SELinux appears to be disabled; falling back to permissive flow")
@@ -24,8 +20,8 @@ class SelinuxCompatChecker {
             return SelinuxState.PERMISSIVE
         }
 
-        val policyToolPresent = hasMagiskPolicyBinary()
         val hasRoot = hasRootAccess()
+        val policyToolPresent = if (hasRoot) hasMagiskPolicyBinary() else false
 
         return if (policyToolPresent && hasRoot) {
             Log.i(TAG, "magiskpolicy available; attempting enforcing mode policy patch")
@@ -46,24 +42,24 @@ class SelinuxCompatChecker {
             "/sbin/magiskpolicy",
             "/data/adb/magisk/magiskpolicy",
         )
-        if (candidates.any { File(it).canExecute() }) {
+        for (candidate in candidates) {
+            val result = rootExecutor.runCommand(listOf("test", "-x", candidate))
+            if (result.success) {
+                Log.d(TAG, "magiskpolicy detected at $candidate")
+                return true
+            }
+        }
+
+        val helpResult = rootExecutor.runCommand(listOf("magiskpolicy", "--live", "--help"))
+        if (helpResult.success) {
+            Log.d(TAG, "magiskpolicy responded to --help probe")
             return true
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return false
+
+        if (helpResult.stderr.isNotEmpty()) {
+            Log.d(TAG, "magiskpolicy probe failed: ${helpResult.stderr}")
         }
-        var process: Process? = null
-        return try {
-            process = ProcessBuilder("magiskpolicy", "--live", "--help").start()
-            process.waitFor()
-            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                reader.readLine() != null
-            }
-        } catch (ignored: Exception) {
-            false
-        } finally {
-            process?.destroy()
-        }
+        return false
     }
 
     private fun hasRootAccess(): Boolean {
@@ -72,22 +68,13 @@ class SelinuxCompatChecker {
             "/system/xbin/su",
             "/system/bin/su",
         )
-        if (suCandidates.any { File(it).canExecute() }) {
-            return true
+        if (suCandidates.any { File(it).exists() }) {
+            Log.d(TAG, "su binary located; verifying root shell availability")
         }
-        var process: Process? = null
-        return try {
-            process = Runtime.getRuntime().exec(arrayOf("su", "-c", "exit"))
-            if (!process.waitFor(1, TimeUnit.SECONDS)) {
-                process.destroy()
-                false
-            } else {
-                process.exitValue() == 0
-            }
-        } catch (ignored: Exception) {
-            false
-        } finally {
-            process?.destroy()
+        val result = rootExecutor.runCommand(listOf("id"))
+        if (!result.success) {
+            Log.w(TAG, "Root shell unavailable: ${result.stderr.ifEmpty { "exit ${result.exitCode}" }}")
         }
+        return result.success
     }
 }

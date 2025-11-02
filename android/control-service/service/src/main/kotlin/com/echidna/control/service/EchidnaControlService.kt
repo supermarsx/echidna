@@ -20,8 +20,9 @@ class EchidnaControlService : Service() {
         super.onCreate()
         val syncBridge = ProfileSyncBridge()
         profileStore = ProfileStore(File(filesDir, "profiles"), syncBridge)
-        val selinuxChecker = SelinuxCompatChecker()
-        privilegedController = PrivilegedController(RootCommandExecutor(), selinuxChecker)
+        val rootExecutor = RootCommandExecutor()
+        val selinuxChecker = SelinuxCompatChecker(rootExecutor)
+        privilegedController = PrivilegedController(rootExecutor, selinuxChecker)
         executor.execute {
             val selinuxState = privilegedController.applySelinuxTweaks()
             if (selinuxState == SelinuxState.ENFORCING_JAVA_ONLY) {
