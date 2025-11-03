@@ -4,14 +4,19 @@
 #include <dlfcn.h>
 
 #include <array>
+#include <cstdlib>
 #include <mutex>
+#include <string>
 #include <string_view>
+#include <sys/stat.h>
 
 #include <echidna_api.h>
 
 namespace {
 constexpr std::array<std::string_view, 3> kCandidateLibraries = {
     "libechidna.so", "libechidna_jni.so", "libechidna.dylib"};
+constexpr std::array<std::string_view, 2> kCandidateLibraryDirectories = {
+    "/data/adb/echidna/lib", "/data/adb/modules/echidna/lib"};
 constexpr const char *kLogTag = "EchidnaControlJNI";
 
 struct EchidnaSymbols {
@@ -33,6 +38,35 @@ EchidnaSymbols &Symbols() {
   return symbols;
 }
 
+bool TryLoadSymbolsFrom(const char *library_path) {
+  auto &symbols = Symbols();
+  void *handle = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
+  if (!handle) {
+    return false;
+  }
+
+  auto set_profile =
+      reinterpret_cast<EchidnaSymbols::SetProfileFn>(dlsym(handle, "echidna_set_profile"));
+  auto process_block = reinterpret_cast<EchidnaSymbols::ProcessBlockFn>(
+      dlsym(handle, "echidna_process_block"));
+  auto get_status =
+      reinterpret_cast<EchidnaSymbols::GetStatusFn>(dlsym(handle, "echidna_get_status"));
+  auto get_version = reinterpret_cast<EchidnaSymbols::GetVersionFn>(
+      dlsym(handle, "echidna_api_get_version"));
+  if (!set_profile || !process_block || !get_status || !get_version) {
+    dlclose(handle);
+    return false;
+  }
+
+  symbols.handle = handle;
+  symbols.set_profile = set_profile;
+  symbols.process_block = process_block;
+  symbols.get_status = get_status;
+  symbols.get_version = get_version;
+  symbols.last_error = ECHIDNA_RESULT_OK;
+  return true;
+}
+
 bool LoadSymbols() {
   auto &symbols = Symbols();
   if (symbols.handle && symbols.set_profile && symbols.process_block && symbols.get_status &&
@@ -40,30 +74,48 @@ bool LoadSymbols() {
     return true;
   }
 
+  if (const char *env_path = std::getenv("ECHIDNA_LIBRARY_PATH")) {
+    if (TryLoadSymbolsFrom(env_path)) {
+      return true;
+    }
+
+    std::string base_path(env_path);
+    if (!base_path.empty() && base_path.back() == '/') {
+      base_path.pop_back();
+    }
+    struct stat path_info {};
+    if (!base_path.empty() && stat(base_path.c_str(), &path_info) == 0 &&
+        S_ISDIR(path_info.st_mode)) {
+      for (const auto &candidate : kCandidateLibraries) {
+        std::string candidate_path = base_path;
+        candidate_path.append("/");
+        candidate_path.append(candidate);
+        if (TryLoadSymbolsFrom(candidate_path.c_str())) {
+          return true;
+        }
+      }
+    }
+  }
+
+  for (const auto &directory : kCandidateLibraryDirectories) {
+    std::string base_path(directory);
+    if (!base_path.empty() && base_path.back() == '/') {
+      base_path.pop_back();
+    }
+    for (const auto &candidate : kCandidateLibraries) {
+      std::string candidate_path = base_path;
+      candidate_path.append("/");
+      candidate_path.append(candidate);
+      if (TryLoadSymbolsFrom(candidate_path.c_str())) {
+        return true;
+      }
+    }
+  }
+
   for (const auto &candidate : kCandidateLibraries) {
-    void *handle = dlopen(candidate.data(), RTLD_NOW | RTLD_LOCAL);
-    if (!handle) {
-      continue;
+    if (TryLoadSymbolsFrom(candidate.data())) {
+      return true;
     }
-    auto set_profile = reinterpret_cast<EchidnaSymbols::SetProfileFn>(
-        dlsym(handle, "echidna_set_profile"));
-    auto process_block = reinterpret_cast<EchidnaSymbols::ProcessBlockFn>(
-        dlsym(handle, "echidna_process_block"));
-    auto get_status = reinterpret_cast<EchidnaSymbols::GetStatusFn>(
-        dlsym(handle, "echidna_get_status"));
-    auto get_version = reinterpret_cast<EchidnaSymbols::GetVersionFn>(
-        dlsym(handle, "echidna_api_get_version"));
-    if (!set_profile || !process_block || !get_status || !get_version) {
-      dlclose(handle);
-      continue;
-    }
-    symbols.handle = handle;
-    symbols.set_profile = set_profile;
-    symbols.process_block = process_block;
-    symbols.get_status = get_status;
-    symbols.get_version = get_version;
-    symbols.last_error = ECHIDNA_RESULT_OK;
-    return true;
   }
 
   symbols.last_error = ECHIDNA_RESULT_NOT_AVAILABLE;

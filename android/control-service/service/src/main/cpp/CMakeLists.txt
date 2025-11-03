@@ -20,8 +20,12 @@ if(DL_LIB)
     target_link_libraries(echidna_control_jni PRIVATE ${DL_LIB})
 endif()
 
+get_filename_component(ECHIDNA_REPO_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../"
+    REALPATH)
+
 target_include_directories(echidna_control_jni
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../native/include)
+        ${ECHIDNA_REPO_ROOT}/native/include)
 
