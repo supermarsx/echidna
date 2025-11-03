@@ -72,10 +72,18 @@ bool LoadSymbols() {
 }
 
 bool EnsureLoaded() {
-  static std::once_flag once;
-  static bool loaded = false;
-  std::call_once(once, []() { loaded = LoadSymbols(); });
-  return loaded;
+  auto &symbols = Symbols();
+  if (symbols.handle) {
+    return true;
+  }
+
+  static std::mutex load_mutex;
+  const std::lock_guard<std::mutex> lock(load_mutex);
+  if (symbols.handle) {
+    return true;
+  }
+
+  return LoadSymbols();
 }
 
 }  // namespace

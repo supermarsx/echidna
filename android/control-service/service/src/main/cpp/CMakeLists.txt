@@ -23,5 +23,5 @@ endif()
 target_include_directories(echidna_control_jni
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../native/include)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../native/include)
 
