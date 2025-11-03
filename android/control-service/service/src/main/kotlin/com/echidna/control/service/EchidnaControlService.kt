@@ -6,6 +6,8 @@ import android.os.IBinder
 import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.util.Log
+import com.echidna.control.bridge.EchidnaNative
+import kotlin.math.min
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -129,6 +131,42 @@ class EchidnaControlService : Service() {
         override fun exportTelemetry(includeTrends: Boolean): String {
             return telemetryExporter.exportAnonymized(includeTrends)
         }
+
+        override fun setProfile(profile: String?) {
+            if (profile.isNullOrEmpty()) {
+                return
+            }
+            EchidnaNative.setProfile(profile)
+        }
+
+        override fun getStatus(): Int = EchidnaNative.getStatus()
+
+        override fun processBlock(
+            input: FloatArray,
+            output: FloatArray?,
+            frames: Int,
+            sampleRate: Int,
+            channelCount: Int
+        ): Int {
+            if (frames <= 0 || sampleRate <= 0 || channelCount <= 0) {
+                return -2
+            }
+            val requiredSamples = frames * channelCount
+            if (input.size < requiredSamples) {
+                return -2
+            }
+            val tempOutput = output?.let { FloatArray(requiredSamples) }
+            val result = EchidnaNative.processBlock(input, tempOutput, frames, sampleRate, channelCount)
+            if (output != null && tempOutput != null) {
+                val limit = min(output.size, requiredSamples)
+                for (index in 0 until limit) {
+                    output[index] = tempOutput[index]
+                }
+            }
+            return result
+        }
+
+        override fun getApiVersion(): Long = EchidnaNative.getApiVersion()
     }
 
     private fun dispatchPrivileged(action: () -> ModuleStatus) {

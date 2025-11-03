@@ -16,4 +16,8 @@ interface IEchidnaControlService {
     void unregisterTelemetryListener(IEchidnaTelemetryListener listener);
     void setTelemetryOptIn(boolean enabled);
     String exportTelemetry(boolean includeTrends);
+    void setProfile(String profile);
+    int getStatus();
+    int processBlock(in float[] input, inout float[] output, int frames, int sampleRate, int channelCount);
+    long getApiVersion();
 }

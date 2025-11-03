@@ -35,18 +35,23 @@ float FrequencyForMidi(float midi) {
 
 }  // namespace
 
+uint32_t echidna_api_get_version(void) {
+    return ECHIDNA_API_VERSION;
+}
+
 echidna_status_t echidna_get_status(void) {
     return static_cast<echidna_status_t>(SharedState::instance().status());
 }
 
-void echidna_set_profile(const char *profile) {
+echidna_result_t echidna_set_profile(const char *profile) {
     if (!profile) {
-        return;
+        return ECHIDNA_RESULT_INVALID_ARGUMENT;
     }
     SharedState::instance().setProfile(profile);
+    return ECHIDNA_RESULT_OK;
 }
 
-echidna_status_t echidna_process_block(const float *input,
+echidna_result_t echidna_process_block(const float *input,
                                        float *output,
                                        uint32_t frames,
                                        uint32_t sample_rate,
@@ -55,7 +60,7 @@ echidna_status_t echidna_process_block(const float *input,
     if (!input || frames == 0 || channel_count == 0 || sample_rate == 0) {
         state.setStatus(echidna::state::InternalStatus::kError);
         state.telemetry().recordCallback(0, 0, 0, echidna::utils::kTelemetryFlagError, 0);
-        return static_cast<echidna_status_t>(state.status());
+        return ECHIDNA_RESULT_INVALID_ARGUMENT;
     }
 
     timespec wall_start{};
@@ -138,5 +143,5 @@ echidna_status_t echidna_process_block(const float *input,
                                         0);
 
     state.setStatus(echidna::state::InternalStatus::kHooked);
-    return static_cast<echidna_status_t>(state.status());
+    return ECHIDNA_RESULT_OK;
 }

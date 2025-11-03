@@ -19,6 +19,7 @@
 #include "effects/parametric_eq.h"
 #include "effects/pitch_shifter.h"
 #include "effects/reverb.h"
+#include "plugins/plugin_loader.h"
 #include "runtime/block_queue.h"
 
 namespace echidna::dsp {
@@ -59,6 +60,7 @@ class DspEngine {
   effects::AutoTune autotune_;
   effects::Reverb reverb_;
   effects::MixBus mix_;
+  plugins::PluginLoader plugin_loader_;
 
   std::vector<float> dry_buffer_;
   std::vector<float> wet_buffer_;
