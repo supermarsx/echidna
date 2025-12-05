@@ -296,11 +296,8 @@ void ProfileSyncServer::handlePayload(const std::string &payload) {
     memory.updateSnapshot(snapshot);
 
     // Apply preset JSON if the payload looks like a preset definition.
-    if (payload.find("\"modules\"") != std::string::npos ||
-        payload.find("\"engine\"") != std::string::npos) {
-        const std::string preset_payload = ExtractFirstProfilePayload(payload).empty()
-                                                ? payload
-                                                : ExtractFirstProfilePayload(payload);
+    const std::string preset_payload = ExtractFirstProfilePayload(payload);
+    if (!preset_payload.empty()) {
         const echidna_result_t result =
                 echidna_set_profile(preset_payload.c_str(), preset_payload.size());
         if (result != ECHIDNA_RESULT_OK) {
