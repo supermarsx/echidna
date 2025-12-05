@@ -294,6 +294,22 @@ void ProfileSyncServer::handlePayload(const std::string &payload) {
     snapshot.profile = ParseDefaultProfile(payload);
     echidna::utils::ConfigSharedMemory memory;
     memory.updateSnapshot(snapshot);
+
+    // Apply preset JSON if the payload looks like a preset definition.
+    if (payload.find("\"modules\"") != std::string::npos ||
+        payload.find("\"engine\"") != std::string::npos) {
+        const std::string preset_payload = ExtractFirstProfilePayload(payload).empty()
+                                                ? payload
+                                                : ExtractFirstProfilePayload(payload);
+        const echidna_result_t result =
+                echidna_set_profile(preset_payload.c_str(), preset_payload.size());
+        if (result != ECHIDNA_RESULT_OK) {
+            __android_log_print(ANDROID_LOG_WARN,
+                                kLogTag,
+                                "Failed to apply pushed preset: %d",
+                                static_cast<int>(result));
+        }
+    }
 }
 
 }  // namespace runtime
