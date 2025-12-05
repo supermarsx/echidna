@@ -75,6 +75,13 @@ bool AudioHookOrchestrator::installHooks() {
             return true;
         }
     }
+    {
+        const bool success = audiohal_manager_.install();
+        telemetry.registerHookResult("audiohal", success, monotonic_now());
+        if (success) {
+            return true;
+        }
+    }
 
     state.setStatus(state::InternalStatus::kError);
     return false;
