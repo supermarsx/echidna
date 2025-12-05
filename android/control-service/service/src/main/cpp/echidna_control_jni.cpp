@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <dlfcn.h>
 
+#include <cstddef>
 #include <array>
 #include <cstdlib>
 #include <mutex>

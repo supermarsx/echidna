@@ -86,13 +86,16 @@ LevelStats CalculateLevels(const float *data, size_t samples) {
     return {LinearToDb(rms), LinearToDb(peak)};
 }
 
-float EstimatePitchHz(const float *data, size_t frames, uint32_t channels, uint32_t sample_rate) {
+float EstimatePitchHz(const float *data,
+                      uint32_t frames,
+                      uint32_t channels,
+                      uint32_t sample_rate) {
     if (!data || frames == 0 || channels == 0 || sample_rate == 0) {
         return 0.0f;
     }
     size_t zero_crossings = 0;
     const size_t step = static_cast<size_t>(channels);
-    const size_t samples = frames * step;
+    const size_t samples = static_cast<size_t>(frames) * step;
     float previous = data[0];
     for (size_t i = step; i < samples; i += step) {
         const float sample = data[i];
