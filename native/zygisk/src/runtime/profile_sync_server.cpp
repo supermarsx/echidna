@@ -211,6 +211,11 @@ std::string ExtractFirstProfilePayload(const std::string &json) {
     return {};
 }
 
+bool LooksLikePreset(const std::string &payload) {
+    return payload.find("\"modules\"") != std::string::npos &&
+           payload.find("\"engine\"") != std::string::npos;
+}
+
 }  // namespace
 
 namespace echidna {
@@ -296,6 +301,12 @@ void ProfileSyncServer::handleClient(int client_fd) {
 }
 
 void ProfileSyncServer::handlePayload(const std::string &payload) {
+    // Guard against unreasonably large payloads.
+    if (payload.size() > 512 * 1024) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "Profile payload too large, skipping");
+        return;
+    }
+
     echidna::utils::ConfigurationSnapshot snapshot;
     snapshot.hooks_enabled = true;
     snapshot.process_whitelist = ParseWhitelist(payload);
@@ -305,9 +316,7 @@ void ProfileSyncServer::handlePayload(const std::string &payload) {
 
     // Apply preset JSON if the payload looks like a preset definition.
     const std::string preset_payload = ExtractFirstProfilePayload(payload);
-    if (!preset_payload.empty() &&
-        (preset_payload.find("\"modules\"") != std::string::npos ||
-         preset_payload.find("\"engine\"") != std::string::npos)) {
+    if (!preset_payload.empty() && LooksLikePreset(preset_payload)) {
         const echidna_result_t result =
                 echidna_set_profile(preset_payload.c_str(), preset_payload.size());
         if (result != ECHIDNA_RESULT_OK) {

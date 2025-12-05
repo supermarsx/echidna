@@ -1,5 +1,11 @@
 #include "engine.h"
 
+/**
+ * @file engine.cpp
+ * @brief Implementation of the DspEngine that composes and runs the effects
+ * chain. Function-level documentation mirrors the public API.
+ */
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,6 +17,13 @@
 
 namespace echidna::dsp {
 
+/**
+ * @brief Construct a DspEngine.
+ *
+ * Initializes the engine with the provided sample rate, channel count and
+ * quality mode. The constructor also attempts to load DSP plugin libraries
+ * from the ECHIDNA_PLUGIN_DIR environment variable or a default path.
+ */
 DspEngine::DspEngine(uint32_t sample_rate,
                      uint32_t channels,
                      ech_dsp_quality_mode_t quality)
@@ -26,8 +39,17 @@ DspEngine::DspEngine(uint32_t sample_rate,
   plugin_loader_.LoadFromDirectory(plugin_dir);
 }
 
+/**
+ * @brief Destructor - ensures worker thread is stopped cleanly.
+ */
 DspEngine::~DspEngine() { StopWorker(); }
 
+/**
+ * @brief Apply a new preset definition and configure internal effects.
+ *
+ * This method updates internal effect parameters, stops/restarts the
+ * hybrid worker if required and returns a status code.
+ */
 ech_dsp_status_t DspEngine::UpdatePreset(const config::PresetDefinition &preset) {
   std::lock_guard<std::mutex> lock(preset_mutex_);
   preset_ = preset;
@@ -81,6 +103,15 @@ ech_dsp_status_t DspEngine::UpdatePreset(const config::PresetDefinition &preset)
   return ECH_DSP_STATUS_OK;
 }
 
+/**
+ * @brief Public block processing API.
+ *
+ * This method is the main entry point for block processing. Behavior differs
+ * based on the configured processing mode. In synchronous mode this will call
+ * ProcessInternal directly. In hybrid mode the call will attempt to schedule
+ * work for the background worker and return a previously processed block if
+ * available. On invalid parameters an error status is returned.
+ */
 ech_dsp_status_t DspEngine::ProcessBlock(const float *input,
                                          float *output,
                                          size_t frames) {
@@ -122,6 +153,12 @@ ech_dsp_status_t DspEngine::ProcessBlock(const float *input,
   return ECH_DSP_STATUS_OK;
 }
 
+/**
+ * @brief The synchronous processing implementation used internally.
+ *
+ * This copies input into internal buffers, runs every effect in order and
+ * invokes plugins, then mixes dry/wet buffers into the supplied output.
+ */
 ech_dsp_status_t DspEngine::ProcessInternal(const float *input,
                                             float *output,
                                             size_t frames) {
@@ -146,6 +183,9 @@ ech_dsp_status_t DspEngine::ProcessInternal(const float *input,
   return ECH_DSP_STATUS_OK;
 }
 
+/**
+ * @brief Ensure internal buffers have capacity for 'frames' frames.
+ */
 void DspEngine::EnsureBuffers(size_t frames) {
   const size_t samples = frames * channels_;
   if (dry_buffer_.size() < samples) {
@@ -156,6 +196,9 @@ void DspEngine::EnsureBuffers(size_t frames) {
   }
 }
 
+/**
+ * @brief Apply preset configuration to all owned effects and plugins.
+ */
 void DspEngine::ApplyPresetLocked() {
   gate_.prepare(sample_rate_, channels_);
   gate_.reset();
@@ -184,6 +227,9 @@ void DspEngine::ApplyPresetLocked() {
   plugin_loader_.ResetAll();
 }
 
+/**
+ * @brief Start the hybrid processing worker thread if not already running.
+ */
 void DspEngine::StartWorker() {
   if (worker_running_) {
     return;
@@ -192,6 +238,9 @@ void DspEngine::StartWorker() {
   worker_thread_ = std::thread([this]() { WorkerLoop(); });
 }
 
+/**
+ * @brief Stop the hybrid worker thread and drain queues.
+ */
 void DspEngine::StopWorker() {
   if (!worker_running_) {
     return;
@@ -206,6 +255,10 @@ void DspEngine::StopWorker() {
   }
 }
 
+/**
+ * @brief Worker thread loop which pulls blocks from the input queue,
+ * processes them, and pushes them to the output queue.
+ */
 void DspEngine::WorkerLoop() {
   while (worker_running_) {
     auto block = input_queue_.pop_wait(std::chrono::milliseconds(5));
