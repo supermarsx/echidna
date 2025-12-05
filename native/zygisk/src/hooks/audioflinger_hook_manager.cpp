@@ -214,12 +214,31 @@ bool AudioFlingerHookManager::Replacement(void *thiz) {
 bool ProcessPcmBuffer(void *thiz,
                       void *buffer,
                       size_t bytes,
-                      const CaptureContext &ctx,
+                      CaptureContext ctx,
                       RecordTrackReadFn passthrough) {
     if (!buffer || bytes == 0 || ctx.channels == 0) {
         return false;
     }
-    const size_t frame_bytes = ctx.channels * sizeof(int16_t);
+    size_t frame_bytes = ctx.channels * sizeof(int16_t);
+    const size_t total_samples = bytes / sizeof(int16_t);
+    if (bytes % frame_bytes != 0) {
+        // Try to infer channel count from buffer length (1..8 channels).
+        for (uint32_t ch = 1; ch <= 8; ++ch) {
+            if (total_samples % ch != 0) {
+                continue;
+            }
+            const size_t frames_candidate = total_samples / ch;
+            if (frames_candidate >= 8 && frames_candidate <= 4096) {
+                ctx.channels = ch;
+                frame_bytes = ch * sizeof(int16_t);
+                {
+                    std::lock_guard<std::mutex> lock(gContextMutex);
+                    gContexts[thiz] = ctx;
+                }
+                break;
+            }
+        }
+    }
     const size_t min_block = static_cast<size_t>(ctx.channels) * sizeof(int16_t) * 8;
     const size_t max_block = static_cast<size_t>(ctx.channels) * sizeof(int16_t) * 4096;
     if (frame_bytes == 0 || (bytes % frame_bytes) != 0 ||
