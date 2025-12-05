@@ -1,5 +1,11 @@
 #include "hooks/audiorecord_hook_manager.h"
 
+/**
+ * @file audiorecord_hook_manager.cpp
+ * @brief Install inline hooks for AudioRecord::read and record telemetry on each
+ * call.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #else

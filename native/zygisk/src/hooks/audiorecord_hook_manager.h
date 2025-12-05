@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file audiorecord_hook_manager.h
+ * @brief Hook manager for intercepting AudioRecord native read paths and
+ * forwarding samples for processing/telemetry.
+ */
+
 #include <cstdint>
 #include <string>
 #include <sys/types.h>
@@ -18,10 +24,12 @@ class AudioRecordHookManager : public HookManager {
     /**
      * @brief Installs AudioRecord::read hooks (native bridge).
      */
+    /** Install AudioRecord read hooks. */
     bool install() override;
     const char *name() const override { return active_symbol_.c_str(); }
 
   private:
+    /** Replacement shim wrapping the original read behaviour. */
     static ssize_t Replacement(void *instance, void *buffer, size_t bytes, bool blocking);
 
     utils::PltResolver &resolver_;

@@ -1,5 +1,11 @@
 #include "hooks/audioflinger_hook_manager.h"
 
+/**
+ * @file audioflinger_hook_manager.cpp
+ * @brief Hooks into AudioFlinger thread loop and buffer handling to capture
+ * device-level audio and forward it through the DSP pipeline.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #include <sys/system_properties.h>

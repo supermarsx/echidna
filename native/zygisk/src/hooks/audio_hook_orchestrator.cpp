@@ -1,5 +1,11 @@
 #include "hooks/audio_hook_orchestrator.h"
 
+/**
+ * @file audio_hook_orchestrator.cpp
+ * @brief Orchestrator implementation deciding which hook managers to attempt
+ * and recording telemetry about installation attempts.
+ */
+
 #include <string>
 #include <time.h>
 

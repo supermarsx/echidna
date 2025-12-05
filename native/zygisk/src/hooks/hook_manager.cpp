@@ -1,11 +1,20 @@
 #include "hooks/hook_manager.h"
 
-namespace echidna {
-namespace hooks {
+/**
+ * @file hook_manager.cpp
+ * @brief Empty translation unit - HookManager is a pure interface and lives
+ * in headers; this file provides a compilation unit to avoid inline linking
+ * issues.
+ */
 
-// This translation unit intentionally left empty: HookManager only exposes
-// an inline defaulted destructor in the header so that consumers can link
-// without duplicate definitions.
+namespace echidna
+{
+    namespace hooks
+    {
 
-}  // namespace hooks
-}  // namespace echidna
+        // This translation unit intentionally left empty: HookManager only exposes
+        // an inline defaulted destructor in the header so that consumers can link
+        // without duplicate definitions.
+
+    } // namespace hooks
+} // namespace echidna

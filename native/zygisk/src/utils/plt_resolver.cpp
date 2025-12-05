@@ -1,5 +1,11 @@
 #include "utils/plt_resolver.h"
 
+/**
+ * @file plt_resolver.cpp
+ * @brief Implementation for symbol resolution helpers used by the inline hook
+ * and trampoline code paths.
+ */
+
 #include <dlfcn.h>
 #include <sys/mman.h>
 
@@ -9,42 +15,53 @@
 
 #include "utils/proc_maps_scanner.h"
 
-namespace echidna {
-namespace utils {
+namespace echidna
+{
+    namespace utils
+    {
 
-void *PltResolver::findSymbol(const std::string &library, const std::string &symbol) const {
-    void *handle = dlopen(library.c_str(), RTLD_LAZY | RTLD_NOLOAD);
-    if (!handle) {
-        handle = dlopen(library.c_str(), RTLD_LAZY);
-    }
-    if (!handle) {
-        return nullptr;
-    }
-    return dlsym(handle, symbol.c_str());
-}
-
-void *PltResolver::findSymbolBySignature(const std::string &library, const std::vector<uint8_t> &signature) const {
-    if (signature.empty()) {
-        return nullptr;
-    }
-
-    ProcMapsScanner scanner;
-    auto region = scanner.findRegion([&library](const MemoryRegion &region) {
-        return region.path.find(library) != std::string::npos && region.permissions.find("x") != std::string::npos;
-    });
-    if (!region) {
-        return nullptr;
-    }
-
-    size_t size = region->end - region->start;
-    const uint8_t *base = reinterpret_cast<const uint8_t *>(region->start);
-    for (size_t i = 0; i + signature.size() <= size; ++i) {
-        if (std::memcmp(base + i, signature.data(), signature.size()) == 0) {
-            return const_cast<uint8_t *>(base + i);
+        /** Lookup an exported symbol using dlopen/dlsym. */
+        void *PltResolver::findSymbol(const std::string &library, const std::string &symbol) const
+        {
+            void *handle = dlopen(library.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+            if (!handle)
+            {
+                handle = dlopen(library.c_str(), RTLD_LAZY);
+            }
+            if (!handle)
+            {
+                return nullptr;
+            }
+            return dlsym(handle, symbol.c_str());
         }
-    }
-    return nullptr;
-}
 
-}  // namespace utils
-}  // namespace echidna
+        /** Scan executable regions of a library looking for a byte signature. */
+        void *PltResolver::findSymbolBySignature(const std::string &library, const std::vector<uint8_t> &signature) const
+        {
+            if (signature.empty())
+            {
+                return nullptr;
+            }
+
+            ProcMapsScanner scanner;
+            auto region = scanner.findRegion([&library](const MemoryRegion &region)
+                                             { return region.path.find(library) != std::string::npos && region.permissions.find("x") != std::string::npos; });
+            if (!region)
+            {
+                return nullptr;
+            }
+
+            size_t size = region->end - region->start;
+            const uint8_t *base = reinterpret_cast<const uint8_t *>(region->start);
+            for (size_t i = 0; i + signature.size() <= size; ++i)
+            {
+                if (std::memcmp(base + i, signature.data(), signature.size()) == 0)
+                {
+                    return const_cast<uint8_t *>(base + i);
+                }
+            }
+            return nullptr;
+        }
+
+    } // namespace utils
+} // namespace echidna

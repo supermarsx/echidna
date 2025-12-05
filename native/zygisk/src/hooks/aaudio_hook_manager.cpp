@@ -1,5 +1,11 @@
 #include "hooks/aaudio_hook_manager.h"
 
+/**
+ * @file aaudio_hook_manager.cpp
+ * @brief Install inline hooks for AAudio data callback and forward telemetry
+ * events.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #else

@@ -6,4 +6,6 @@
  * definitions). This file exists to provide a compilation unit when needed.
  */
 
-namespace echidna::dsp::effects {}  // namespace echidna::dsp::effects
+namespace echidna::dsp::effects
+{
+} // namespace echidna::dsp::effects

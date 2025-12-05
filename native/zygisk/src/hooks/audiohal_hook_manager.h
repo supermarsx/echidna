@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file audiohal_hook_manager.h
+ * @brief Hook into platform Audio HAL read entrypoints.
+ */
+
 #include <cstddef>
 #include <cstdint>
 

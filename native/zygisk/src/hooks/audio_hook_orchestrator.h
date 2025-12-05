@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file audio_hook_orchestrator.h
+ * @brief High-level coordinator which decides which hook managers to attempt
+ * installing based on API availability and runtime process checks.
+ */
+
 #include <memory>
 
 #include "hooks/aaudio_hook_manager.h"
@@ -17,11 +23,16 @@ namespace hooks {
 
 class AudioHookOrchestrator {
   public:
+    /** Initialize the orchestrator and any platform probes needed. */
     AudioHookOrchestrator();
 
+    /** Attempt to install all available and permitted hooks. Returns true if
+     * at least one hook was successfully installed. */
     bool installHooks();
 
   private:
+    /** Internal predicate which checks whether AAudio should be attempted
+     * based on the api level and process environment. */
     bool shouldAttemptAAudio() const;
 
     utils::PltResolver resolver_;

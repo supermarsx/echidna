@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file audioflinger_hook_manager.h
+ * @brief Hook manager targeting AudioFlinger's record thread and related
+ * read/process entrypoints.
+ */
+
 #include "hooks/hook_manager.h"
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
