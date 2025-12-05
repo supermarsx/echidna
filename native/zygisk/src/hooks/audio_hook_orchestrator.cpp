@@ -48,6 +48,13 @@ bool AudioHookOrchestrator::installHooks() {
         }
     }
     {
+        const bool success = audioflinger_manager_.install();
+        telemetry.registerHookResult("AudioFlinger", success, monotonic_now());
+        if (success) {
+            return true;
+        }
+    }
+    {
         const bool success = audiorecord_manager_.install();
         telemetry.registerHookResult("AudioRecord", success, monotonic_now());
         if (success) {
