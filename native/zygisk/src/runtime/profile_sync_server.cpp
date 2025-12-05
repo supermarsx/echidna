@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "echidna/api.h"
 #include "utils/config_shared_memory.h"
 
 namespace {
@@ -164,6 +165,42 @@ std::string ParseDefaultProfile(const std::string &json) {
         return {};
     }
     return segment.substr(quote + 1, end - quote - 1);
+}
+
+std::string ExtractFirstProfilePayload(const std::string &json) {
+    const std::string segment = ExtractObjectSegment(json, "\"profiles\"");
+    if (segment.empty()) {
+        return {};
+    }
+    // Find the first object value inside the profiles map.
+    size_t first_object = segment.find('{');
+    if (first_object == std::string::npos) {
+        return {};
+    }
+    // Skip the opening brace of the map itself.
+    size_t cursor = first_object + 1;
+    int depth = 0;
+    bool in_string = false;
+    size_t payload_start = std::string::npos;
+    for (; cursor < segment.size(); ++cursor) {
+        char c = segment[cursor];
+        if (c == '"' && segment[cursor - 1] != '\\') {
+            in_string = !in_string;
+        }
+        if (in_string) continue;
+        if (c == '{') {
+            if (depth == 0) {
+                payload_start = cursor;
+            }
+            depth++;
+        } else if (c == '}') {
+            depth--;
+            if (depth == 0 && payload_start != std::string::npos) {
+                return segment.substr(payload_start, cursor - payload_start + 1);
+            }
+        }
+    }
+    return {};
 }
 
 }  // namespace
