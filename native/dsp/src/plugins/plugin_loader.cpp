@@ -1,5 +1,12 @@
 #include "plugins/plugin_loader.h"
 
+/**
+ * @file plugin_loader.cpp
+ * @brief Implementation of the PluginLoader, discovery helpers and
+ * cryptographic verification utilities used to safely load plugin shared
+ * objects.
+ */
+
 #include <dlfcn.h>
 #include <sys/stat.h>
 
@@ -22,12 +29,20 @@ namespace {
 constexpr std::array<const char *, 1> kTrustedKeys = {
     "e6f05a8f7e2c4bfa3a3d28a62a6f68fa4b5379f16e2e63ef1c6d3ccad1f7b010"};
 
+/**
+ * @brief Return true when a regular file exists at path.
+ */
 bool FileExists(const std::string &path) {
   struct stat st;
   return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
 #ifdef ECHIDNA_HAS_BORINGSSL
+/**
+ * @brief Verify an ed25519 signature using OpenSSL/BoringSSL helpers.
+ *
+ * (Available only when ECHIDNA_HAS_BORINGSSL is set.)
+ */
 bool VerifyEd25519(const std::vector<uint8_t> &payload,
                    const std::vector<uint8_t> &signature,
                    const std::array<uint8_t, 32> &public_key) {
@@ -55,6 +70,9 @@ bool VerifyEd25519(const std::vector<uint8_t> &payload,
 }
 #endif
 
+/**
+ * @brief Read a file into a byte buffer. Returns empty vector on failure.
+ */
 std::vector<uint8_t> ReadFile(const std::string &path) {
   std::ifstream file(path, std::ios::binary);
   if (!file.is_open()) {
@@ -71,6 +89,9 @@ std::vector<uint8_t> ReadFile(const std::string &path) {
   return buffer;
 }
 
+/**
+ * @brief Convert a single hex digit to its numeric value.
+ */
 uint8_t FromHex(char c) {
   if (c >= '0' && c <= '9') {
     return static_cast<uint8_t>(c - '0');
@@ -84,6 +105,10 @@ uint8_t FromHex(char c) {
   return 0;
 }
 
+/**
+ * @brief Decode a hex string into raw bytes. Expects filtered input of
+ * length 128 (64 bytes encoded) and will return a vector of 64 raw bytes.
+ */
 std::vector<uint8_t> DecodeHex(const std::vector<uint8_t> &data) {
   std::vector<uint8_t> filtered;
   filtered.reserve(data.size());
@@ -105,6 +130,9 @@ std::vector<uint8_t> DecodeHex(const std::vector<uint8_t> &data) {
   return decoded;
 }
 
+/**
+ * @brief Utility to check whether a string `value` ends with `suffix`.
+ */
 bool HasSuffix(const std::string &value, const std::string &suffix) {
   if (value.length() < suffix.length()) {
     return false;
@@ -116,10 +144,15 @@ bool HasSuffix(const std::string &value, const std::string &suffix) {
 
 namespace echidna::dsp::plugins {
 
+/** Default constructor. */
 PluginLoader::PluginLoader() = default;
 
+/** Destructor: ensure modules are unloaded. */
 PluginLoader::~PluginLoader() { UnloadLocked(); }
 
+/**
+ * @brief Unload library handles and destroy instantiated plugin objects.
+ */
 void PluginLoader::UnloadLocked() {
   std::scoped_lock lock(mutex_);
   for (auto &module : modules_) {
@@ -138,6 +171,9 @@ void PluginLoader::UnloadLocked() {
   loaded_ = false;
 }
 
+/**
+ * @brief Enumerate .so files and attempt to load validated plugin modules.
+ */
 void PluginLoader::LoadFromDirectory(const std::string &directory) {
   std::scoped_lock lock(mutex_);
   if (loaded_) {
@@ -166,6 +202,10 @@ void PluginLoader::LoadFromDirectory(const std::string &directory) {
   loaded_ = true;
 }
 
+/**
+ * @brief Load a single plugin module from `path` and instantiate contained
+ * effect instances if the module is valid and trusted.
+ */
 bool PluginLoader::LoadPlugin(const std::string &path) {
   const std::string signature_path = signature_path_for(path);
   if (!FileExists(signature_path)) {
@@ -223,6 +263,9 @@ bool PluginLoader::LoadPlugin(const std::string &path) {
   return false;
 }
 
+/**
+ * @brief Prepare all plugins by calling their prepare() methods.
+ */
 void PluginLoader::PrepareAll(uint32_t sample_rate, uint32_t channels) {
   std::scoped_lock lock(mutex_);
   for (auto &module : modules_) {
@@ -234,6 +277,9 @@ void PluginLoader::PrepareAll(uint32_t sample_rate, uint32_t channels) {
   }
 }
 
+/**
+ * @brief Reset every plugin instance state.
+ */
 void PluginLoader::ResetAll() {
   std::scoped_lock lock(mutex_);
   for (auto &module : modules_) {
@@ -245,6 +291,9 @@ void PluginLoader::ResetAll() {
   }
 }
 
+/**
+ * @brief Call process() on all enabled plugin instances.
+ */
 void PluginLoader::ProcessAll(effects::ProcessContext &ctx) {
   std::scoped_lock lock(mutex_);
   for (auto &module : modules_) {
@@ -256,6 +305,9 @@ void PluginLoader::ProcessAll(effects::ProcessContext &ctx) {
   }
 }
 
+/**
+ * @brief Return a count of all loaded plugin effect descriptors.
+ */
 size_t PluginLoader::plugin_count() const {
   std::scoped_lock lock(mutex_);
   size_t count = 0;
@@ -265,10 +317,17 @@ size_t PluginLoader::plugin_count() const {
   return count;
 }
 
+/**
+ * @brief Compute the signature filename for a module binary.
+ */
 std::string PluginLoader::signature_path_for(const std::string &binary_path) const {
   return binary_path + ".sig";
 }
 
+/**
+ * @brief Verify payload with signature and the compiled set of trusted
+ * public keys. Returns true for valid signatures.
+ */
 bool PluginLoader::VerifySignature(const std::string &binary_path,
                                    const std::string &signature_path) const {
   auto payload = ReadFile(binary_path);

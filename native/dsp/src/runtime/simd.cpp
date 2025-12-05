@@ -1,5 +1,10 @@
 #include "simd.h"
 
+/**
+ * @file simd.cpp
+ * @brief Platform-optimized implementations for SIMD helper functions.
+ */
+
 #include <algorithm>
 
 #if defined(ECHIDNA_DSP_HAS_NEON)
@@ -10,6 +15,9 @@
 
 namespace echidna::dsp::runtime {
 
+/**
+ * @brief Apply gain to the provided buffer.
+ */
 void apply_gain(float *data, size_t samples, float gain) {
 #if defined(ECHIDNA_DSP_HAS_NEON)
   const float32x4_t gain_vec = vdupq_n_f32(gain);
@@ -40,6 +48,9 @@ void apply_gain(float *data, size_t samples, float gain) {
 #endif
 }
 
+/**
+ * @brief Mix src into dst with the specified gain (dst += src * gain).
+ */
 void mix_in(float *dst, const float *src, size_t samples, float gain) {
 #if defined(ECHIDNA_DSP_HAS_NEON)
   const float32x4_t gain_vec = vdupq_n_f32(gain);
