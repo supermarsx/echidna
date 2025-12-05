@@ -27,6 +27,7 @@ StreamReadFn gOriginalRead = nullptr;
 struct HalContext {
     uint32_t sample_rate{48000};
     uint32_t channels{2};
+    bool validated{false};
 };
 
 HalContext DefaultHalContext() {
@@ -58,7 +59,19 @@ ssize_t ForwardRead(void *stream, void *buffer, size_t bytes) {
     }
 
     HalContext ctx = DefaultHalContext();
-    const size_t frame_bytes = ctx.channels * sizeof(int16_t);
+    size_t frame_bytes = ctx.channels * sizeof(int16_t);
+    const size_t total_samples = static_cast<size_t>(read_bytes) / sizeof(int16_t);
+    if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0) {
+        // Infer channel count when misaligned (1..8).
+        for (uint32_t ch = 1; ch <= 8; ++ch) {
+            if (total_samples % ch == 0) {
+                ctx.channels = ch;
+                frame_bytes = ch * sizeof(int16_t);
+                ctx.validated = true;
+                break;
+            }
+        }
+    }
     if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0) {
         return read_bytes;
     }
