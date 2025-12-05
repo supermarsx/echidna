@@ -8,6 +8,13 @@ ZIP_PATH="${ROOT_DIR}/out/echidna-magisk.zip"
 ZYGISK_LIB="${ROOT_DIR}/build/zygisk/lib/libechidna.so"
 DSP_LIB="${ROOT_DIR}/build/dsp/lib/libech_dsp.so"
 
+VERSION="${ECHIDNA_VERSION:-0.0.0}"
+VERSION_CODE="${ECHIDNA_VERSION_CODE:-}"
+if [[ -z "${VERSION_CODE}" ]]; then
+  VERSION_CODE="$(echo "${VERSION}" | tr -cd '0-9')"
+  [[ -z "${VERSION_CODE}" ]] && VERSION_CODE="1"
+fi
+
 if [[ ! -f "${ZYGISK_LIB}" ]]; then
   echo "Missing Zygisk library at ${ZYGISK_LIB}. Build native first." >&2
   exit 1
@@ -26,8 +33,8 @@ cp "${DSP_LIB}" "${OUT_DIR}/system/lib64/libech_dsp.so"
 cat > "${OUT_DIR}/module.prop" <<'EOF'
 id=echidna
 name=Echidna Native Hooks
-version=0.0.0
-versionCode=1
+version=${VERSION}
+versionCode=${VERSION_CODE}
 author=supermarsx
 description=Native-first AAudio/OpenSL/AudioRecord hooks with DSP pipeline.
 minMagisk=26000
