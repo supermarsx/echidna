@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file libc_read_hook_manager.h
+ * @brief Hook manager to intercept the libc read() function for detecting
+ * audio reads from device files when other hook points are not available.
+ */
+
 #include <cstddef>
 #include <cstdint>
 
