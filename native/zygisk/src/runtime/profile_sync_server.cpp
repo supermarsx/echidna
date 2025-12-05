@@ -26,6 +26,7 @@ namespace
 {
     constexpr const char *kSocketPath = "/data/local/tmp/echidna_profiles.sock";
     constexpr const char *kLogTag = "echidna_profile_sync";
+    constexpr size_t kMaxPresetSize = 512 * 1024;
 
     bool ReadBytes(int fd, void *buffer, size_t bytes)
     {
@@ -392,19 +393,19 @@ namespace echidna
                 return;
             }
 
-            echidna::utils::ConfigurationSnapshot snapshot;
-            snapshot.hooks_enabled = true;
-            snapshot.process_whitelist = ParseWhitelist(payload);
-            snapshot.profile = ParseDefaultProfile(payload);
-            echidna::utils::ConfigSharedMemory memory;
+    echidna::utils::ConfigurationSnapshot snapshot;
+    snapshot.hooks_enabled = true;
+    snapshot.process_whitelist = ParseWhitelist(payload);
+    snapshot.profile = ParseDefaultProfile(payload);
+    echidna::utils::ConfigSharedMemory memory;
             memory.updateSnapshot(snapshot);
 
-            // Apply preset JSON if the payload looks like a preset definition.
-            const std::string preset_payload = ExtractFirstProfilePayload(payload);
-            if (!preset_payload.empty() && LooksLikePreset(preset_payload))
-            {
-                const echidna_result_t result =
-                    echidna_set_profile(preset_payload.c_str(), preset_payload.size());
+    // Apply preset JSON if the payload looks like a preset definition.
+    const std::string preset_payload = ExtractFirstProfilePayload(payload);
+    if (!preset_payload.empty() && preset_payload.size() < kMaxPresetSize && LooksLikePreset(preset_payload))
+    {
+        const echidna_result_t result =
+            echidna_set_profile(preset_payload.c_str(), preset_payload.size());
                 if (result != ECHIDNA_RESULT_OK)
                 {
                     __android_log_print(ANDROID_LOG_WARN,
