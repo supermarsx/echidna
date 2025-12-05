@@ -7,7 +7,7 @@ on:
 
 jobs:
   format:
-    name: Format check
+    name: "Format check"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,7 +39,7 @@ jobs:
           fi
 
   lint:
-    name: Static analysis and Android checks
+    name: "Static analysis and Android checks"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -53,8 +53,7 @@ jobs:
       - name: Run cppcheck on native sources
         run: |
           set -euo pipefail
-          # Run cppcheck on DSP and Zygisk sources
-          cppcheck --enable=warning,style,performance,portability --error-exitcode=1 native/dsp native/zygisk || true
+          cppcheck --enable=warning,style,performance,portability --error-exitcode=1 native/dsp native/zygisk
 
       - name: Set up JDK for Android checks
         uses: actions/setup-java@v4
@@ -62,21 +61,21 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android: run Gradle checks (app)
+      - name: "Android: run Gradle checks (app)"
         uses: gradle/gradle-build-action@v3
         with:
           gradle-version: 8.5
           arguments: check
           build-root-directory: android/app
 
-      - name: Android: run Gradle checks (control service)
+      - name: "Android: run Gradle checks (control service)"
         uses: gradle/gradle-build-action@v3
         with:
           gradle-version: 8.5
           arguments: check
           build-root-directory: android/control-service
 
-      - name: Android: run Gradle checks (lsposed shim)
+      - name: "Android: run Gradle checks (lsposed shim)"
         uses: gradle/gradle-build-action@v3
         with:
           gradle-version: 8.5
@@ -84,7 +83,7 @@ jobs:
           build-root-directory: android/lsposed-shim
 
   native:
-    name: Build native libraries
+    name: "Build native libraries"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -103,7 +102,7 @@ jobs:
         run: cmake --build build/zygisk --config Release
 
   android:
-    name: Build android artifacts
+    name: "Build android artifacts"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -137,7 +136,7 @@ jobs:
           build-root-directory: android/lsposed-shim
 
   smoke-tests:
-    name: Smoke tests (build + artifact checks)
+    name: "Smoke tests (build + artifact checks)"
     runs-on: ubuntu-latest
     needs: [native, android]
     steps:
