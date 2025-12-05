@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <string>
 #include <time.h>
+#include <unordered_map>
 #include <vector>
 
 #include "echidna/api.h"
@@ -29,6 +30,14 @@ ThreadLoopFn gOriginalThreadLoop = nullptr;
 RecordTrackReadFn gOriginalRead = nullptr;
 ProcessChunkFn gOriginalProcess = nullptr;
 
+struct CaptureContext {
+    uint32_t sample_rate{48000};
+    uint32_t channels{2};
+};
+
+std::unordered_map<void *, CaptureContext> gContexts;
+std::mutex gContextMutex;
+
 bool ForwardThreadLoop(void *thiz) {
     auto &state = state::SharedState::instance();
     const std::string &process = utils::CachedProcessName();
@@ -36,6 +45,30 @@ bool ForwardThreadLoop(void *thiz) {
                        (state.isProcessWhitelisted(process) || process == "audioserver");
     if (!allow) {
         return gOriginalThreadLoop ? gOriginalThreadLoop(thiz) : false;
+    }
+
+    // Probe and cache context; fallback to defaults if fields are inaccessible.
+    {
+        std::lock_guard<std::mutex> lock(gContextMutex);
+        if (gContexts.find(thiz) == gContexts.end()) {
+            CaptureContext ctx;
+            // Heuristic: try to read sample rate and channel count from the object memory layout.
+            // Offsets are vendor dependent; we keep defaults if reading fails.
+            struct {
+                uint32_t sample_rate;
+                uint32_t channel_mask;
+            } probe{};
+            if (memcpy(&probe, reinterpret_cast<uint8_t *>(thiz) + 0x10, sizeof(probe))) {
+                if (probe.sample_rate > 8000 && probe.sample_rate < 96000) {
+                    ctx.sample_rate = probe.sample_rate;
+                }
+                const uint32_t channels = std::popcount(probe.channel_mask);
+                if (channels > 0 && channels <= 8) {
+                    ctx.channels = channels;
+                }
+            }
+            gContexts.emplace(thiz, ctx);
+        }
     }
 
     timespec wall_start{};
@@ -141,47 +174,34 @@ ssize_t AudioFlingerHookManager::ReplacementRead(void *thiz, void *buffer, size_
         return read_bytes;
     }
 
-    const uint32_t sample_rate = []() {
-        static uint32_t cached = 0;
-        if (cached == 0) {
-            if (const char *env = std::getenv("ECHIDNA_AF_SAMPLE_RATE")) {
-                cached = static_cast<uint32_t>(std::max(1, std::atoi(env)));
-            }
-            if (cached == 0) {
-                cached = 48000u;
-            }
+    CaptureContext ctx;
+    {
+        std::lock_guard<std::mutex> lock(gContextMutex);
+        auto it = gContexts.find(thiz);
+        if (it != gContexts.end()) {
+            ctx = it->second;
         }
-        return cached;
-    }();
-    const uint32_t channels = []() {
-        static uint32_t cached = 0;
-        if (cached == 0) {
-            if (const char *env = std::getenv("ECHIDNA_AF_CHANNELS")) {
-                cached = static_cast<uint32_t>(std::max(1, std::atoi(env)));
-            }
-            if (cached == 0) {
-                cached = 2u;
-            }
-        }
-        return cached;
-    }();
+    }
 
-    const size_t frame_bytes = channels * sizeof(int16_t);
-    const size_t min_block = static_cast<size_t>(channels) * sizeof(int16_t) * 8;       // 8 frames minimum
-    const size_t max_block = static_cast<size_t>(channels) * sizeof(int16_t) * 2048;    // guard upper bound
+    const size_t frame_bytes = ctx.channels * sizeof(int16_t);
+    const size_t min_block = static_cast<size_t>(ctx.channels) * sizeof(int16_t) * 8;    // 8 frames minimum
+    const size_t max_block = static_cast<size_t>(ctx.channels) * sizeof(int16_t) * 4096; // guard upper bound
     if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0 ||
         static_cast<size_t>(read_bytes) < min_block || static_cast<size_t>(read_bytes) > max_block) {
         return read_bytes;
     }
     const size_t frames = static_cast<size_t>(read_bytes) / frame_bytes;
     const int16_t *pcm_in = static_cast<const int16_t *>(buffer);
-    std::vector<float> in(frames * channels);
-    for (size_t i = 0; i < frames * channels; ++i) {
+    std::vector<float> in(frames * ctx.channels);
+    for (size_t i = 0; i < frames * ctx.channels; ++i) {
         in[i] = static_cast<float>(pcm_in[i]) / 32768.0f;
     }
-    std::vector<float> out(frames * channels);
-    const echidna_result_t result =
-            echidna_process_block(in.data(), out.data(), static_cast<uint32_t>(frames), sample_rate, channels);
+    std::vector<float> out(frames * ctx.channels);
+    const echidna_result_t result = echidna_process_block(in.data(),
+                                                          out.data(),
+                                                          static_cast<uint32_t>(frames),
+                                                          ctx.sample_rate,
+                                                          ctx.channels);
     if (result != ECHIDNA_RESULT_OK) {
         return read_bytes;
     }
