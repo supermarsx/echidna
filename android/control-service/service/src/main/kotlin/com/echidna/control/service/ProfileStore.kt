@@ -36,6 +36,10 @@ class ProfileStore(
 
     fun listProfiles(): List<String> = lock.read { profiles.keys.toList() }
 
+    fun resolveProfilePayload(request: String): String? = lock.read {
+        profiles[request]?.toString()
+    }
+
     fun saveProfile(id: String, profileJson: String) {
         val parsed = try {
             JSONObject(profileJson)

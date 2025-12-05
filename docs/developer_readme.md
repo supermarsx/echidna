@@ -7,7 +7,8 @@ entry points are:
 
 - `uint32_t echidna_api_get_version(void)` exposes a packed `MAJOR.MINOR.PATCH` version to guard
   against ABI drift.
-- `echidna_result_t echidna_set_profile(const char *profile)` updates the active routing profile.
+- `echidna_result_t echidna_set_profile(const char *profile_json, size_t length)` updates the
+  active routing profile using the preset JSON schema.
 - `echidna_result_t echidna_process_block(const float *input, float *output, uint32_t frames,
   uint32_t sample_rate, uint32_t channel_count)` feeds captured audio into the DSP pipeline.
 - `echidna_status_t echidna_get_status(void)` reports the internal hook state.
@@ -32,7 +33,8 @@ entry points are:
 The control service exposes `IEchidnaControlService` over Binder. Companion applications should
 bind with `com.echidna.app.permission.BIND_CONTROL_SERVICE` and invoke the following methods:
 
-- `void setProfile(String profile)` → wraps `echidna_set_profile`. Null or empty profiles are
+- `void setProfile(String profile)` → resolves the profile ID to JSON, then wraps
+  `echidna_set_profile`. Null or empty profiles are
   ignored.
 - `int getStatus()` → forwards `echidna_get_status`.
 - `int processBlock(float[] input, float[] output, int frames, int sampleRate, int channelCount)` →

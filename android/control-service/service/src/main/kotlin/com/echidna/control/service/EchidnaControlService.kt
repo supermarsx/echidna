@@ -136,7 +136,13 @@ class EchidnaControlService : Service() {
             if (profile.isNullOrEmpty()) {
                 return
             }
-            EchidnaNative.setProfile(profile)
+            val payload = profileStore.resolveProfilePayload(profile)
+                ?: profile.takeIf { it.trimStart().startsWith("{") }
+            if (payload == null) {
+                Log.w(TAG, "Profile '$profile' not found; ignoring request")
+                return
+            }
+            EchidnaNative.setProfile(payload)
         }
 
         override fun getStatus(): Int = EchidnaNative.getStatus()

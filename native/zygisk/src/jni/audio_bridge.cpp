@@ -295,7 +295,8 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeSetProfile(JNIEnv *env, jclass,
     if (!chars) {
         return;
     }
-    echidna_set_profile(chars);
+    const size_t length = static_cast<size_t>(env->GetStringUTFLength(profile));
+    echidna_set_profile(chars, length);
     env->ReleaseStringUTFChars(profile, chars);
 }
 

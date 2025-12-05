@@ -20,7 +20,7 @@ constexpr std::array<std::string_view, 2> kCandidateLibraryDirectories = {
 constexpr const char *kLogTag = "EchidnaControlJNI";
 
 struct EchidnaSymbols {
-  using SetProfileFn = echidna_result_t (*)(const char *);
+  using SetProfileFn = echidna_result_t (*)(const char *, size_t);
   using ProcessBlockFn = echidna_result_t (*)(const float *, float *, uint32_t, uint32_t, uint32_t);
   using GetStatusFn = echidna_status_t (*)(void);
   using GetVersionFn = uint32_t (*)(void);
@@ -151,7 +151,8 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeSetProfile(JNIEnv *env,
   if (!chars) {
     return ECHIDNA_RESULT_ERROR;
   }
-  const echidna_result_t result = Symbols().set_profile(chars);
+  const size_t length = static_cast<size_t>(env->GetStringUTFLength(profile));
+  const echidna_result_t result = Symbols().set_profile(chars, length);
   env->ReleaseStringUTFChars(profile, chars);
   return static_cast<jint>(result);
 }

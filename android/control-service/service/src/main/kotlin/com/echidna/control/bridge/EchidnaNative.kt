@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal object EchidnaNative {
     private const val RESULT_NOT_AVAILABLE = -7
     private const val STATUS_ERROR = 3
-    private const val DEFAULT_API_VERSION: Long = 1L shl 16
+    private const val DEFAULT_API_VERSION: Long = (1L shl 16) or (1L shl 8)
 
     private val available = AtomicBoolean(true)
 

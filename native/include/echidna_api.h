@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 #define ECHIDNA_API_VERSION_MAJOR 1U
-#define ECHIDNA_API_VERSION_MINOR 0U
+#define ECHIDNA_API_VERSION_MINOR 1U
 #define ECHIDNA_API_VERSION_PATCH 0U
 
 #define ECHIDNA_API_VERSION \
@@ -37,7 +37,7 @@ uint32_t echidna_api_get_version(void);
 
 echidna_status_t echidna_get_status(void);
 
-echidna_result_t echidna_set_profile(const char *profile);
+echidna_result_t echidna_set_profile(const char *profile_json, size_t length);
 
 echidna_result_t echidna_process_block(const float *input,
                                        float *output,
