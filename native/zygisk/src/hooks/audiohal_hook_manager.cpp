@@ -62,6 +62,38 @@ namespace echidna
                 return ctx;
             }
 
+            HalContext ResolveHalContext(void *stream)
+            {
+                HalContext ctx = DefaultHalContext();
+                const uint8_t *base = reinterpret_cast<const uint8_t *>(stream);
+                if (!base)
+                {
+                    return ctx;
+                }
+                const size_t scan_limit = 128;
+                for (size_t offset = 0; offset + 8 <= scan_limit; offset += 4)
+                {
+                    uint32_t sr = 0;
+                    uint32_t ch = 0;
+                    std::memcpy(&sr, base + offset, sizeof(sr));
+                    std::memcpy(&ch, base + offset + 4, sizeof(ch));
+                    if (sr > 8000 && sr < 192000)
+                    {
+                        ctx.sample_rate = sr;
+                    }
+                    if (ch >= 1 && ch <= 8)
+                    {
+                        ctx.channels = ch;
+                    }
+                    if (sr > 8000 && sr < 192000 && ch >= 1 && ch <= 8)
+                    {
+                        ctx.validated = true;
+                        break;
+                    }
+                }
+                return ctx;
+            }
+
             HalContext ResolveHalContext(void * /*stream*/)
             {
                 // TODO: parse audio stream config when accessible; fallback to defaults/env.
