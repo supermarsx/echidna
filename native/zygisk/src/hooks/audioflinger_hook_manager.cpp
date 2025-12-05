@@ -26,7 +26,9 @@ ThreadLoopFn gOriginalThreadLoop = nullptr;
 bool ForwardThreadLoop(void *thiz) {
     auto &state = state::SharedState::instance();
     const std::string &process = utils::CachedProcessName();
-    if (!state.hooksEnabled() || !state.isProcessWhitelisted(process)) {
+    const bool allow = state.hooksEnabled() &&
+                       (state.isProcessWhitelisted(process) || process == "audioserver");
+    if (!allow) {
         return gOriginalThreadLoop ? gOriginalThreadLoop(thiz) : false;
     }
 
