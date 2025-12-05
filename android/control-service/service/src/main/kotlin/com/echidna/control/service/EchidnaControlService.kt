@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit
  */
 class EchidnaControlService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
-    private val telemetryExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    private val telemetryExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor()
     private lateinit var profileStore: ProfileStore
     private lateinit var privilegedController: PrivilegedController
     private lateinit var telemetryExporter: TelemetryExporter
@@ -48,7 +49,7 @@ class EchidnaControlService : Service() {
             if (selinuxState == SelinuxState.ENFORCING_JAVA_ONLY) {
                 Log.w(
                     TAG,
-                    "Device SELinux policy blocks native engine; defaulting to Java compatibility mode",
+                    "SELinux blocks native engine; defaulting to Java compatibility mode",
                 )
             }
             privilegedController.refreshStatus()
@@ -162,7 +163,13 @@ class EchidnaControlService : Service() {
                 return -2
             }
             val tempOutput = output?.let { FloatArray(requiredSamples) }
-            val result = EchidnaNative.processBlock(input, tempOutput, frames, sampleRate, channelCount)
+            val result = EchidnaNative.processBlock(
+                input,
+                tempOutput,
+                frames,
+                sampleRate,
+                channelCount,
+            )
             if (output != null && tempOutput != null) {
                 val limit = min(output.size, requiredSamples)
                 for (index in 0 until limit) {
