@@ -82,6 +82,7 @@ bool AudioFlingerHookManager::install() {
         "_ZN7android12AudioFlinger11RecordThread10threadLoopEv",
         "_ZN7android12AudioFlinger17RecordTrackHandle10threadLoopEv",
     };
+    bool installed = false;
     for (const char *symbol : kCandidates) {
         void *target = resolver_.findSymbol("libaudioflinger.so", symbol);
         if (!target) {
@@ -92,17 +93,48 @@ bool AudioFlingerHookManager::install() {
                           reinterpret_cast<void **>(&gOriginalThreadLoop))) {
             __android_log_print(ANDROID_LOG_INFO,
                                 "echidna",
-                                "AudioFlinger hook installed at %s",
+                                "AudioFlinger threadLoop hook installed at %s",
                                 symbol);
-            return true;
+            installed = true;
+            break;
         }
     }
-    __android_log_print(ANDROID_LOG_WARN, "echidna", "AudioFlinger hook not installed");
-    return false;
+
+    void *read_target = resolver_.findSymbol("libaudioflinger.so",
+                                             "_ZN7android12AudioFlinger10RecordThread4readEPvjj");
+    if (read_target) {
+        hook_read_.install(read_target,
+                           reinterpret_cast<void *>(&ReplacementRead),
+                           reinterpret_cast<void **>(&gOriginalRead));
+    }
+
+    void *process_target =
+            resolver_.findSymbol("libaudioflinger.so",
+                                 "_ZN7android12AudioFlinger10RecordThread13processVolumeEPKvj");
+    if (process_target) {
+        hook_process_.install(process_target,
+                              reinterpret_cast<void *>(&ReplacementProcess),
+                              reinterpret_cast<void **>(&gOriginalProcess));
+    }
+
+    if (!installed) {
+        __android_log_print(ANDROID_LOG_WARN, "echidna", "AudioFlinger hook not installed");
+    }
+    return installed;
 }
 
 bool AudioFlingerHookManager::Replacement(void *thiz) {
     return ForwardThreadLoop(thiz);
+}
+
+ssize_t AudioFlingerHookManager::ReplacementRead(void *thiz, void *buffer, size_t bytes) {
+    // Forward reads; data is intercepted via audio bridge not yet wired here.
+    return gOriginalRead ? gOriginalRead(thiz, buffer, bytes) : -1;
+}
+
+ssize_t AudioFlingerHookManager::ReplacementProcess(void *thiz, void *buffer, size_t bytes) {
+    // Placeholder to allow future in-place processing.
+    return gOriginalProcess ? gOriginalProcess(thiz, buffer, bytes) : -1;
 }
 
 }  // namespace hooks
