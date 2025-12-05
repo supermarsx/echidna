@@ -35,6 +35,7 @@ ProcessChunkFn gOriginalProcess = nullptr;
 struct CaptureContext {
     uint32_t sample_rate{48000};
     uint32_t channels{2};
+    bool validated{false};
 };
 
 std::unordered_map<void *, CaptureContext> gContexts;
@@ -44,6 +45,12 @@ uint32_t DefaultSampleRate() {
 #ifdef __ANDROID__
     char prop[PROP_VALUE_MAX] = {0};
     if (__system_property_get("ro.audio.samplerate", prop) > 0) {
+        int sr = std::atoi(prop);
+        if (sr > 8000 && sr < 192000) {
+            return static_cast<uint32_t>(sr);
+        }
+    }
+    if (__system_property_get("ro.vendor.audio.samplerate", prop) > 0) {
         int sr = std::atoi(prop);
         if (sr > 8000 && sr < 192000) {
             return static_cast<uint32_t>(sr);
@@ -97,6 +104,7 @@ CaptureContext ResolveContext(void *thiz) {
             ctx.channels = channels;
         }
         if (sr > 8000 && sr < 192000 && channels > 0) {
+            ctx.validated = true;
             break;
         }
     }
@@ -231,6 +239,7 @@ bool ProcessPcmBuffer(void *thiz,
             if (frames_candidate >= 8 && frames_candidate <= 4096) {
                 ctx.channels = ch;
                 frame_bytes = ch * sizeof(int16_t);
+                ctx.validated = true;
                 {
                     std::lock_guard<std::mutex> lock(gContextMutex);
                     gContexts[thiz] = ctx;
