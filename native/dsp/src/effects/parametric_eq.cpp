@@ -1,21 +1,29 @@
 #include "parametric_eq.h"
 
+/**
+ * @file parametric_eq.cpp
+ * @brief ParametricEQ implementation and filter coefficient math.
+ */
+
 #include <algorithm>
 #include <cmath>
 
 namespace echidna::dsp::effects {
 
+/** Set new band definitions and update coefficients. */
 void ParametricEQ::set_bands(std::vector<EqBand> bands) {
   bands_ = std::move(bands);
   update_coefficients();
 }
 
+/** Prepare filters for sample-rate and channel count. */
 void ParametricEQ::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   filters_.resize(bands_.size() * channels);
   update_coefficients();
 }
 
+/** Reset internal filter delays to zero. */
 void ParametricEQ::reset() {
   for (auto &f : filters_) {
     f.z1 = 0.0f;
@@ -23,6 +31,7 @@ void ParametricEQ::reset() {
   }
 }
 
+/** Run processing across all configured bands for each channel. */
 void ParametricEQ::process(ProcessContext &ctx) {
   if (!enabled_) {
     return;
@@ -46,6 +55,7 @@ void ParametricEQ::process(ProcessContext &ctx) {
   }
 }
 
+/** Recompute biquad coefficients for the active band list. */
 void ParametricEQ::update_coefficients() {
   if (sample_rate_ == 0 || channels_ == 0) {
     return;

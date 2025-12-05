@@ -1,5 +1,11 @@
 #include "preset_loader.h"
 
+/**
+ * @file preset_loader.cpp
+ * @brief Implementation of the small JSON parser and validation logic that
+ * turns preset JSON strings into PresetDefinition objects.
+ */
+
 #include <charconv>
 #include <cctype>
 #include <map>
@@ -367,6 +373,9 @@ effects::AutoTuneParameters ParseAutoTuneParams(const JsonValue &module,
 
 }  // namespace
 
+/**
+ * @brief Parse user supplied JSON and return a validated PresetDefinition.
+ */
 PresetLoadResult LoadPresetFromJson(std::string_view json) {
   PresetLoadResult result;
   try {

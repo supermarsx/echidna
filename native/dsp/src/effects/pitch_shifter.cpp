@@ -1,5 +1,10 @@
 #include "pitch_shifter.h"
 
+/**
+ * @file pitch_shifter.cpp
+ * @brief Implementations for the PitchShifter and various backends.
+ */
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -224,30 +229,37 @@ class SoundTouchBackend : public PitchBackend {
 
 }  // namespace
 
+/** Construct a pitch shifter instance. */
 PitchShifter::PitchShifter() = default;
+/** Destroy and clean up resources. */
 PitchShifter::~PitchShifter() = default;
 
+/** Update the current PitchParameters and rebuild backend as needed. */
 void PitchShifter::set_parameters(const PitchParameters &params) {
   params_ = params;
   rebuild_backend();
 }
 
+/** Prepare the effect and configure the chosen backend. */
 void PitchShifter::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   rebuild_backend();
 }
 
+/** Reset the active backend to its initial state. */
 void PitchShifter::reset() {
   if (backend_) {
     backend_->reset();
   }
 }
 
+/** Compute the current semitone ratio applied by the pitch shifter. */
 float PitchShifter::ratio() const {
   const float semitone_offset = params_.semitones + params_.cents / 100.0f;
   return std::pow(2.0f, semitone_offset / 12.0f);
 }
 
+/** Run processing using the configured backend. */
 void PitchShifter::process(ProcessContext &ctx) {
   if (!enabled_ || !backend_) {
     return;
@@ -256,6 +268,8 @@ void PitchShifter::process(ProcessContext &ctx) {
   backend_->process(scratch_.data(), ctx.buffer, ctx.frames);
 }
 
+/** Select and reconfigure an appropriate backend implementation based on
+ * parameters and available libraries. */
 void PitchShifter::rebuild_backend() {
   if (sample_rate_ == 0 || channels_ == 0) {
     return;

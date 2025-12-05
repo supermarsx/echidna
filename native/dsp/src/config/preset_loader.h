@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file preset_loader.h
+ * @brief Utilities to parse and validate JSON presets into typed
+ * PresetDefinition structs used by the DSP engine.
+ */
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,8 +22,10 @@
 
 namespace echidna::dsp::config {
 
+/** Processing mode selection for processing pipeline. */
 enum class ProcessingMode { kSynchronous, kHybrid };
 
+/** Quality preference representing desired processing quality vs latency. */
 enum class QualityPreference { kLowLatency, kBalanced, kHighQuality };
 
 struct GateConfig {
@@ -74,12 +82,24 @@ struct PresetDefinition {
   MixConfig mix;
 };
 
+/**
+ * @brief Result from attempting to load/parse a preset.
+ *
+ * `ok` will be true when parsing and validation succeeded and `preset`
+ * will contain the parsed configuration. On failure `error` contains a
+ * diagnostic string.
+ */
 struct PresetLoadResult {
   bool ok{false};
   std::string error;
   PresetDefinition preset;
 };
 
+/**
+ * @brief Parse a JSON string and produce a PresetDefinition.
+ * @param json JSON text to parse.
+ * @return PresetLoadResult describing success or parse / validation errors.
+ */
 PresetLoadResult LoadPresetFromJson(std::string_view json);
 
 }  // namespace echidna::dsp::config
