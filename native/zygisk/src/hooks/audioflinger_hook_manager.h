@@ -18,6 +18,8 @@ class AudioFlingerHookManager : public HookManager {
     const char *name() const override { return "AudioFlinger_RecordThread"; }
 
   private:
+    struct CaptureContext;
+
     static bool Replacement(void *thiz);
     static ssize_t ReplacementRead(void *thiz, void *buffer, size_t bytes);
     static ssize_t ReplacementProcess(void *thiz, void *buffer, size_t bytes);
