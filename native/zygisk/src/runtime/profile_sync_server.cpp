@@ -1,6 +1,7 @@
 #include "runtime/profile_sync_server.h"
 
 #include <arpa/inet.h>
+#include <android/log.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -16,6 +17,7 @@
 
 namespace {
 constexpr const char *kSocketPath = "/data/local/tmp/echidna_profiles.sock";
+constexpr const char *kLogTag = "echidna_profile_sync";
 
 bool ReadBytes(int fd, void *buffer, size_t bytes) {
     uint8_t *out = static_cast<uint8_t *>(buffer);
@@ -123,20 +125,27 @@ std::vector<std::string> ParseWhitelist(const std::string &json) {
         return whitelist;
     }
     size_t pos = 0;
-    while (true) {
-        size_t quote = segment.find('"', pos);
-        if (quote == std::string::npos) break;
-        size_t end = segment.find('"', quote + 1);
-        if (end == std::string::npos) break;
-        const std::string key = segment.substr(quote + 1, end - quote - 1);
-        size_t colon = segment.find(':', end);
+    while (pos < segment.size()) {
+        size_t key_start = segment.find('"', pos);
+        if (key_start == std::string::npos) break;
+        size_t key_end = segment.find('"', key_start + 1);
+        if (key_end == std::string::npos) break;
+        const std::string key = segment.substr(key_start + 1, key_end - key_start - 1);
+        size_t colon = segment.find(':', key_end);
         if (colon == std::string::npos) break;
         size_t value_start = segment.find_first_not_of(" \t\n\r", colon + 1);
         if (value_start == std::string::npos) break;
-        if (segment.compare(value_start, 4, "true") == 0) {
+        bool value_true = segment.compare(value_start, 4, "true") == 0;
+        bool value_false = segment.compare(value_start, 5, "false") == 0;
+        if (value_true) {
             whitelist.push_back(key);
+        } else if (!value_false) {
+            __android_log_print(ANDROID_LOG_WARN,
+                                kLogTag,
+                                "Whitelist entry for %s has non-boolean value",
+                                key.c_str());
         }
-        pos = value_start + 1;
+        pos = value_start + (value_true ? 4 : value_false ? 5 : 1);
     }
     return whitelist;
 }
@@ -207,6 +216,7 @@ int ProfileSyncServer::createListener() {
 void ProfileSyncServer::run() {
     listener_fd_ = createListener();
     if (listener_fd_ < 0) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "Failed to create profile listener");
         running_ = false;
         return;
     }
@@ -216,6 +226,7 @@ void ProfileSyncServer::run() {
             if (errno == EINTR) {
                 continue;
             }
+            __android_log_print(ANDROID_LOG_WARN, kLogTag, "Accept failed: %s", strerror(errno));
             break;
         }
         handleClient(client);
@@ -234,6 +245,8 @@ void ProfileSyncServer::handleClient(int client_fd) {
     }
     if (!payload.empty()) {
         handlePayload(payload);
+    } else {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag, "Profile sync payload empty");
     }
 }
 

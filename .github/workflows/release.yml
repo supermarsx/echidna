@@ -82,11 +82,25 @@ jobs:
           cp build/dsp/lib/libech_dsp.so artifacts/native/libech_dsp.so
           cp build/zygisk/lib/libechidna.so artifacts/native/libechidna.so
 
+      - name: Build Magisk module
+        run: bash tools/build_magisk_module.sh
+
+      - name: Collect Magisk module
+        run: |
+          mkdir -p artifacts/magisk
+          cp out/echidna-magisk.zip artifacts/magisk/echidna-magisk.zip
+
       - name: Upload native artifacts
         uses: actions/upload-artifact@v4
         with:
           name: native
           path: artifacts/native
+
+      - name: Upload Magisk module
+        uses: actions/upload-artifact@v4
+        with:
+          name: magisk
+          path: artifacts/magisk/echidna-magisk.zip
 
   android:
     runs-on: ubuntu-latest
