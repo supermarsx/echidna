@@ -136,17 +136,18 @@ std::vector<std::string> ParseWhitelist(const std::string &json) {
         if (colon == std::string::npos) break;
         size_t value_start = segment.find_first_not_of(" \t\n\r", colon + 1);
         if (value_start == std::string::npos) break;
-        bool value_true = segment.compare(value_start, 4, "true") == 0;
-        bool value_false = segment.compare(value_start, 5, "false") == 0;
-        if (value_true) {
+        if (segment.compare(value_start, 4, "true") == 0) {
             whitelist.push_back(key);
-        } else if (!value_false) {
+            pos = value_start + 4;
+        } else if (segment.compare(value_start, 5, "false") == 0) {
+            pos = value_start + 5;
+        } else {
             __android_log_print(ANDROID_LOG_WARN,
                                 kLogTag,
                                 "Whitelist entry for %s has non-boolean value",
                                 key.c_str());
+            pos = value_start + 1;
         }
-        pos = value_start + (value_true ? 4 : value_false ? 5 : 1);
     }
     return whitelist;
 }
@@ -168,37 +169,44 @@ std::string ParseDefaultProfile(const std::string &json) {
 }
 
 std::string ExtractFirstProfilePayload(const std::string &json) {
+    // Minimal JSON traversal: expect {"profiles":{ "id": { ...preset... } }, "whitelist": {...}}
     const std::string segment = ExtractObjectSegment(json, "\"profiles\"");
     if (segment.empty()) {
         return {};
     }
-    // Find the first object value inside the profiles map.
-    size_t first_object = segment.find('{');
-    if (first_object == std::string::npos) {
+    size_t pos = segment.find('{');
+    if (pos == std::string::npos) {
         return {};
     }
-    // Skip the opening brace of the map itself.
-    size_t cursor = first_object + 1;
-    int depth = 0;
-    bool in_string = false;
-    size_t payload_start = std::string::npos;
-    for (; cursor < segment.size(); ++cursor) {
-        char c = segment[cursor];
-        if (c == '"' && segment[cursor - 1] != '\\') {
-            in_string = !in_string;
+    pos += 1;  // inside profiles map
+    while (pos < segment.size()) {
+        // skip whitespace
+        while (pos < segment.size() && isspace(static_cast<unsigned char>(segment[pos]))) {
+            ++pos;
         }
-        if (in_string) continue;
-        if (c == '{') {
+        if (pos >= segment.size() || segment[pos] != '"') {
+            break;
+        }
+        size_t key_end = segment.find('"', pos + 1);
+        if (key_end == std::string::npos) break;
+        size_t colon = segment.find(':', key_end);
+        if (colon == std::string::npos) break;
+        size_t value_start = segment.find_first_not_of(" \t\n\r", colon + 1);
+        if (value_start == std::string::npos) break;
+        if (segment[value_start] != '{') {
+            pos = value_start + 1;
+            continue;
+        }
+        int depth = 0;
+        size_t start = value_start;
+        for (size_t i = value_start; i < segment.size(); ++i) {
+            if (segment[i] == '{') depth++;
+            else if (segment[i] == '}') depth--;
             if (depth == 0) {
-                payload_start = cursor;
-            }
-            depth++;
-        } else if (c == '}') {
-            depth--;
-            if (depth == 0 && payload_start != std::string::npos) {
-                return segment.substr(payload_start, cursor - payload_start + 1);
+                return segment.substr(start, i - start + 1);
             }
         }
+        break;
     }
     return {};
 }
