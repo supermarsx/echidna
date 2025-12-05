@@ -1,5 +1,11 @@
 #include "hooks/audiohal_hook_manager.h"
 
+/**
+ * @file audiohal_hook_manager.cpp
+ * @brief Install hooks for platform audio HAL read entrypoints and route
+ * buffers into the DSP processing pipeline.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #else
