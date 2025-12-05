@@ -102,6 +102,14 @@ namespace echidna
             {
                 static std::once_flag once;
                 std::call_once(once, []() {
+                    if (const char *env = std::getenv("ECHIDNA_AF_DISCOVER"))
+                    {
+                        if (std::atoi(env) != 0)
+                        {
+                            gSampleRateOffset = -2;  // sentinel to signal discovery mode.
+                            gChannelMaskOffset = -2;
+                        }
+                    }
                     if (const char *env = std::getenv("ECHIDNA_AF_SR_OFFSET"))
                     {
                         gSampleRateOffset = std::atoi(env);
@@ -170,6 +178,12 @@ namespace echidna
                         ctx.validated = true;
                         break;
                     }
+                    if (gSampleRateOffset == -2 && sr > 8000 && sr < 192000 && channels > 0)
+                    {
+                        // Discovery mode: record offsets for future runs.
+                        gSampleRateOffset = static_cast<int32_t>(offset);
+                        gChannelMaskOffset = static_cast<int32_t>(offset + 4);
+                    }
                 }
 
                 {
@@ -191,7 +205,15 @@ namespace echidna
                 }
 
                 // Probe and cache context; fallback to defaults if fields are inaccessible.
-                (void)ResolveContext(thiz);
+                CaptureContext ctx = ResolveContext(thiz);
+                if (!ctx.validated && gSampleRateOffset >= 0 && gChannelMaskOffset >= 0)
+                {
+                    __android_log_print(ANDROID_LOG_INFO,
+                                        "echidna",
+                                        "AudioFlinger offsets sr=%d chmask=%d",
+                                        gSampleRateOffset,
+                                        gChannelMaskOffset);
+                }
 
                 timespec wall_start{};
                 timespec wall_end{};

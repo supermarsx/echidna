@@ -70,7 +70,7 @@ namespace echidna
                 {
                     return ctx;
                 }
-                const size_t scan_limit = 128;
+                const size_t scan_limit = 256;
                 for (size_t offset = 0; offset + 8 <= scan_limit; offset += 4)
                 {
                     uint32_t sr = 0;
