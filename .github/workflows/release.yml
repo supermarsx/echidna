@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag
+        id: tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date();
+            const yy = String(now.getFullYear()).slice(-2);
+            const tags = await github.paginate(
+              github.rest.repos.listTags,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+            );
+            const regex = new RegExp(`^${yy}\\.([0-9]+)$`);
+            let max = 0;
+            for (const tag of tags) {
+              const match = tag.name.match(regex);
+              if (match) {
+                const n = parseInt(match[1], 10);
+                if (!Number.isNaN(n)) {
+                  max = Math.max(max, n);
+                }
+              }
+            }
+            const next = max + 1;
+            const nextTag = `${yy}.${next}`;
+            core.info(`Next tag: ${nextTag}`);
+            const exists = tags.some((t) => t.name === nextTag);
+            if (!exists) {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${nextTag}`,
+                sha: context.sha,
+              });
+            }
+            core.setOutput("tag", nextTag);
+
+  native:
+    runs-on: ubuntu-latest
+    needs: tag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure DSP
+        run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build DSP
+        run: cmake --build build/dsp --config Release
+
+      - name: Configure Zygisk
+        run: cmake -S native/zygisk -B build/zygisk -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Zygisk
+        run: cmake --build build/zygisk --config Release
+
+      - name: Package native artifacts
+        run: |
+          mkdir -p artifacts/native
+          cp build/dsp/lib/libech_dsp.so artifacts/native/libech_dsp.so
+          cp build/zygisk/lib/libechidna.so artifacts/native/libechidna.so
+
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: artifacts/native
+
+  android:
+    runs-on: ubuntu-latest
+    needs: tag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build Companion App
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/app
+
+      - name: Build Control Service
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/control-service
+
+      - name: Build LSPosed Shim
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/lsposed-shim
+
+      - name: Package Android artifacts
+        run: |
+          mkdir -p artifacts/android
+          cp android/app/app/build/outputs/apk/debug/app-debug.apk \
+            artifacts/android/app-debug.apk
+          cp android/control-service/service/build/outputs/aar/service-debug.aar \
+            artifacts/android/control-service-debug.aar
+          cp android/lsposed-shim/shim/build/outputs/aar/shim-debug.aar \
+            artifacts/android/lsposed-shim-debug.aar
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: artifacts/android
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [tag, native, android]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.tag }}
+          name: Echidna ${{ needs.tag.outputs.tag }}
+          files: release_artifacts/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

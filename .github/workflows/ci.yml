@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure DSP
+        run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build DSP
+        run: cmake --build build/dsp --config Release
+
+      - name: Configure Zygisk
+        run: cmake -S native/zygisk -B build/zygisk -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Zygisk
+        run: cmake --build build/zygisk --config Release
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build Companion App
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/app
+
+      - name: Build Control Service
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/control-service
+
+      - name: Build LSPosed Shim
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/lsposed-shim
