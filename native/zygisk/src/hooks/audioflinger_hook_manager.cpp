@@ -21,7 +21,11 @@ namespace hooks {
 
 namespace {
 using ThreadLoopFn = bool (*)(void *);
+using RecordTrackReadFn = ssize_t (*)(void *, void *, size_t);
+using ProcessChunkFn = ssize_t (*)(void *, void *, size_t);
 ThreadLoopFn gOriginalThreadLoop = nullptr;
+RecordTrackReadFn gOriginalRead = nullptr;
+ProcessChunkFn gOriginalProcess = nullptr;
 
 bool ForwardThreadLoop(void *thiz) {
     auto &state = state::SharedState::instance();
