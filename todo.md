@@ -8,3 +8,4 @@
 - Add CI smoke tests for native hooks and DSP validation (unit + minimal audio block round-trip).
 - Implement per-app profile binding and status reflection in LSPosed shim UI.
 - Capture telemetry snapshots (latency histograms, CPU) and stream to companion diagnostics.
+- Add Doxygen documentation across public headers (C API, DSP API, hook managers, profile sync).

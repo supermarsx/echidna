@@ -13,7 +13,14 @@ class ProfileSyncServer {
     ProfileSyncServer();
     ~ProfileSyncServer();
 
+    /**
+     * @brief Starts the profile sync listener thread (idempotent).
+     */
     void start();
+
+    /**
+     * @brief Stops the listener and joins the worker thread.
+     */
     void stop();
 
   private:
