@@ -18,33 +18,36 @@
 #include "utils/api_level_probe.h"
 #include "utils/plt_resolver.h"
 
-namespace echidna {
-namespace hooks {
+namespace echidna
+{
+  namespace hooks
+  {
 
-class AudioHookOrchestrator {
-  public:
-    /** Initialize the orchestrator and any platform probes needed. */
-    AudioHookOrchestrator();
+    class AudioHookOrchestrator
+    {
+    public:
+      /** Initialize the orchestrator and any platform probes needed. */
+      AudioHookOrchestrator();
 
-    /** Attempt to install all available and permitted hooks. Returns true if
-     * at least one hook was successfully installed. */
-    bool installHooks();
+      /** Attempt to install all available and permitted hooks. Returns true if
+       * at least one hook was successfully installed. */
+      bool installHooks();
 
-  private:
-    /** Internal predicate which checks whether AAudio should be attempted
-     * based on the api level and process environment. */
-    bool shouldAttemptAAudio() const;
+    private:
+      /** Internal predicate which checks whether AAudio should be attempted
+       * based on the api level and process environment. */
+      bool shouldAttemptAAudio() const;
 
-    utils::PltResolver resolver_;
-    utils::ApiLevelProbe api_probe_;
-    AAudioHookManager aaudio_manager_;
-    OpenSLHookManager opensl_manager_;
-    AudioRecordHookManager audiorecord_manager_;
-    AudioFlingerHookManager audioflinger_manager_;
-    LibcReadHookManager libc_read_manager_;
-    TinyAlsaHookManager tinyalsa_manager_;
-    AudioHalHookManager audiohal_manager_;
-};
+      utils::PltResolver resolver_;
+      utils::ApiLevelProbe api_probe_;
+      AAudioHookManager aaudio_manager_;
+      OpenSLHookManager opensl_manager_;
+      AudioRecordHookManager audiorecord_manager_;
+      AudioFlingerHookManager audioflinger_manager_;
+      LibcReadHookManager libc_read_manager_;
+      TinyAlsaHookManager tinyalsa_manager_;
+      AudioHalHookManager audiohal_manager_;
+    };
 
-}  // namespace hooks
-}  // namespace echidna
+  } // namespace hooks
+} // namespace echidna

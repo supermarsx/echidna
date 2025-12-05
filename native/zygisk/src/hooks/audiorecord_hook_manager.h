@@ -14,28 +14,30 @@
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
 
-namespace echidna {
-namespace hooks {
+namespace echidna
+{
+  namespace hooks
+  {
 
-class AudioRecordHookManager : public HookManager {
-  public:
-    explicit AudioRecordHookManager(utils::PltResolver &resolver);
+    class AudioRecordHookManager : public HookManager
+    {
+    public:
+      explicit AudioRecordHookManager(utils::PltResolver &resolver);
 
-    /**
-     * @brief Installs AudioRecord::read hooks (native bridge).
-     */
-    /** Install AudioRecord read hooks. */
-    bool install() override;
-    const char *name() const override { return active_symbol_.c_str(); }
+      /**
+       * @brief Installs AudioRecord::read hooks (native bridge).
+       */
+      bool install() override;
+      const char *name() const override { return active_symbol_.c_str(); }
 
-  private:
-    /** Replacement shim wrapping the original read behaviour. */
-    static ssize_t Replacement(void *instance, void *buffer, size_t bytes, bool blocking);
+    private:
+      /** Replacement shim wrapping the original read behaviour. */
+      static ssize_t Replacement(void *instance, void *buffer, size_t bytes, bool blocking);
 
-    utils::PltResolver &resolver_;
-    runtime::InlineHook hook_;
-    std::string active_symbol_;
-};
+      utils::PltResolver &resolver_;
+      runtime::InlineHook hook_;
+      std::string active_symbol_;
+    };
 
-}  // namespace hooks
-}  // namespace echidna
+  } // namespace hooks
+} // namespace echidna
