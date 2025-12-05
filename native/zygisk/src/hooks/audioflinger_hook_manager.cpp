@@ -264,18 +264,7 @@ ssize_t AudioFlingerHookManager::ReplacementRead(void *thiz, void *buffer, size_
         return read_bytes;
     }
 
-    CaptureContext ctx;
-    {
-        std::lock_guard<std::mutex> lock(gContextMutex);
-        auto it = gContexts.find(thiz);
-        if (it != gContexts.end()) {
-            ctx = it->second;
-        } else {
-            ctx.sample_rate = DefaultSampleRate();
-            ctx.channels = DefaultChannels();
-            gContexts.emplace(thiz, ctx);
-        }
-    }
+    const CaptureContext ctx = ResolveContext(thiz);
 
     if (!ProcessPcmBuffer(thiz, buffer, static_cast<size_t>(read_bytes), ctx, gOriginalRead)) {
         return read_bytes;
@@ -289,18 +278,7 @@ ssize_t AudioFlingerHookManager::ReplacementProcess(void *thiz, void *buffer, si
     if (!state.hooksEnabled() || (!state.isProcessWhitelisted(process) && process != "audioserver")) {
         return gOriginalProcess ? gOriginalProcess(thiz, buffer, bytes) : -1;
     }
-    CaptureContext ctx;
-    {
-        std::lock_guard<std::mutex> lock(gContextMutex);
-        auto it = gContexts.find(thiz);
-        if (it != gContexts.end()) {
-            ctx = it->second;
-        } else {
-            ctx.sample_rate = DefaultSampleRate();
-            ctx.channels = DefaultChannels();
-            gContexts.emplace(thiz, ctx);
-        }
-    }
+    const CaptureContext ctx = ResolveContext(thiz);
 
     // Try processing; if it fails, fall back to original.
     if (ProcessPcmBuffer(thiz, buffer, bytes, ctx, gOriginalProcess)) {
