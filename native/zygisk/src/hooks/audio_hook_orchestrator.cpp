@@ -54,6 +54,13 @@ bool AudioHookOrchestrator::installHooks() {
             return true;
         }
     }
+    {
+        const bool success = libc_read_manager_.install();
+        telemetry.registerHookResult("libc_read", success, monotonic_now());
+        if (success) {
+            return true;
+        }
+    }
 
     state.setStatus(state::InternalStatus::kError);
     return false;
