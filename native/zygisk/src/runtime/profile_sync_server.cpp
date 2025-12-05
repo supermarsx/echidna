@@ -272,7 +272,8 @@ namespace
     bool LooksLikePreset(const std::string &payload)
     {
         return payload.find("\"modules\"") != std::string::npos &&
-               payload.find("\"engine\"") != std::string::npos;
+               payload.find("\"engine\"") != std::string::npos &&
+               payload.find("\"id\"") != std::string::npos;
     }
 
 } // namespace
