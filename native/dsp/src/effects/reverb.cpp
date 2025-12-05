@@ -1,5 +1,10 @@
 #include "reverb.h"
 
+/**
+ * @file reverb.cpp
+ * @brief Implementation of the Reverb effect processor.
+ */
+
 #include <algorithm>
 #include <cmath>
 
@@ -9,13 +14,23 @@ constexpr std::array<float, 4> kCombTimes{0.0297f, 0.0371f, 0.0411f, 0.0437f};
 constexpr std::array<float, 3> kAllPassTimes{0.005f, 0.0017f, 0.0006f};
 }
 
+/**
+ * @brief Update Reverb parameters.
+ */
 void Reverb::set_parameters(const ReverbParameters &params) { params_ = params; }
 
+/**
+ * @brief Prepare internal delay and filter buffers based on sample rate
+ * and channel count.
+ */
 void Reverb::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   ensure_buffers();
 }
 
+/**
+ * @brief Reset all internal buffers to silence and zero indices.
+ */
 void Reverb::reset() {
   for (auto &comb : combs_) {
     std::fill(comb.buffer.begin(), comb.buffer.end(), 0.0f);
@@ -29,6 +44,10 @@ void Reverb::reset() {
   predelay_index_ = 0;
 }
 
+/**
+ * @brief Allocate and size all internal comb/allpass/predelay buffers using
+ * current parameters, sample_rate_ and channels_.
+ */
 void Reverb::ensure_buffers() {
   const float room = std::clamp(params_.room_size, 0.0f, 100.0f) / 100.0f;
   const float damp = std::clamp(params_.damping, 0.0f, 100.0f) / 100.0f;
@@ -63,6 +82,9 @@ void Reverb::ensure_buffers() {
   predelay_index_ = 0;
 }
 
+/**
+ * @brief Per-frame processing implementation for the reverb engine.
+ */
 void Reverb::process(ProcessContext &ctx) {
   if (!enabled_) {
     return;

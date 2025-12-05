@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file reverb.h
+ * @brief Reverb effect implementation and parameter structure.
+ */
+
 #include <array>
 #include <vector>
 
@@ -7,6 +12,9 @@
 
 namespace echidna::dsp::effects {
 
+/**
+ * @brief Parameters controlling the reverb effect
+ */
 struct ReverbParameters {
   float room_size{20.0f};
   float damping{30.0f};
@@ -14,12 +22,19 @@ struct ReverbParameters {
   float mix{10.0f};
 };
 
+/**
+ * @brief Simple multi-comb/all-pass reverb processor.
+ */
 class Reverb : public EffectProcessor {
  public:
+  /** Set new reverb parameters (copied). */
   void set_parameters(const ReverbParameters &params);
 
+  /** Prepare internal buffers for the configured sample rate and channels. */
   void prepare(uint32_t sample_rate, uint32_t channels) override;
+  /** Reset internal filter states and buffers. */
   void reset() override;
+  /** Process `ctx.frames` frames in-place stored at ctx.buffer. */
   void process(ProcessContext &ctx) override;
 
  private:
