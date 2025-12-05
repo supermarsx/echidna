@@ -1,5 +1,12 @@
 #pragma once
 
+/**
+ * @file plugin_api.h
+ * @brief ABI used by external plugin modules to describe their provided
+ * effects and create/destroy functions. Plugins must expose a
+ * `echidna_get_plugin_module()` symbol returning a module descriptor.
+ */
+
 #include <stddef.h>
 #include <stdint.h>
 
