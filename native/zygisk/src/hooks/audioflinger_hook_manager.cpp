@@ -297,12 +297,7 @@ ssize_t AudioFlingerHookManager::ReplacementProcess(void *thiz, void *buffer, si
     if (!state.hooksEnabled() || (!state.isProcessWhitelisted(process) && process != "audioserver")) {
         return gOriginalProcess ? gOriginalProcess(thiz, buffer, bytes) : -1;
     }
-    const CaptureContext ctx = ResolveContext(thiz);
-
-    // Try processing; if it fails, fall back to original.
-    if (ProcessPcmBuffer(thiz, buffer, bytes, ctx, gOriginalProcess)) {
-        return static_cast<ssize_t>(bytes);
-    }
+    // processVolume buffers may be const on some vendors; avoid mutating for stability.
     return gOriginalProcess ? gOriginalProcess(thiz, buffer, bytes) : -1;
 }
 
