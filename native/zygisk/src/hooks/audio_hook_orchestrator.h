@@ -8,6 +8,7 @@
 #include "hooks/libc_read_hook_manager.h"
 #include "hooks/opensl_hook_manager.h"
 #include "hooks/tinyalsa_hook_manager.h"
+#include "hooks/audiohal_hook_manager.h"
 #include "utils/api_level_probe.h"
 #include "utils/plt_resolver.h"
 
@@ -31,6 +32,7 @@ class AudioHookOrchestrator {
     AudioFlingerHookManager audioflinger_manager_;
     LibcReadHookManager libc_read_manager_;
     TinyAlsaHookManager tinyalsa_manager_;
+    AudioHalHookManager audiohal_manager_;
 };
 
 }  // namespace hooks
