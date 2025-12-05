@@ -69,6 +69,45 @@ uint32_t DefaultChannels() {
     return 2u;
 }
 
+CaptureContext ResolveContext(void *thiz) {
+    {
+        std::lock_guard<std::mutex> lock(gContextMutex);
+        auto it = gContexts.find(thiz);
+        if (it != gContexts.end()) {
+            return it->second;
+        }
+    }
+
+    CaptureContext ctx;
+    ctx.sample_rate = DefaultSampleRate();
+    ctx.channels = DefaultChannels();
+
+    // Heuristic: scan early object region for plausible sample rate/channel mask pairs.
+    const uint8_t *base = reinterpret_cast<uint8_t *>(thiz);
+    for (size_t offset = 0x8; offset + 8 <= 128; offset += 4) {
+        uint32_t sr = 0;
+        uint32_t mask = 0;
+        std::memcpy(&sr, base + offset, sizeof(sr));
+        std::memcpy(&mask, base + offset + 4, sizeof(mask));
+        if (sr > 8000 && sr < 192000) {
+            ctx.sample_rate = sr;
+        }
+        const uint32_t channels = std::popcount(mask);
+        if (channels > 0 && channels <= 8) {
+            ctx.channels = channels;
+        }
+        if (sr > 8000 && sr < 192000 && channels > 0) {
+            break;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(gContextMutex);
+        gContexts.emplace(thiz, ctx);
+    }
+    return ctx;
+}
+
 bool ForwardThreadLoop(void *thiz) {
     auto &state = state::SharedState::instance();
     const std::string &process = utils::CachedProcessName();
@@ -79,30 +118,7 @@ bool ForwardThreadLoop(void *thiz) {
     }
 
     // Probe and cache context; fallback to defaults if fields are inaccessible.
-    {
-        std::lock_guard<std::mutex> lock(gContextMutex);
-        if (gContexts.find(thiz) == gContexts.end()) {
-            CaptureContext ctx;
-            // Heuristic: try to read sample rate and channel count from the object memory layout.
-            // Offsets are vendor dependent; we keep defaults if reading fails.
-            struct {
-                uint32_t sample_rate;
-                uint32_t channel_mask;
-            } probe{};
-            ctx.sample_rate = DefaultSampleRate();
-            ctx.channels = DefaultChannels();
-            if (std::memcpy(&probe, reinterpret_cast<uint8_t *>(thiz) + 0x10, sizeof(probe))) {
-                if (probe.sample_rate > 8000 && probe.sample_rate < 192000) {
-                    ctx.sample_rate = probe.sample_rate;
-                }
-                const uint32_t channels = std::popcount(probe.channel_mask);
-                if (channels > 0 && channels <= 8) {
-                    ctx.channels = channels;
-                }
-            }
-            gContexts.emplace(thiz, ctx);
-        }
-    }
+    (void)ResolveContext(thiz);
 
     timespec wall_start{};
     timespec wall_end{};
