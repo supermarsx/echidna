@@ -24,6 +24,7 @@ add_library(echidna SHARED
     src/hooks/audiorecord_hook_manager.cpp
     src/hooks/audioflinger_hook_manager.cpp
     src/hooks/libc_read_hook_manager.cpp
+    src/hooks/tinyalsa_hook_manager.cpp
     src/hooks/audio_hook_orchestrator.cpp
     src/utils/proc_maps_scanner.cpp
     src/utils/plt_resolver.cpp

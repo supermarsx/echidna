@@ -2,6 +2,7 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
+#include <sys/system_properties.h>
 #else
 #define __android_log_print(...) ((void)0)
 #define ANDROID_LOG_INFO 0
@@ -38,6 +39,35 @@ struct CaptureContext {
 std::unordered_map<void *, CaptureContext> gContexts;
 std::mutex gContextMutex;
 
+uint32_t DefaultSampleRate() {
+#ifdef __ANDROID__
+    char prop[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("ro.audio.samplerate", prop) > 0) {
+        int sr = std::atoi(prop);
+        if (sr > 8000 && sr < 192000) {
+            return static_cast<uint32_t>(sr);
+        }
+    }
+#endif
+    if (const char *env = std::getenv("ECHIDNA_AF_SAMPLE_RATE")) {
+        const int sr = std::atoi(env);
+        if (sr > 8000 && sr < 192000) {
+            return static_cast<uint32_t>(sr);
+        }
+    }
+    return 48000u;
+}
+
+uint32_t DefaultChannels() {
+    if (const char *env = std::getenv("ECHIDNA_AF_CHANNELS")) {
+        const int ch = std::atoi(env);
+        if (ch >= 1 && ch <= 8) {
+            return static_cast<uint32_t>(ch);
+        }
+    }
+    return 2u;
+}
+
 bool ForwardThreadLoop(void *thiz) {
     auto &state = state::SharedState::instance();
     const std::string &process = utils::CachedProcessName();
@@ -58,8 +88,10 @@ bool ForwardThreadLoop(void *thiz) {
                 uint32_t sample_rate;
                 uint32_t channel_mask;
             } probe{};
-            if (memcpy(&probe, reinterpret_cast<uint8_t *>(thiz) + 0x10, sizeof(probe))) {
-                if (probe.sample_rate > 8000 && probe.sample_rate < 96000) {
+            ctx.sample_rate = DefaultSampleRate();
+            ctx.channels = DefaultChannels();
+            if (std::memcpy(&probe, reinterpret_cast<uint8_t *>(thiz) + 0x10, sizeof(probe))) {
+                if (probe.sample_rate > 8000 && probe.sample_rate < 192000) {
                     ctx.sample_rate = probe.sample_rate;
                 }
                 const uint32_t channels = std::popcount(probe.channel_mask);
@@ -180,6 +212,10 @@ ssize_t AudioFlingerHookManager::ReplacementRead(void *thiz, void *buffer, size_
         auto it = gContexts.find(thiz);
         if (it != gContexts.end()) {
             ctx = it->second;
+        } else {
+            ctx.sample_rate = DefaultSampleRate();
+            ctx.channels = DefaultChannels();
+            gContexts.emplace(thiz, ctx);
         }
     }
 

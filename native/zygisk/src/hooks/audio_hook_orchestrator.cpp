@@ -68,6 +68,13 @@ bool AudioHookOrchestrator::installHooks() {
             return true;
         }
     }
+    {
+        const bool success = tinyalsa_manager_.install();
+        telemetry.registerHookResult("tinyalsa", success, monotonic_now());
+        if (success) {
+            return true;
+        }
+    }
 
     state.setStatus(state::InternalStatus::kError);
     return false;
