@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file ring_buffer.h
+ * @brief Lock-free single-producer single-consumer ring buffer template used by
+ * the BlockQueue implementation for passing shared_ptr blocks between threads.
+ */
+
 #include <atomic>
 #include <cstddef>
 #include <memory>
@@ -9,6 +15,13 @@
 namespace echidna::dsp::runtime {
 
 template <typename T>
+/**
+ * @brief Simple fixed-capacity ring buffer for single producer single
+ * consumer usage.
+ *
+ * T must be copy-assignable. The capacity is normalised to a power-of-two
+ * and the size/empty operations are provided.
+ */
 class RingBuffer {
  public:
   explicit RingBuffer(size_t capacity)
@@ -19,6 +32,7 @@ class RingBuffer {
                   "RingBuffer requires copy assignable types");
   }
 
+  /** Push a value into the buffer. Returns false if the buffer is full. */
   bool push(const T &value) {
     size_t head = head_.load(std::memory_order_relaxed);
     size_t next = increment(head);
@@ -30,6 +44,7 @@ class RingBuffer {
     return true;
   }
 
+  /** Pop a value out of the buffer. Returns false if the buffer is empty. */
   bool pop(T &out) {
     size_t tail = tail_.load(std::memory_order_relaxed);
     if (tail == head_.load(std::memory_order_acquire)) {
@@ -40,6 +55,7 @@ class RingBuffer {
     return true;
   }
 
+  /** Peek at the next available value without advancing the tail. */
   bool peek(T &out) const {
     size_t tail = tail_.load(std::memory_order_relaxed);
     if (tail == head_.load(std::memory_order_acquire)) {
@@ -49,6 +65,7 @@ class RingBuffer {
     return true;
   }
 
+  /** Return effective buffer capacity (power of two). */
   size_t capacity() const { return capacity_; }
 
   size_t size() const {

@@ -1,5 +1,10 @@
 #include "compressor.h"
 
+/**
+ * @file compressor.cpp
+ * @brief Compressor implementation details and helper math utility functions.
+ */
+
 #include <algorithm>
 #include <cmath>
 
@@ -22,10 +27,12 @@ float ms_to_coeff(float ms, uint32_t sr) {
 }
 }  // namespace
 
+/** Set compressor configuration parameters. */
 void Compressor::set_parameters(const CompressorParameters &params) {
   params_ = params;
 }
 
+/** Initialize coefficients for attack/release and makeup gains. */
 void Compressor::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   attack_coeff_ = ms_to_coeff(params_.attack_ms, sample_rate);
@@ -40,8 +47,11 @@ void Compressor::prepare(uint32_t sample_rate, uint32_t channels) {
   envelope_ = 1.0f;
 }
 
+/** Reset envelope to unity gain. */
 void Compressor::reset() { envelope_ = 1.0f; }
 
+/** Compute the per-sample dB gain-reduction according to the current
+ * compressor curve. */
 float Compressor::compute_gain_reduction(float input_db) {
   const float threshold = std::clamp(params_.threshold_db, -60.0f, -5.0f);
   const float ratio = std::clamp(params_.ratio, 1.2f, 6.0f);
@@ -66,6 +76,7 @@ float Compressor::compute_gain_reduction(float input_db) {
   return compressed - input_db;
 }
 
+/** Perform per-sample compression on ctx.buffer for ctx.frames frames. */
 void Compressor::process(ProcessContext &ctx) {
   if (!enabled_) {
     return;

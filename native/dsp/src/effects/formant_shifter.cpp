@@ -1,25 +1,34 @@
 #include "formant_shifter.h"
 
+/**
+ * @file formant_shifter.cpp
+ * @brief Implementation of the formant shifter effect.
+ */
+
 #include <algorithm>
 #include <cmath>
 
 namespace echidna::dsp::effects {
 
+/** Set new formant shifter parameters. */
 void FormantShifter::set_parameters(const FormantParameters &params) {
   params_ = params;
 }
 
+/** Prepare internal per-channel buffers. */
 void FormantShifter::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   delay_state_.assign(channels, 0.0f);
   tilt_state_.assign(channels, 0.0f);
 }
 
+/** Reset internal state buffers to zero. */
 void FormantShifter::reset() {
   std::fill(delay_state_.begin(), delay_state_.end(), 0.0f);
   std::fill(tilt_state_.begin(), tilt_state_.end(), 0.0f);
 }
 
+/** Perform in-place formant shifting across the buffer. */
 void FormantShifter::process(ProcessContext &ctx) {
   if (!enabled_) {
     return;

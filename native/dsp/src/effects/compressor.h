@@ -1,13 +1,21 @@
 #pragma once
 
+/**
+ * @file compressor.h
+ * @brief Dynamic range compressor effect (manual / auto modes, knee shapes).
+ */
+
 #include "effect_base.h"
 
 namespace echidna::dsp::effects {
 
+/** Compressor operating mode. */
 enum class CompressorMode { kManual, kAuto };
 
+/** Knee characteristic for the compressor. */
 enum class KneeType { kHard, kSoft };
 
+/** Compressor tuning parameters. */
 struct CompressorParameters {
   CompressorMode mode{CompressorMode::kManual};
   float threshold_db{-24.0f};
@@ -19,15 +27,21 @@ struct CompressorParameters {
   float makeup_gain_db{0.0f};
 };
 
+/** Per-sample compressor implementation applying smooth attack/release. */
 class Compressor : public EffectProcessor {
  public:
+  /** Set compressor parameters (copied). */
   void set_parameters(const CompressorParameters &params);
 
+  /** Prepare internal state/coefficient calculations for sample rate. */
   void prepare(uint32_t sample_rate, uint32_t channels) override;
+  /** Reset envelope state. */
   void reset() override;
+  /** Perform compression on the given buffer in-place. */
   void process(ProcessContext &ctx) override;
 
  private:
+  /** Compute the required gain reduction in decibels for a given input dB. */
   float compute_gain_reduction(float input_db);
 
   CompressorParameters params_{};

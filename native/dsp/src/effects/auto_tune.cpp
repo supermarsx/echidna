@@ -1,5 +1,10 @@
 #include "auto_tune.h"
 
+/**
+ * @file auto_tune.cpp
+ * @brief Implementation of AutoTune detector and correction algorithms.
+ */
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -34,18 +39,22 @@ float clamp_frequency(float hz) {
 
 }  // namespace
 
+/** Set AutoTune configuration parameters. */
 void AutoTune::set_parameters(const AutoTuneParameters &params) {
   params_ = params;
 }
 
+/** Prepare state and tracking buffers for processing. */
 void AutoTune::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   last_pitch_.assign(channels, 1.0f);
   scratch_.resize(0);
 }
 
+/** Reset last pitch tracking state to defaults. */
 void AutoTune::reset() { std::fill(last_pitch_.begin(), last_pitch_.end(), 1.0f); }
 
+/** Estimate the fundamental frequency from the provided mono samples. */
 float AutoTune::detect_pitch(const float *samples, size_t frames, uint32_t channel) {
   (void)channel;
   const size_t min_period = static_cast<size_t>(sample_rate_ / 1000.0f);
@@ -71,6 +80,8 @@ float AutoTune::detect_pitch(const float *samples, size_t frames, uint32_t chann
   return static_cast<float>(sample_rate_) / static_cast<float>(best_period);
 }
 
+/** Compute the nearest target pitch (Hz) from input frequency using
+ * configured key and scale. */
 float AutoTune::target_pitch(float input_hz) const {
   const float midi = hz_to_midi(input_hz);
   const int key = static_cast<int>(params_.key);
@@ -123,6 +134,7 @@ float AutoTune::target_pitch(float input_hz) const {
   return clamp_frequency(midi_to_hz(best_midi));
 }
 
+/** Run pitch detection + correction across ctx.frames for each channel. */
 void AutoTune::process(ProcessContext &ctx) {
   if (!enabled_) {
     return;
