@@ -29,7 +29,8 @@ add_library(echidna SHARED
     src/utils/config_shared_memory.cpp
     src/utils/telemetry_shared_memory.cpp
     src/utils/process_utils.cpp
-    src/jni/audio_bridge.cpp)
+    src/jni/audio_bridge.cpp
+    src/runtime/profile_sync_server.cpp)
 
 set_target_properties(echidna PROPERTIES
     OUTPUT_NAME echidna

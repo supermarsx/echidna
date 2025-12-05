@@ -22,6 +22,7 @@ class ConfigSharedMemory {
 
     ConfigurationSnapshot snapshot() const;
     void updateProfile(const std::string &profile);
+    void updateSnapshot(const ConfigurationSnapshot &snapshot);
 
   private:
     struct SharedLayout;

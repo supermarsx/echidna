@@ -106,5 +106,27 @@ void ConfigSharedMemory::updateProfile(const std::string &profile) {
     std::memcpy(layout_->profile, buffer.data(), buffer.size());
 }
 
+void ConfigSharedMemory::updateSnapshot(const ConfigurationSnapshot &snapshot) {
+    std::scoped_lock lock(mutex_);
+    if (!layout_) {
+        return;
+    }
+
+    layout_->hooks_enabled = snapshot.hooks_enabled ? 1u : 0u;
+    const uint32_t count =
+            std::min<uint32_t>(snapshot.process_whitelist.size(), kMaxWhitelistEntries);
+    layout_->whitelist_size = count;
+    for (uint32_t i = 0; i < count; ++i) {
+        std::array<char, kMaxProcessName> buffer{};
+        std::strncpy(buffer.data(),
+                     snapshot.process_whitelist[i].c_str(),
+                     buffer.size() - 1);
+        std::memcpy(layout_->whitelist[i], buffer.data(), buffer.size());
+    }
+    if (!snapshot.profile.empty()) {
+        updateProfile(snapshot.profile);
+    }
+}
+
 }  // namespace utils
 }  // namespace echidna
