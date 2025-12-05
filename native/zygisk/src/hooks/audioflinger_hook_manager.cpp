@@ -50,6 +50,8 @@ namespace echidna
 
             std::unordered_map<void *, CaptureContext> gContexts;
             std::mutex gContextMutex;
+            int32_t gSampleRateOffset = -1;
+            int32_t gChannelMaskOffset = -1;
 
             uint32_t DefaultSampleRate()
             {
@@ -96,8 +98,24 @@ namespace echidna
                 return 2u;
             }
 
+            void LoadOffsetOverrides()
+            {
+                static std::once_flag once;
+                std::call_once(once, []() {
+                    if (const char *env = std::getenv("ECHIDNA_AF_SR_OFFSET"))
+                    {
+                        gSampleRateOffset = std::atoi(env);
+                    }
+                    if (const char *env = std::getenv("ECHIDNA_AF_CH_MASK_OFFSET"))
+                    {
+                        gChannelMaskOffset = std::atoi(env);
+                    }
+                });
+            }
+
             CaptureContext ResolveContext(void *thiz)
             {
+                LoadOffsetOverrides();
                 {
                     std::lock_guard<std::mutex> lock(gContextMutex);
                     auto it = gContexts.find(thiz);
@@ -111,8 +129,26 @@ namespace echidna
                 ctx.sample_rate = DefaultSampleRate();
                 ctx.channels = DefaultChannels();
 
-                // Heuristic: scan early object region for plausible sample rate/channel mask pairs.
                 const uint8_t *base = reinterpret_cast<uint8_t *>(thiz);
+                if (gSampleRateOffset >= 0 && gChannelMaskOffset >= 0)
+                {
+                    uint32_t sr = 0;
+                    uint32_t mask = 0;
+                    std::memcpy(&sr, base + static_cast<size_t>(gSampleRateOffset), sizeof(sr));
+                    std::memcpy(&mask, base + static_cast<size_t>(gChannelMaskOffset), sizeof(mask));
+                    if (sr > 8000 && sr < 192000)
+                    {
+                        ctx.sample_rate = sr;
+                    }
+                    const uint32_t channels = std::popcount(mask);
+                    if (channels > 0 && channels <= 8)
+                    {
+                        ctx.channels = channels;
+                    }
+                    ctx.validated = true;
+                }
+
+                // Heuristic: scan early object region for plausible sample rate/channel mask pairs.
                 const size_t scan_limit = 256;
                 for (size_t offset = 0x8; offset + 8 <= scan_limit; offset += 4)
                 {

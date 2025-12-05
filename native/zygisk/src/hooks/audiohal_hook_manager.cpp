@@ -62,6 +62,12 @@ namespace echidna
                 return ctx;
             }
 
+            HalContext ResolveHalContext(void * /*stream*/)
+            {
+                // TODO: parse audio stream config when accessible; fallback to defaults/env.
+                return DefaultHalContext();
+            }
+
             ssize_t ForwardRead(void *stream, void *buffer, size_t bytes)
             {
                 const ssize_t read_bytes = gOriginalRead ? gOriginalRead(stream, buffer, bytes) : -1;
@@ -76,7 +82,7 @@ namespace echidna
                     return read_bytes;
                 }
 
-                HalContext ctx = DefaultHalContext();
+                HalContext ctx = ResolveHalContext(stream);
                 size_t frame_bytes = ctx.channels * sizeof(int16_t);
                 const size_t total_samples = static_cast<size_t>(read_bytes) / sizeof(int16_t);
                 if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0)
@@ -132,12 +138,16 @@ namespace echidna
                 "libaudiohal.so",
                 "libaudio.so",
                 "libaudio.primary.so",
+                "libaudio.primary.default.so",
+                "libaudio.primary.vendor.so",
                 "libaudioclient.so",
             };
             static const char *kSymbols[] = {
                 "audio_stream_in_read",
                 "_ZN7android13AudioHwDevice5readEP18audio_stream_in_siPvj",
                 "_ZN7android13AudioStreamIn10readFramesEPvj",
+                "in_read",
+                "adev_in_read",
             };
 
             for (const char *lib : kLibs)
