@@ -167,7 +167,10 @@ ssize_t AudioFlingerHookManager::ReplacementRead(void *thiz, void *buffer, size_
     }();
 
     const size_t frame_bytes = channels * sizeof(int16_t);
-    if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0) {
+    const size_t min_block = static_cast<size_t>(channels) * sizeof(int16_t) * 8;       // 8 frames minimum
+    const size_t max_block = static_cast<size_t>(channels) * sizeof(int16_t) * 2048;    // guard upper bound
+    if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0 ||
+        static_cast<size_t>(read_bytes) < min_block || static_cast<size_t>(read_bytes) > max_block) {
         return read_bytes;
     }
     const size_t frames = static_cast<size_t>(read_bytes) / frame_bytes;
