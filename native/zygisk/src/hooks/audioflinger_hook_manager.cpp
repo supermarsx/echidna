@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <string>
 #include <time.h>
+#include <vector>
 
+#include "echidna/api.h"
 #include "state/shared_state.h"
 #include "utils/process_utils.h"
 #include "utils/telemetry_shared_memory.h"
@@ -128,12 +130,68 @@ bool AudioFlingerHookManager::Replacement(void *thiz) {
 }
 
 ssize_t AudioFlingerHookManager::ReplacementRead(void *thiz, void *buffer, size_t bytes) {
-    // Forward reads; data is intercepted via audio bridge not yet wired here.
-    return gOriginalRead ? gOriginalRead(thiz, buffer, bytes) : -1;
+    const ssize_t read_bytes = gOriginalRead ? gOriginalRead(thiz, buffer, bytes) : -1;
+    if (read_bytes <= 0 || !buffer) {
+        return read_bytes;
+    }
+
+    auto &state = state::SharedState::instance();
+    const std::string &process = utils::CachedProcessName();
+    if (!state.hooksEnabled() || (!state.isProcessWhitelisted(process) && process != "audioserver")) {
+        return read_bytes;
+    }
+
+    const uint32_t sample_rate = []() {
+        static uint32_t cached = 0;
+        if (cached == 0) {
+            if (const char *env = std::getenv("ECHIDNA_AF_SAMPLE_RATE")) {
+                cached = static_cast<uint32_t>(std::max(1, std::atoi(env)));
+            }
+            if (cached == 0) {
+                cached = 48000u;
+            }
+        }
+        return cached;
+    }();
+    const uint32_t channels = []() {
+        static uint32_t cached = 0;
+        if (cached == 0) {
+            if (const char *env = std::getenv("ECHIDNA_AF_CHANNELS")) {
+                cached = static_cast<uint32_t>(std::max(1, std::atoi(env)));
+            }
+            if (cached == 0) {
+                cached = 2u;
+            }
+        }
+        return cached;
+    }();
+
+    const size_t frame_bytes = channels * sizeof(int16_t);
+    if (frame_bytes == 0 || (static_cast<size_t>(read_bytes) % frame_bytes) != 0) {
+        return read_bytes;
+    }
+    const size_t frames = static_cast<size_t>(read_bytes) / frame_bytes;
+    const int16_t *pcm_in = static_cast<const int16_t *>(buffer);
+    std::vector<float> in(frames * channels);
+    for (size_t i = 0; i < frames * channels; ++i) {
+        in[i] = static_cast<float>(pcm_in[i]) / 32768.0f;
+    }
+    std::vector<float> out(frames * channels);
+    const echidna_result_t result =
+            echidna_process_block(in.data(), out.data(), static_cast<uint32_t>(frames), sample_rate, channels);
+    if (result != ECHIDNA_RESULT_OK) {
+        return read_bytes;
+    }
+    int16_t *pcm_out = static_cast<int16_t *>(buffer);
+    for (size_t i = 0; i < frames * channels; ++i) {
+        const float sample = std::clamp(out[i], -1.0f, 1.0f);
+        pcm_out[i] = static_cast<int16_t>(sample * 32767.0f);
+    }
+    return read_bytes;
 }
 
 ssize_t AudioFlingerHookManager::ReplacementProcess(void *thiz, void *buffer, size_t bytes) {
-    // Placeholder to allow future in-place processing.
+    // For now, simply forward; data is already processed in ReplacementRead.
     return gOriginalProcess ? gOriginalProcess(thiz, buffer, bytes) : -1;
 }
 
