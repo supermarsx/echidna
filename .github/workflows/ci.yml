@@ -6,7 +6,85 @@ on:
   pull_request:
 
 jobs:
+  format:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Verify C/C++ formatting
+        run: |
+          set -euo pipefail
+          files=$(git ls-files '*.cpp' '*.c' '*.h' '*.hpp' || true)
+          if [ -z "$files" ]; then
+            echo "No C/C++ files to check"
+            exit 0
+          fi
+          failures=0
+          for f in $files; do
+            if clang-format -style=file -output-replacements-xml "$f" | grep -q "<replacement "; then
+              echo "Formatting issue: $f"
+              failures=1
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "Code style violations found by clang-format; run clang-format -i to fix."
+            exit 1
+          fi
+
+  lint:
+    name: Static analysis and Android checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck on native sources
+        run: |
+          set -euo pipefail
+          # Run cppcheck on DSP and Zygisk sources
+          cppcheck --enable=warning,style,performance,portability --error-exitcode=1 native/dsp native/zygisk || true
+
+      - name: Set up JDK for Android checks
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android: run Gradle checks (app)
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: check
+          build-root-directory: android/app
+
+      - name: Android: run Gradle checks (control service)
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: check
+          build-root-directory: android/control-service
+
+      - name: Android: run Gradle checks (lsposed shim)
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: check
+          build-root-directory: android/lsposed-shim
+
   native:
+    name: Build native libraries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,6 +103,7 @@ jobs:
         run: cmake --build build/zygisk --config Release
 
   android:
+    name: Build android artifacts
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -54,5 +133,204 @@ jobs:
         uses: gradle/gradle-build-action@v3
         with:
           gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/lsposed-shim
+
+  smoke-tests:
+    name: Smoke tests (build + artifact checks)
+    runs-on: ubuntu-latest
+    needs: [native, android]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure DSP
+        run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build DSP
+        run: cmake --build build/dsp --config Release
+
+      - name: Configure Zygisk
+        run: cmake -S native/zygisk -B build/zygisk -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Zygisk
+        run: cmake --build build/zygisk --config Release
+
+      - name: Basic artifact checks
+        run: |
+          set -euo pipefail
+          if [ ! -f build/dsp/lib/libech_dsp.so ]; then
+            echo "Missing libech_dsp.so"; exit 1
+          fi
+          if [ ! -f build/zygisk/lib/libechidna.so ]; then
+            echo "Missing libechidna.so"; exit 1
+          fi
+          # Sanity check symbol exported by DSP
+          if ! (readelf -Ws build/dsp/lib/libech_dsp.so | grep -q ech_dsp_initialize); then
+            echo "Expected symbol ech_dsp_initialize not found in libech_dsp.so"; exit 1
+          fi
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure DSP
+        run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build DSP
+        run: cmake --build build/dsp --config Release
+
+      - name: Configure Zygisk
+        run: cmake -S native/zygisk -B build/zygisk -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Zygisk
+        run: cmake --build build/zygisk --config Release
+        format:
+          name: Format check
+          runs-on: ubuntu-latest
+          steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install clang-format
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y clang-format
+
+            - name: Verify C/C++ formatting
+              run: |
+                set -euo pipefail
+                files=$(git ls-files '*.cpp' '*.c' '*.h' '*.hpp' || true)
+                if [ -z "$files" ]; then
+                  echo "No C/C++ files to check"
+                  exit 0
+                fi
+                failures=0
+                for f in $files; do
+                  if clang-format -style=file -output-replacements-xml "$f" | grep -q "<replacement "; then
+                    echo "Formatting issue: $f"
+                    failures=1
+                  fi
+                done
+                if [ "$failures" -ne 0 ]; then
+                  echo "Code style violations found by clang-format; run clang-format -i to fix."
+                  exit 1
+                fi
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build Companion App
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/app
+
+      - name: Build Control Service
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+          arguments: assembleDebug
+          build-root-directory: android/control-service
+
+      - name: Build LSPosed Shim
+        lint:
+          name: Static analysis and Android checks
+          runs-on: ubuntu-latest
+          steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Install cppcheck
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y cppcheck
+
+            - name: Run cppcheck on native sources
+              run: |
+                set -euo pipefail
+                cppcheck --enable=warning,style,performance,portability --error-exitcode=1 native/dsp native/zygisk || true
+
+            - name: Set up JDK for Android checks
+              uses: actions/setup-java@v4
+              with:
+                distribution: temurin
+                java-version: "17"
+
+            - name: Android: run Gradle checks (app)
+              uses: gradle/gradle-build-action@v3
+              with:
+                gradle-version: 8.5
+                arguments: check
+                build-root-directory: android/app
+
+            - name: Android: run Gradle checks (control service)
+              uses: gradle/gradle-build-action@v3
+              with:
+                gradle-version: 8.5
+                arguments: check
+                build-root-directory: android/control-service
+
+            - name: Android: run Gradle checks (lsposed shim)
+              uses: gradle/gradle-build-action@v3
+              with:
+                gradle-version: 8.5
+                arguments: check
+                build-root-directory: android/lsposed-shim
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.5
+        smoke-tests:
+          name: Smoke tests (build + artifact checks)
+          runs-on: ubuntu-latest
+          needs: [native, android]
+          steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Configure DSP
+              run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release
+
+            - name: Build DSP
+              run: cmake --build build/dsp --config Release
+
+            - name: Configure Zygisk
+              run: cmake -S native/zygisk -B build/zygisk -DCMAKE_BUILD_TYPE=Release
+
+            - name: Build Zygisk
+              run: cmake --build build/zygisk --config Release
+
+            - name: Basic artifact checks
+              run: |
+                set -euo pipefail
+                if [ ! -f build/dsp/lib/libech_dsp.so ]; then
+                  echo "Missing libech_dsp.so"; exit 1
+                fi
+                if [ ! -f build/zygisk/lib/libechidna.so ]; then
+                  echo "Missing libechidna.so"; exit 1
+                fi
+                # Sanity check symbol exported by DSP
+                if ! (readelf -Ws build/dsp/lib/libech_dsp.so | grep -q ech_dsp_initialize); then
+                  echo "Expected symbol ech_dsp_initialize not found in libech_dsp.so"; exit 1
+                fi
           arguments: assembleDebug
           build-root-directory: android/lsposed-shim
