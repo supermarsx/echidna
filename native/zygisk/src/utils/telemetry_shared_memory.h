@@ -29,6 +29,9 @@ enum TelemetryWarningFlags : uint32_t {
     kTelemetryWarningXrun = 1u << 2,
 };
 
+/**
+ * @brief Per-callback timing and xrun record.
+ */
 struct TelemetrySampleRecord {
     uint64_t timestamp_ns;
     uint32_t duration_us;
@@ -37,6 +40,9 @@ struct TelemetrySampleRecord {
     uint32_t xruns;
 };
 
+/**
+ * @brief Hook installation attempt tracking.
+ */
 struct TelemetryHookRecord {
     char name[32];
     uint32_t attempts;
@@ -47,6 +53,9 @@ struct TelemetryHookRecord {
     uint64_t last_success_ns;
 };
 
+/**
+ * @brief Human-readable snapshot produced for diagnostics export.
+ */
 struct TelemetrySnapshot {
     uint64_t total_callbacks{0};
     uint64_t total_callback_ns{0};
@@ -72,12 +81,18 @@ class TelemetrySharedMemory {
     TelemetrySharedMemory();
     ~TelemetrySharedMemory();
 
+    /**
+     * @brief Records a single callback timing sample.
+     */
     void recordCallback(uint64_t timestamp_ns,
                         uint32_t duration_us,
                         uint32_t cpu_time_us,
                         uint32_t flags,
                         uint32_t xruns);
 
+    /**
+     * @brief Updates rolling audio level metrics.
+     */
     void updateAudioLevels(float input_rms,
                            float output_rms,
                            float input_peak,
@@ -88,12 +103,21 @@ class TelemetrySharedMemory {
                            float formant_width,
                            uint32_t xruns);
 
+    /**
+     * @brief Records hook install attempt/success.
+     */
     void registerHookResult(const std::string &hook_name,
                             bool success,
                             uint64_t timestamp_ns);
 
+    /**
+     * @brief Sets warning flags (latency/CPU/xrun).
+     */
     void setWarningFlags(uint32_t flags);
 
+    /**
+     * @brief Produces a snapshot copy for consumers.
+     */
     TelemetrySnapshot snapshot() const;
 
   private:
