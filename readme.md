@@ -57,6 +57,14 @@ shared memory and lightweight IPC channels. 【F:spec.md†L31-L159】
    manages preset JSON, controls latency modes, and presents diagnostics and
    safety controls to the user. 【F:spec.md†L76-L259】【F:spec.md†L260-L360】
 
+Data/processing flow (monospace sketch):
+```
+Capture source
+    ↓ hooks (AAudio → OpenSL → AudioFlinger → AudioRecord → libc read → tinyalsa → audio HAL)
+    ↓ DSP (libech_dsp.so) via echidna_process_block
+    ↓ Processed PCM delivered back to app/system consumer
+```
+
 ## Feature Matrix
 
 | Area | Key Capabilities |
