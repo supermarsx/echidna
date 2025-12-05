@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file tinyalsa_hook_manager.h
+ * @brief Hook manager for tinyalsa PCM read functions.
+ */
+
 #include <cstddef>
 #include <cstdint>
 

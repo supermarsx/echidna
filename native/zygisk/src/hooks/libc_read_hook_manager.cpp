@@ -1,5 +1,10 @@
 #include "hooks/libc_read_hook_manager.h"
 
+/**
+ * @file libc_read_hook_manager.cpp
+ * @brief Intercept libc read() to detect audio device reads and log telemetry.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #else

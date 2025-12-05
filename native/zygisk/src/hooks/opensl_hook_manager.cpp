@@ -1,5 +1,11 @@
 #include "hooks/opensl_hook_manager.h"
 
+/**
+ * @file opensl_hook_manager.cpp
+ * @brief Install hooks for OpenSL ES buffer queue callbacks and capture timing
+ * telemetry per callback.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #else

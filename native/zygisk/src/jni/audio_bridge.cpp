@@ -1,5 +1,12 @@
 #include <jni.h>
 
+/**
+ * @file audio_bridge.cpp
+ * @brief JNI bridge used by the companion Java layer to forward audio buffers
+ * into the native DSP pipeline. Supports various encodings and shared memory
+ * paths for efficient interop.
+ */
+
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -266,6 +273,7 @@ bool ProcessByteSpan(const uint8_t *data,
 
 }  // namespace
 
+/** Initialize native bridge state and refresh config from shared memory. */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeInitialise(JNIEnv *, jclass) {
     auto &state = echidna::state::SharedState::instance();
@@ -274,11 +282,13 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeInitialise(JNIEnv *, jclass) {
     return JNI_TRUE;
 }
 
+/** Query if engine is ready (hooks enabled) in the current process. */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeIsEngineReady(JNIEnv *, jclass) {
     return echidna::state::SharedState::instance().hooksEnabled() ? JNI_TRUE : JNI_FALSE;
 }
 
+/** Toggle bypass mode for this process (disable/enable processing). */
 extern "C" JNIEXPORT void JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeSetBypass(JNIEnv *, jclass, jboolean bypass) {
     auto &state = echidna::state::SharedState::instance();
@@ -286,6 +296,7 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeSetBypass(JNIEnv *, jclass, jbo
                            : echidna::state::InternalStatus::kWaitingForAttach);
 }
 
+/** Set current profile JSON in the native engine (applies preset). */
 extern "C" JNIEXPORT void JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeSetProfile(JNIEnv *env, jclass, jstring profile) {
     if (!profile) {
@@ -300,11 +311,14 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeSetProfile(JNIEnv *env, jclass,
     env->ReleaseStringUTFChars(profile, chars);
 }
 
+/** Retrieve the current engine status as an integer. */
 extern "C" JNIEXPORT jint JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeGetStatus(JNIEnv *, jclass) {
     return static_cast<jint>(echidna_get_status());
 }
 
+/** Process a Java byte[] containing PCM or other supported sample encodings.
+ * Returns true on success. */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeProcessByteArray(JNIEnv *env,
                                                                   jclass,
@@ -335,6 +349,7 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessByteArray(JNIEnv *env,
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
+/** Process a Java short[] interleaved PCM16 buffer. */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeProcessShortArray(JNIEnv *env,
                                                                    jclass,
@@ -364,6 +379,7 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessShortArray(JNIEnv *env,
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
+/** Process a Java float[] containing interleaved f32 samples. */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeProcessFloatArray(JNIEnv *env,
                                                                    jclass,
@@ -391,6 +407,7 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessFloatArray(JNIEnv *env,
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
+/** Process a direct Java ByteBuffer pointer region. */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeProcessByteBuffer(JNIEnv *env,
                                                                    jclass,

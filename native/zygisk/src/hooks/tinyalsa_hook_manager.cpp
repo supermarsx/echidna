@@ -1,5 +1,11 @@
 #include "hooks/tinyalsa_hook_manager.h"
 
+/**
+ * @file tinyalsa_hook_manager.cpp
+ * @brief Interpose tinyalsa PCM read functions and route buffers through the
+ * DSP pipeline.
+ */
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #else

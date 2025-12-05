@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file opensl_hook_manager.h
+ * @brief Hook manager for OpenSL ES buffer queue callbacks used in some
+ * audio capture paths.
+ */
+
 #include <cstdint>
 #include <string>
 
