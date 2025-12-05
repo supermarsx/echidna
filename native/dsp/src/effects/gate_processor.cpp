@@ -1,5 +1,10 @@
 #include "gate_processor.h"
 
+/**
+ * @file gate_processor.cpp
+ * @brief Gate processor math and runtime implementation.
+ */
+
 #include <algorithm>
 #include <cmath>
 
@@ -20,21 +25,25 @@ float ms_to_coeff(float ms, uint32_t sample_rate) {
 }
 }  // namespace
 
+/** Set gate parameters (threshold/attack/release/hysteresis). */
 void GateProcessor::set_parameters(const GateParameters &params) {
   params_ = params;
 }
 
+/** Compute attack/release coefficients for the configured sample rate. */
 void GateProcessor::prepare(uint32_t sample_rate, uint32_t channels) {
   EffectProcessor::prepare(sample_rate, channels);
   attack_coeff_ = ms_to_coeff(params_.attack_ms, sample_rate);
   release_coeff_ = ms_to_coeff(params_.release_ms, sample_rate);
 }
 
+/** Reset internal envelope and gain. */
 void GateProcessor::reset() {
   envelope_ = 0.0f;
   gain_ = 1.0f;
 }
 
+/** Apply gating algorithm to the provided buffer in-place. */
 void GateProcessor::process(ProcessContext &ctx) {
   if (!enabled_) {
     return;
