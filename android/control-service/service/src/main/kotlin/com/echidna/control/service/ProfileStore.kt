@@ -47,6 +47,14 @@ class ProfileStore(
             Log.w(STORE_TAG, "Rejected invalid profile JSON", e)
             return
         }
+        if (profileJson.toByteArray(StandardCharsets.UTF_8).size > 512 * 1024) {
+            Log.w(STORE_TAG, "Rejected profile JSON: too large")
+            return
+        }
+        if (!isStructuredPreset(parsed)) {
+            Log.w(STORE_TAG, "Rejected profile JSON: missing modules/engine")
+            return
+        }
         val snapshot = lock.write {
             profiles[id] = parsed
             buildSnapshotLocked()
@@ -132,5 +140,21 @@ class ProfileStore(
         } catch (e: Exception) {
             Log.w(STORE_TAG, "Unable to read persisted profiles", e)
         }
+    }
+
+    private fun isStructuredPreset(root: JSONObject): Boolean {
+        if (root.optJSONArray("modules") != null && root.optJSONObject("engine") != null) {
+            return true
+        }
+        val profiles = root.optJSONObject("profiles") ?: return false
+        val keys = profiles.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val preset = profiles.optJSONObject(key) ?: continue
+            if (preset.optJSONArray("modules") != null && preset.optJSONObject("engine") != null) {
+                return true
+            }
+        }
+        return false
     }
 }
