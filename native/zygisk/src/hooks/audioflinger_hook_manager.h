@@ -19,9 +19,13 @@ class AudioFlingerHookManager : public HookManager {
 
   private:
     static bool Replacement(void *thiz);
+    static ssize_t ReplacementRead(void *thiz, void *buffer, size_t bytes);
+    static ssize_t ReplacementProcess(void *thiz, void *buffer, size_t bytes);
 
     utils::PltResolver &resolver_;
     runtime::InlineHook hook_;
+    runtime::InlineHook hook_read_;
+    runtime::InlineHook hook_process_;
 };
 
 }  // namespace hooks
