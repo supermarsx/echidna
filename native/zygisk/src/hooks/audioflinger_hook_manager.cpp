@@ -103,7 +103,7 @@ CaptureContext ResolveContext(void *thiz) {
 
     {
         std::lock_guard<std::mutex> lock(gContextMutex);
-        gContexts.emplace(thiz, ctx);
+        gContexts[thiz] = ctx;
     }
     return ctx;
 }
