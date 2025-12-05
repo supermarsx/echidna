@@ -89,17 +89,34 @@ AudioHalHookManager::AudioHalHookManager(utils::PltResolver &resolver)
     : resolver_(resolver) {}
 
 bool AudioHalHookManager::install() {
-    static const char *kLibs[] = {"libaudiohal.so", "libaudio.so"};
+    static const char *kLibs[] = {
+        "libaudiohal.so",
+        "libaudio.so",
+        "libaudio.primary.so",
+        "libaudioclient.so",
+    };
+    static const char *kSymbols[] = {
+        "audio_stream_in_read",
+        "_ZN7android13AudioHwDevice5readEP18audio_stream_in_siPvj",
+        "_ZN7android13AudioStreamIn10readFramesEPvj",
+    };
+
     for (const char *lib : kLibs) {
-        void *target = resolver_.findSymbol(lib, "audio_stream_in_read");
-        if (!target) {
-            continue;
-        }
-        if (hook_.install(target,
-                          reinterpret_cast<void *>(&Replacement),
-                          reinterpret_cast<void **>(&gOriginalRead))) {
-            __android_log_print(ANDROID_LOG_INFO, "echidna", "Audio HAL hook installed from %s", lib);
-            return true;
+        for (const char *sym : kSymbols) {
+            void *target = resolver_.findSymbol(lib, sym);
+            if (!target) {
+                continue;
+            }
+            if (hook_.install(target,
+                              reinterpret_cast<void *>(&Replacement),
+                              reinterpret_cast<void **>(&gOriginalRead))) {
+                __android_log_print(ANDROID_LOG_INFO,
+                                    "echidna",
+                                    "Audio HAL hook installed at %s in %s",
+                                    sym,
+                                    lib);
+                return true;
+            }
         }
     }
     return false;
