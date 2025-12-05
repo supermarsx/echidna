@@ -19,7 +19,13 @@ struct MemoryRegion {
 class ProcMapsScanner {
   public:
     ProcMapsScanner() = default;
+    /**
+     * @brief Returns parsed /proc/self/maps regions.
+     */
     std::vector<MemoryRegion> regions() const;
+    /**
+     * @brief Finds first region matching predicate.
+     */
     std::optional<MemoryRegion> findRegion(const std::function<bool(const MemoryRegion &)> &predicate) const;
 };
 

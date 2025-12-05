@@ -15,6 +15,9 @@ class AudioRecordHookManager : public HookManager {
   public:
     explicit AudioRecordHookManager(utils::PltResolver &resolver);
 
+    /**
+     * @brief Installs AudioRecord::read hooks (native bridge).
+     */
     bool install() override;
     const char *name() const override { return active_symbol_.c_str(); }
 
