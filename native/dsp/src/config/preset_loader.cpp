@@ -483,10 +483,37 @@ namespace echidna::dsp::config
         result.error = "Preset root must be an object";
         return result;
       }
+      if (json.size() > 512 * 1024)
+      {
+        result.ok = false;
+        result.error = "Preset too large";
+        return result;
+      }
 
       if (auto name = GetString(root, "name"))
       {
         result.preset.name = *name;
+      }
+
+      const JsonValue *modules = FindMember(root, "modules");
+      const JsonValue *engine = FindMember(root, "engine");
+      if (!modules || modules->type != JsonType::kArray)
+      {
+        result.ok = false;
+        result.error = "modules array is required";
+        return result;
+      }
+      if (modules->array_value.size() > 64)
+      {
+        result.ok = false;
+        result.error = "too many modules in preset";
+        return result;
+      }
+      if (!engine || engine->type != JsonType::kObject)
+      {
+        result.ok = false;
+        result.error = "engine object is required";
+        return result;
       }
 
       if (const JsonValue *engine = FindMember(root, "engine"))
@@ -577,6 +604,12 @@ namespace echidna::dsp::config
             if (bands && bands->type == JsonType::kArray)
             {
               result.preset.eq.bands.clear();
+              if (bands->array_value.size() > 32)
+              {
+                result.ok = false;
+                result.error = "too many EQ bands";
+                return result;
+              }
               for (const JsonValue &band : bands->array_value)
               {
                 if (band.type != JsonType::kObject)
