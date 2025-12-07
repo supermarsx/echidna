@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -99,27 +100,19 @@ namespace echidna
                     uint32_t sample_rate;
                     uint32_t channel_mask;
                 } probe{};
-                if (std::memcpy(&probe, base, sizeof(probe)))
+                std::memcpy(&probe, base, sizeof(probe));
+                if (probe.sample_rate > 8000 && probe.sample_rate < 192000)
                 {
-                    if (probe.sample_rate > 8000 && probe.sample_rate < 192000)
-                    {
-                        ctx.sample_rate = probe.sample_rate;
-                        ctx.validated = true;
-                    }
-                    const uint32_t mask_channels = std::popcount(probe.channel_mask);
-                    if (mask_channels >= 1 && mask_channels <= 8)
-                    {
-                        ctx.channels = mask_channels;
-                        ctx.validated = true;
-                    }
+                    ctx.sample_rate = probe.sample_rate;
+                    ctx.validated = true;
+                }
+                const uint32_t mask_channels = std::popcount(probe.channel_mask);
+                if (mask_channels >= 1 && mask_channels <= 8)
+                {
+                    ctx.channels = mask_channels;
+                    ctx.validated = true;
                 }
                 return ctx;
-            }
-
-            HalContext ResolveHalContext(void * /*stream*/)
-            {
-                // TODO: parse audio stream config when accessible; fallback to defaults/env.
-                return DefaultHalContext();
             }
 
             ssize_t ForwardRead(void *stream, void *buffer, size_t bytes)
