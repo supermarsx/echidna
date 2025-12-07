@@ -16,12 +16,17 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <dlfcn.h>
+#include <mutex>
 #include <string>
 #include <time.h>
+#include <unordered_map>
+#include <vector>
 
 #include "state/shared_state.h"
 #include "utils/telemetry_shared_memory.h"
 #include "utils/process_utils.h"
+#include "echidna/api.h"
 
 namespace echidna
 {
@@ -33,6 +38,108 @@ namespace echidna
             using Callback = int (*)(void *, void *, void *, int32_t);
             Callback gOriginalCallback = nullptr;
 
+            // Minimal subset of AAudio types/constants to avoid extra headers.
+            enum
+            {
+                kAAudioFormatInvalid = 0,
+                kAAudioFormatI16 = 1,
+                kAAudioFormatFloat = 2
+            };
+
+            struct StreamConfig
+            {
+                uint32_t sample_rate{48000};
+                uint32_t channels{2};
+                int32_t format{kAAudioFormatI16};
+                bool valid{false};
+            };
+
+            struct StreamFns
+            {
+                using GetIntFn = int32_t (*)(void *);
+                GetIntFn get_sample_rate{nullptr};
+                GetIntFn get_channel_count{nullptr};
+                GetIntFn get_format{nullptr};
+                bool resolved{false};
+            };
+
+            StreamFns &ResolveStreamFns()
+            {
+                static StreamFns fns;
+                static std::once_flag once;
+                std::call_once(once, []() {
+                    fns.get_sample_rate = reinterpret_cast<StreamFns::GetIntFn>(
+                        dlsym(RTLD_DEFAULT, "AAudioStream_getSampleRate"));
+                    fns.get_channel_count = reinterpret_cast<StreamFns::GetIntFn>(
+                        dlsym(RTLD_DEFAULT, "AAudioStream_getChannelCount"));
+                    fns.get_format = reinterpret_cast<StreamFns::GetIntFn>(
+                        dlsym(RTLD_DEFAULT, "AAudioStream_getFormat"));
+                    fns.resolved = true;
+                });
+                return fns;
+            }
+
+            StreamConfig QueryStreamConfig(void *stream)
+            {
+                StreamConfig cfg;
+                if (!stream)
+                {
+                    return cfg;
+                }
+                const auto &fns = ResolveStreamFns();
+                if (fns.get_sample_rate)
+                {
+                    const int32_t rate = fns.get_sample_rate(stream);
+                    if (rate > 8000 && rate < 192000)
+                    {
+                        cfg.sample_rate = static_cast<uint32_t>(rate);
+                    }
+                }
+                if (fns.get_channel_count)
+                {
+                    const int32_t ch = fns.get_channel_count(stream);
+                    if (ch >= 1 && ch <= 8)
+                    {
+                        cfg.channels = static_cast<uint32_t>(ch);
+                    }
+                }
+                if (fns.get_format)
+                {
+                    const int32_t fmt = fns.get_format(stream);
+                    if (fmt == kAAudioFormatFloat || fmt == kAAudioFormatI16)
+                    {
+                        cfg.format = fmt;
+                    }
+                }
+                cfg.valid = true;
+                return cfg;
+            }
+
+            std::mutex gStreamCacheMutex;
+            std::unordered_map<void *, StreamConfig> gStreamConfigCache;
+
+            StreamConfig CachedConfig(void *stream)
+            {
+                if (!stream)
+                {
+                    return {};
+                }
+                {
+                    std::scoped_lock lock(gStreamCacheMutex);
+                    auto it = gStreamConfigCache.find(stream);
+                    if (it != gStreamConfigCache.end())
+                    {
+                        return it->second;
+                    }
+                }
+                StreamConfig cfg = QueryStreamConfig(stream);
+                {
+                    std::scoped_lock lock(gStreamCacheMutex);
+                    gStreamConfigCache[stream] = cfg;
+                }
+                return cfg;
+            }
+
             int ForwardCallback(void *stream, void *user, void *audio_data, int32_t num_frames)
             {
                 auto &state = state::SharedState::instance();
@@ -41,6 +148,58 @@ namespace echidna
                 {
                     return gOriginalCallback ? gOriginalCallback(stream, user, audio_data, num_frames) : 0;
                 }
+
+                // Capture context before calling the app's callback so the processed buffer is
+                // delivered to the app.
+                const StreamConfig cfg = CachedConfig(stream);
+                const uint32_t channels = std::max<uint32_t>(1u, cfg.channels);
+                const uint32_t frames = num_frames > 0 ? static_cast<uint32_t>(num_frames) : 0u;
+                const size_t samples = static_cast<size_t>(frames) * channels;
+
+                std::vector<float> input;
+                std::vector<float> output;
+                input.reserve(samples);
+                output.resize(samples);
+
+                if (audio_data && frames > 0 && samples > 0)
+                {
+                    if (cfg.format == kAAudioFormatFloat)
+                    {
+                        const float *pcm = static_cast<const float *>(audio_data);
+                        input.assign(pcm, pcm + samples);
+                    }
+                    else
+                    {
+                        const int16_t *pcm = static_cast<const int16_t *>(audio_data);
+                        input.resize(samples);
+                        for (size_t i = 0; i < samples; ++i)
+                        {
+                            input[i] = static_cast<float>(pcm[i]) / 32768.0f;
+                        }
+                    }
+                    if (echidna_process_block(input.data(),
+                                              output.data(),
+                                              frames,
+                                              cfg.sample_rate,
+                                              channels) == ECHIDNA_RESULT_OK)
+                    {
+                        if (cfg.format == kAAudioFormatFloat)
+                        {
+                            float *pcm_out = static_cast<float *>(audio_data);
+                            std::copy(output.begin(), output.end(), pcm_out);
+                        }
+                        else
+                        {
+                            int16_t *pcm_out = static_cast<int16_t *>(audio_data);
+                            for (size_t i = 0; i < samples; ++i)
+                            {
+                                const float clamped = std::clamp(output[i], -1.0f, 1.0f);
+                                pcm_out[i] = static_cast<int16_t>(clamped * 32767.0f);
+                            }
+                        }
+                    }
+                }
+
                 timespec wall_start{};
                 timespec wall_end{};
                 timespec cpu_start{};

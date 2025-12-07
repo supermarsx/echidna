@@ -489,6 +489,12 @@ namespace echidna::dsp::config
         result.error = "Preset too large";
         return result;
       }
+      if (json.size() > 512 * 1024)
+      {
+        result.ok = false;
+        result.error = "Preset too large";
+        return result;
+      }
 
       if (auto name = GetString(root, "name"))
       {
@@ -551,6 +557,12 @@ namespace echidna::dsp::config
         {
           result.ok = false;
           result.error = "modules must be an array";
+          return result;
+        }
+        if (modules->array_value.size() > 64)
+        {
+          result.ok = false;
+          result.error = "too many modules in preset";
           return result;
         }
         for (const JsonValue &module : modules->array_value)

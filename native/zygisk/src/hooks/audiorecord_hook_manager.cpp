@@ -14,13 +14,16 @@
 #endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <time.h>
 #include <unistd.h>
+#include <vector>
 
 #include "state/shared_state.h"
 #include "utils/process_utils.h"
 #include "utils/telemetry_shared_memory.h"
+#include "echidna/api.h"
 
 namespace echidna
 {
@@ -32,6 +35,32 @@ namespace echidna
             using ReadFn = ssize_t (*)(void *, void *, size_t, bool);
             ReadFn gOriginalRead = nullptr;
 
+            uint32_t DefaultSampleRate()
+            {
+                if (const char *env = std::getenv("ECHIDNA_AR_SR"))
+                {
+                    const int sr = std::atoi(env);
+                    if (sr > 8000 && sr < 192000)
+                    {
+                        return static_cast<uint32_t>(sr);
+                    }
+                }
+                return 48000u;
+            }
+
+            uint32_t DefaultChannels()
+            {
+                if (const char *env = std::getenv("ECHIDNA_AR_CH"))
+                {
+                    const int ch = std::atoi(env);
+                    if (ch >= 1 && ch <= 8)
+                    {
+                        return static_cast<uint32_t>(ch);
+                    }
+                }
+                return 2u;
+            }
+
             ssize_t ForwardRead(void *instance, void *buffer, size_t bytes, bool blocking)
             {
                 auto &state = state::SharedState::instance();
@@ -40,6 +69,9 @@ namespace echidna
                 {
                     return gOriginalRead ? gOriginalRead(instance, buffer, bytes, blocking) : 0;
                 }
+
+                uint32_t sample_rate = DefaultSampleRate();
+                uint32_t channels = DefaultChannels();
                 timespec wall_start{};
                 timespec wall_end{};
                 timespec cpu_start{};
@@ -50,6 +82,49 @@ namespace echidna
                                                : static_cast<ssize_t>(bytes);
                 clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
                 clock_gettime(CLOCK_MONOTONIC, &wall_end);
+
+                if (result > 0 && buffer)
+                {
+                    size_t frame_bytes = channels * sizeof(int16_t);
+                    if (frame_bytes == 0 || (static_cast<size_t>(result) % frame_bytes) != 0)
+                    {
+                        const size_t total_samples = static_cast<size_t>(result) / sizeof(int16_t);
+                        for (uint32_t ch = 1; ch <= 8; ++ch)
+                        {
+                            if (total_samples % ch == 0)
+                            {
+                                channels = ch;
+                                frame_bytes = channels * sizeof(int16_t);
+                                break;
+                            }
+                        }
+                    }
+                    if (frame_bytes != 0 && (static_cast<size_t>(result) % frame_bytes) == 0)
+                    {
+                        const size_t frames = static_cast<size_t>(result) / frame_bytes;
+                        const size_t samples = frames * channels;
+                        std::vector<float> in(samples);
+                        const int16_t *pcm = static_cast<const int16_t *>(buffer);
+                        for (size_t i = 0; i < samples; ++i)
+                        {
+                            in[i] = static_cast<float>(pcm[i]) / 32768.0f;
+                        }
+                        std::vector<float> out(samples);
+                        if (echidna_process_block(in.data(),
+                                                  out.data(),
+                                                  static_cast<uint32_t>(frames),
+                                                  sample_rate,
+                                                  channels) == ECHIDNA_RESULT_OK)
+                        {
+                            int16_t *pcm_out = static_cast<int16_t *>(buffer);
+                            for (size_t i = 0; i < samples; ++i)
+                            {
+                                const float clamped = std::clamp(out[i], -1.0f, 1.0f);
+                                pcm_out[i] = static_cast<int16_t>(clamped * 32767.0f);
+                            }
+                        }
+                    }
+                }
 
                 const int64_t wall_ns_raw = (static_cast<int64_t>(wall_end.tv_sec) - static_cast<int64_t>(wall_start.tv_sec)) *
                                                 1000000000ll +

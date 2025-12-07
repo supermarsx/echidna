@@ -61,3 +61,7 @@ endif()
 install(TARGETS ech_dsp
     LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

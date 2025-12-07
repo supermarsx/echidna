@@ -23,17 +23,18 @@ namespace echidna
     class AudioHalHookManager : public HookManager
     {
     public:
-      explicit AudioHalHookManager(utils::PltResolver &resolver);
+    explicit AudioHalHookManager(utils::PltResolver &resolver);
 
-      bool install() override;
-      const char *name() const override { return "audiohal_stream_read"; }
+    bool install() override;
+    const char *name() const override { return "audiohal_stream_read"; }
 
-    private:
-      static ssize_t Replacement(void *stream, void *buffer, size_t bytes);
+  private:
+    static ssize_t Replacement(void *stream, void *buffer, size_t bytes);
+    static void LogHookSource(const char *lib, const char *symbol);
 
-      utils::PltResolver &resolver_;
-      runtime::InlineHook hook_;
-    };
+    utils::PltResolver &resolver_;
+    runtime::InlineHook hook_;
+};
 
   } // namespace hooks
 } // namespace echidna

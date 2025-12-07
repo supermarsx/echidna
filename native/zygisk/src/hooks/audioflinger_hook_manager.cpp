@@ -55,6 +55,7 @@ namespace echidna
             int32_t gChannelMaskOffset = -1;
             const char *kOffsetsPath = "/data/local/tmp/echidna_af_offsets.txt";
             constexpr const char *kOffsetsTag = "audioflinger";
+            bool gLoggedOffsets = false;
 
             uint32_t DefaultSampleRate()
             {
@@ -211,6 +212,13 @@ namespace echidna
                 {
                     std::lock_guard<std::mutex> lock(gContextMutex);
                     gContexts[thiz] = ctx;
+                    if (!gLoggedOffsets && gSampleRateOffset >= 0 && gChannelMaskOffset >= 0)
+                    {
+                        gLoggedOffsets = true;
+                        utils::OffsetProbe::LogOffsets(kOffsetsTag,
+                                                       gSampleRateOffset,
+                                                       gChannelMaskOffset);
+                    }
                 }
                 return ctx;
             }

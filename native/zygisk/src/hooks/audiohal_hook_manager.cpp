@@ -217,11 +217,7 @@ namespace echidna
                                       reinterpret_cast<void *>(&Replacement),
                                       reinterpret_cast<void **>(&gOriginalRead)))
                     {
-                        __android_log_print(ANDROID_LOG_INFO,
-                                            "echidna",
-                                            "Audio HAL hook installed at %s in %s",
-                                            sym,
-                                            lib);
+                        LogHookSource(lib, sym);
                         return true;
                     }
                 }
@@ -232,6 +228,15 @@ namespace echidna
         ssize_t AudioHalHookManager::Replacement(void *stream, void *buffer, size_t bytes)
         {
             return ForwardRead(stream, buffer, bytes);
+        }
+
+        void AudioHalHookManager::LogHookSource(const char *lib, const char *symbol)
+        {
+            __android_log_print(ANDROID_LOG_INFO,
+                                "echidna",
+                                "Audio HAL hook installed at %s in %s",
+                                symbol,
+                                lib);
         }
 
     } // namespace hooks
