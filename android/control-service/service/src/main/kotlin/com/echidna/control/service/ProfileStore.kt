@@ -5,6 +5,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
@@ -19,11 +20,11 @@ private const val STORE_TAG = "EchidnaProfileStore"
  */
 class ProfileStore(
     storageDir: File,
-    private val syncBridge: ProfileSyncBridge,
+    private val syncBridge: ProfileSyncChannel,
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
     private val lock = ReentrantReadWriteLock()
     private val storageFile = File(storageDir, "profiles.json")
-    private val executor = Executors.newSingleThreadExecutor()
     private val profiles = mutableMapOf<String, JSONObject>()
     private val whitelist = mutableMapOf<String, Boolean>()
 

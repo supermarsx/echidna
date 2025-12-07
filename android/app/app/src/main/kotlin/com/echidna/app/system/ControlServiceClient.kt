@@ -107,6 +107,22 @@ class ControlServiceClient(private val context: Context) {
         }
     }
 
+    fun pushProfile(id: String, json: String) {
+        try {
+            service?.pushProfile(id, json)
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to push profile", ex)
+        }
+    }
+
+    fun setProfile(profile: String) {
+        try {
+            service?.setProfile(profile)
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to set profile", ex)
+        }
+    }
+
     fun isTelemetryOptedIn(): Boolean {
         return try {
             service?.isTelemetryOptedIn ?: false

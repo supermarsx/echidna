@@ -22,6 +22,7 @@ import com.echidna.app.system.ControlServiceClient
 import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
 import com.echidna.app.ui.diagnostics.NoteUtils
+import com.echidna.app.data.PresetSerializer
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -148,6 +149,11 @@ object ControlStateRepository {
                     EchidnaWidgetProvider.updateAll(context)
                 }
             }
+            scope.launch {
+                activePreset.collect { preset ->
+                    pushPresetToService(preset)
+                }
+            }
         }
         updatePresetWarnings(activePreset.value)
     }
@@ -173,6 +179,7 @@ object ControlStateRepository {
         if (_presets.value.any { it.id == presetId }) {
             _activePresetId.value = presetId
             _presets.value.firstOrNull { it.id == presetId }?.let { updatePresetWarnings(it) }
+            _presets.value.firstOrNull { it.id == presetId }?.let { pushPresetToService(it) }
         }
     }
 
@@ -218,6 +225,7 @@ object ControlStateRepository {
         _presets.value = _presets.value.map { if (it.id == preset.id) preset else it }
         if (_activePresetId.value == preset.id) {
             updatePresetWarnings(preset)
+            pushPresetToService(preset)
         }
     }
 
@@ -346,6 +354,13 @@ object ControlStateRepository {
 
     private fun updatePresetWarnings(preset: Preset) {
         _presetWarnings.value = PresetValidator.evaluate(preset)
+    }
+
+    private fun pushPresetToService(preset: Preset) {
+        if (!::serviceClient.isInitialized) return
+        val json = PresetSerializer.toJson(preset)
+        serviceClient.pushProfile(preset.id, json)
+        serviceClient.setProfile(preset.id)
     }
 
     private fun defaultPresets(): List<Preset> = listOf(

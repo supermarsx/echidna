@@ -18,7 +18,15 @@ private const val SOCKET_PATH = "/data/local/tmp/echidna_profiles.sock"
 /**
  * Pushes profile updates to the native Zygisk module via shared memory or sockets.
  */
-class ProfileSyncBridge {
+interface ProfileSyncChannel {
+    fun pushProfiles(json: String)
+}
+
+/**
+ * Pushes profile updates to the native Zygisk module via shared memory or sockets.
+ * Note: used as the production implementation of [ProfileSyncChannel].
+ */
+class ProfileSyncBridge : ProfileSyncChannel {
     private val socketChannel = UnixSocketProfileChannel(SOCKET_PATH)
     private val sharedMemoryChannel: SharedMemoryProfileChannel? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -31,7 +39,7 @@ class ProfileSyncBridge {
             null
         }
 
-    fun pushProfiles(json: String) {
+    override fun pushProfiles(json: String) {
         var delivered = false
         val memoryChannel = sharedMemoryChannel
         if (memoryChannel != null) {
