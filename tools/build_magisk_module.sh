@@ -14,6 +14,7 @@ if [[ -z "${VERSION_CODE}" ]]; then
   VERSION_CODE="$(echo "${VERSION}" | tr -cd '0-9')"
   [[ -z "${VERSION_CODE}" ]] && VERSION_CODE="1"
 fi
+OFFSETS_FILE="${ECHIDNA_AF_OFFSETS:-${ROOT_DIR}/out/echidna_af_offsets.txt}"
 
 if [[ ! -f "${ZYGISK_LIB}" ]]; then
   echo "Missing Zygisk library at ${ZYGISK_LIB}. Build native first." >&2
@@ -29,6 +30,10 @@ mkdir -p "${OUT_DIR}/zygisk" "${OUT_DIR}/system/lib64" "${OUT_DIR}/common"
 
 cp "${ZYGISK_LIB}" "${OUT_DIR}/zygisk/libechidna.so"
 cp "${DSP_LIB}" "${OUT_DIR}/system/lib64/libech_dsp.so"
+if [[ -f "${OFFSETS_FILE}" ]]; then
+  mkdir -p "${OUT_DIR}/common"
+  cp "${OFFSETS_FILE}" "${OUT_DIR}/common/echidna_af_offsets.txt"
+fi
 
 cat > "${OUT_DIR}/module.prop" <<'EOF'
 id=echidna

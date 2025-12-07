@@ -272,6 +272,11 @@ namespace
 
     bool LooksLikePreset(const std::string &payload)
     {
+        if (payload.size() > kMaxPresetSize)
+        {
+            return false;
+        }
+        // Simple structural checks; full validation happens in DSP loader.
         return payload.find("\"modules\"") != std::string::npos &&
                payload.find("\"engine\"") != std::string::npos &&
                payload.find("\"id\"") != std::string::npos;

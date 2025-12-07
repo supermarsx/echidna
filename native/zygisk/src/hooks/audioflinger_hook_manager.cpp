@@ -119,6 +119,19 @@ namespace echidna
                     {
                         gChannelMaskOffset = std::atoi(env);
                     }
+                    // If offsets were packaged from discovery, preload them.
+                    FILE *file = std::fopen("/data/local/tmp/echidna_af_offsets.txt", "r");
+                    if (file)
+                    {
+                        int sr = -1;
+                        int ch = -1;
+                        if (std::fscanf(file, "sr_offset=%d\nch_mask_offset=%d", &sr, &ch) == 2)
+                        {
+                            if (gSampleRateOffset < 0) gSampleRateOffset = sr;
+                            if (gChannelMaskOffset < 0) gChannelMaskOffset = ch;
+                        }
+                        std::fclose(file);
+                    }
                 });
             }
 

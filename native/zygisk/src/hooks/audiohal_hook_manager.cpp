@@ -91,6 +91,28 @@ namespace echidna
                         break;
                     }
                 }
+
+                // Attempt to read channel mask or rate from common offsets (struct audio_stream_in).
+                struct
+                {
+                    uint32_t flags;
+                    uint32_t sample_rate;
+                    uint32_t channel_mask;
+                } probe{};
+                if (std::memcpy(&probe, base, sizeof(probe)))
+                {
+                    if (probe.sample_rate > 8000 && probe.sample_rate < 192000)
+                    {
+                        ctx.sample_rate = probe.sample_rate;
+                        ctx.validated = true;
+                    }
+                    const uint32_t mask_channels = std::popcount(probe.channel_mask);
+                    if (mask_channels >= 1 && mask_channels <= 8)
+                    {
+                        ctx.channels = mask_channels;
+                        ctx.validated = true;
+                    }
+                }
                 return ctx;
             }
 
