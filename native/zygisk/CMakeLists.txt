@@ -30,6 +30,7 @@ add_library(echidna SHARED
     src/utils/proc_maps_scanner.cpp
     src/utils/plt_resolver.cpp
     src/utils/api_level_probe.cpp
+    src/utils/offset_probe.cpp
     src/utils/config_shared_memory.cpp
     src/utils/telemetry_shared_memory.cpp
     src/utils/process_utils.cpp

@@ -24,6 +24,7 @@
 
 #include "echidna/api.h"
 #include "state/shared_state.h"
+#include "utils/offset_probe.h"
 #include "utils/process_utils.h"
 #include "utils/telemetry_shared_memory.h"
 
@@ -53,6 +54,7 @@ namespace echidna
             int32_t gSampleRateOffset = -1;
             int32_t gChannelMaskOffset = -1;
             const char *kOffsetsPath = "/data/local/tmp/echidna_af_offsets.txt";
+            constexpr const char *kOffsetsTag = "audioflinger";
 
             uint32_t DefaultSampleRate()
             {
@@ -197,21 +199,12 @@ namespace echidna
                         // Discovery mode: record offsets for future runs.
                         gSampleRateOffset = static_cast<int32_t>(offset);
                         gChannelMaskOffset = static_cast<int32_t>(offset + 4);
-                        int fd = ::open(kOffsetsPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                        if (fd >= 0)
-                        {
-                            char buf[128];
-                            int len = std::snprintf(buf,
-                                                    sizeof(buf),
-                                                    "sr_offset=%d\nch_mask_offset=%d\n",
-                                                    gSampleRateOffset,
-                                                    gChannelMaskOffset);
-                            if (len > 0)
-                            {
-                                ::write(fd, buf, static_cast<size_t>(len));
-                            }
-                            ::close(fd);
-                        }
+                        utils::OffsetProbe::LogOffsets(kOffsetsTag,
+                                                       gSampleRateOffset,
+                                                       gChannelMaskOffset);
+                        utils::OffsetProbe::WriteOffsetsToFile(kOffsetsPath,
+                                                               gSampleRateOffset,
+                                                               gChannelMaskOffset);
                     }
                 }
 
