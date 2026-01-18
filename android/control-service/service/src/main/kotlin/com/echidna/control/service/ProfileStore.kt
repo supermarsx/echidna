@@ -14,6 +14,7 @@ import org.json.JSONException
 import org.json.JSONObject
 
 private const val STORE_TAG = "EchidnaProfileStore"
+private const val MAX_PROCESS_NAME_LENGTH = 128
 
 /**
  * Maintains JSON profile definitions and pushes updates to the Zygisk bridge.
@@ -75,6 +76,10 @@ class ProfileStore(
     }
 
     fun updateWhitelist(processName: String, enabled: Boolean) {
+        if (!isValidProcessName(processName)) {
+            Log.w(STORE_TAG, "Rejected invalid process name: $processName")
+            return
+        }
         val snapshot = lock.write {
             whitelist[processName] = enabled
             buildSnapshotLocked()
@@ -109,7 +114,9 @@ class ProfileStore(
 
     private fun writeToDisk(payload: String) {
         try {
-            FileOutputStream(storageFile).use { it.write(payload.toByteArray(StandardCharsets.UTF_8)) }
+            FileOutputStream(storageFile).use {
+                it.write(payload.toByteArray(StandardCharsets.UTF_8))
+            }
         } catch (e: Exception) {
             Log.e(STORE_TAG, "Failed to persist profiles", e)
         }
@@ -157,5 +164,18 @@ class ProfileStore(
             }
         }
         return false
+    }
+
+    private fun isValidProcessName(processName: String): Boolean {
+        if (processName.isBlank() || processName.length > MAX_PROCESS_NAME_LENGTH) {
+            return false
+        }
+        for (char in processName) {
+            val ok = char.isLetterOrDigit() || char == '.' || char == '_' || char == ':'
+            if (!ok) {
+                return false
+            }
+        }
+        return true
     }
 }

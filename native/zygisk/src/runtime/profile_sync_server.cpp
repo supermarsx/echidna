@@ -103,7 +103,12 @@ namespace
         {
             return {};
         }
-        void *mapping = mmap(nullptr, static_cast<size_t>(st.st_size), PROT_READ, MAP_SHARED, fd, 0);
+        void *mapping = mmap(nullptr,
+                             static_cast<size_t>(st.st_size),
+                             PROT_READ,
+                             MAP_SHARED,
+                             fd,
+                             0);
         if (mapping == MAP_FAILED)
         {
             return {};
@@ -328,7 +333,7 @@ namespace
 
     std::string ExtractFirstProfilePayload(const std::string &json)
     {
-        // Minimal JSON traversal: expect {"profiles":{ "id": { ...preset... } }, "whitelist": {...}}
+        // Minimal JSON traversal: expect {"profiles":{...}, "whitelist": {...}}.
         const std::string segment = ExtractObjectSegment(json, "\"profiles\"");
         if (segment.empty())
         {
@@ -472,7 +477,10 @@ namespace echidna
                     {
                         continue;
                     }
-                    __android_log_print(ANDROID_LOG_WARN, kLogTag, "Accept failed: %s", strerror(errno));
+                    __android_log_print(ANDROID_LOG_WARN,
+                                        kLogTag,
+                                        "Accept failed: %s",
+                                        strerror(errno));
                     break;
                 }
                 handleClient(client);
@@ -507,7 +515,9 @@ namespace echidna
             // Guard against unreasonably large payloads.
             if (payload.size() > 512 * 1024)
             {
-                __android_log_print(ANDROID_LOG_WARN, kLogTag, "Profile payload too large, skipping");
+                __android_log_print(ANDROID_LOG_WARN,
+                                    kLogTag,
+                                    "Profile payload too large, skipping");
                 return;
             }
 
