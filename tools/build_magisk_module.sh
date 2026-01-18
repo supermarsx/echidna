@@ -35,7 +35,7 @@ if [[ -f "${OFFSETS_FILE}" ]]; then
   cp "${OFFSETS_FILE}" "${OUT_DIR}/common/echidna_af_offsets.txt"
 fi
 
-cat > "${OUT_DIR}/module.prop" <<'EOF'
+cat > "${OUT_DIR}/module.prop" <<EOF
 id=echidna
 name=Echidna Native Hooks
 version=${VERSION}

@@ -16,7 +16,9 @@
 
 #include <array>
 #include <cerrno>
+#include <cctype>
 #include <cstring>
+#include <optional>
 #include <string_view>
 
 #include "echidna/api.h"
@@ -27,6 +29,9 @@ namespace
     constexpr const char *kSocketPath = "/data/local/tmp/echidna_profiles.sock";
     constexpr const char *kLogTag = "echidna_profile_sync";
     constexpr size_t kMaxPresetSize = 512 * 1024;
+    constexpr size_t kMaxWhitelistEntries = 256;
+    constexpr size_t kMaxProcessNameLength = 128;
+    constexpr size_t kMaxProfileIdLength = 64;
 
     bool ReadBytes(int fd, void *buffer, size_t bytes)
     {
@@ -174,7 +179,17 @@ namespace
                 break;
             if (segment.compare(value_start, 4, "true") == 0)
             {
-                whitelist.push_back(key);
+                if (key.size() > kMaxProcessNameLength)
+                {
+                    __android_log_print(ANDROID_LOG_WARN,
+                                        kLogTag,
+                                        "Whitelist entry too long: %s",
+                                        key.c_str());
+                }
+                else
+                {
+                    whitelist.push_back(key);
+                }
                 pos = value_start + 4;
             }
             else if (segment.compare(value_start, 5, "false") == 0)
@@ -189,8 +204,51 @@ namespace
                                     key.c_str());
                 pos = value_start + 1;
             }
+            if (whitelist.size() >= kMaxWhitelistEntries)
+            {
+                __android_log_print(ANDROID_LOG_WARN,
+                                    kLogTag,
+                                    "Whitelist truncated at %zu entries",
+                                    whitelist.size());
+                break;
+            }
         }
         return whitelist;
+    }
+
+    bool IsValidProcessName(std::string_view name)
+    {
+        if (name.empty() || name.size() > kMaxProcessNameLength)
+        {
+            return false;
+        }
+        for (char c : name)
+        {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == ':')
+            {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool IsValidProfileId(std::string_view id)
+    {
+        if (id.empty() || id.size() > kMaxProfileIdLength)
+        {
+            return false;
+        }
+        for (char c : id)
+        {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == ' ' || c == '-' ||
+                c == '_' || c == '.')
+            {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     std::string ParseDefaultProfile(const std::string &json)
@@ -210,7 +268,62 @@ namespace
         {
             return {};
         }
-        return segment.substr(quote + 1, end - quote - 1);
+        const std::string id = segment.substr(quote + 1, end - quote - 1);
+        return IsValidProfileId(id) ? id : std::string{};
+    }
+
+    std::optional<bool> ParseBoolField(std::string_view json, std::string_view key)
+    {
+        const std::string needle = std::string("\"") + std::string(key) + "\"";
+        size_t pos = json.find(needle);
+        if (pos == std::string_view::npos)
+        {
+            return std::nullopt;
+        }
+        pos = json.find(':', pos + needle.size());
+        if (pos == std::string_view::npos)
+        {
+            return std::nullopt;
+        }
+        pos = json.find_first_not_of(" \t\n\r", pos + 1);
+        if (pos == std::string_view::npos)
+        {
+            return std::nullopt;
+        }
+        if (json.compare(pos, 4, "true") == 0)
+        {
+            return true;
+        }
+        if (json.compare(pos, 5, "false") == 0)
+        {
+            return false;
+        }
+        return std::nullopt;
+    }
+
+    std::vector<std::string> FilterWhitelist(std::vector<std::string> whitelist)
+    {
+        std::vector<std::string> filtered;
+        filtered.reserve(whitelist.size());
+        for (const auto &entry : whitelist)
+        {
+            if (IsValidProcessName(entry))
+            {
+                filtered.push_back(entry);
+            }
+            else
+            {
+                __android_log_print(ANDROID_LOG_WARN,
+                                    kLogTag,
+                                    "Rejected invalid process name: %s",
+                                    entry.c_str());
+            }
+            if (filtered.size() >= kMaxWhitelistEntries)
+            {
+                break;
+            }
+        }
+        return filtered;
     }
 
     std::string ExtractFirstProfilePayload(const std::string &json)
@@ -398,19 +511,22 @@ namespace echidna
                 return;
             }
 
-    echidna::utils::ConfigurationSnapshot snapshot;
-    snapshot.hooks_enabled = true;
-    snapshot.process_whitelist = ParseWhitelist(payload);
-    snapshot.profile = ParseDefaultProfile(payload);
-    echidna::utils::ConfigSharedMemory memory;
+            echidna::utils::ConfigurationSnapshot snapshot;
+            snapshot.hooks_enabled =
+                ParseBoolField(payload, "hooksEnabled").value_or(true);
+            snapshot.process_whitelist = FilterWhitelist(ParseWhitelist(payload));
+            snapshot.profile = ParseDefaultProfile(payload);
+            echidna::utils::ConfigSharedMemory memory;
             memory.updateSnapshot(snapshot);
 
-    // Apply preset JSON if the payload looks like a preset definition.
-    const std::string preset_payload = ExtractFirstProfilePayload(payload);
-    if (!preset_payload.empty() && preset_payload.size() < kMaxPresetSize && LooksLikePreset(preset_payload))
-    {
-        const echidna_result_t result =
-            echidna_set_profile(preset_payload.c_str(), preset_payload.size());
+            // Apply preset JSON if the payload looks like a preset definition.
+            const std::string preset_payload = ExtractFirstProfilePayload(payload);
+            if (!preset_payload.empty() &&
+                preset_payload.size() < kMaxPresetSize &&
+                LooksLikePreset(preset_payload))
+            {
+                const echidna_result_t result =
+                    echidna_set_profile(preset_payload.c_str(), preset_payload.size());
                 if (result != ECHIDNA_RESULT_OK)
                 {
                     __android_log_print(ANDROID_LOG_WARN,
