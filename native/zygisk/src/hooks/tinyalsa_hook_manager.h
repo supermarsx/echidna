@@ -27,6 +27,7 @@ namespace echidna
 
       bool install() override;
       const char *name() const override { return "tinyalsa_pcm_read"; }
+      const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
     private:
       static int ReplacementRead(void *pcm, void *data, unsigned int count);
@@ -35,6 +36,7 @@ namespace echidna
       utils::PltResolver &resolver_;
       runtime::InlineHook hook_read_;
       runtime::InlineHook hook_readi_;
+      HookInstallInfo last_info_;
     };
 
   } // namespace hooks

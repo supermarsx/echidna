@@ -27,6 +27,7 @@ namespace echidna
 
     bool install() override;
     const char *name() const override { return "audiohal_stream_read"; }
+    const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
   private:
     static ssize_t Replacement(void *stream, void *buffer, size_t bytes);
@@ -34,6 +35,7 @@ namespace echidna
 
     utils::PltResolver &resolver_;
     runtime::InlineHook hook_;
+    HookInstallInfo last_info_;
 };
 
   } // namespace hooks

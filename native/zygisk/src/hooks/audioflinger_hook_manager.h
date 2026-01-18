@@ -25,6 +25,7 @@ namespace echidna
 
       bool install() override;
       const char *name() const override { return "AudioFlinger_RecordThread"; }
+      const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
     private:
       struct CaptureContext;
@@ -37,6 +38,7 @@ namespace echidna
       runtime::InlineHook hook_;
       runtime::InlineHook hook_read_;
       runtime::InlineHook hook_process_;
+      HookInstallInfo last_info_;
     };
 
   } // namespace hooks

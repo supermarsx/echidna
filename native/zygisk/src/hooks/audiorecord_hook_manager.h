@@ -29,6 +29,7 @@ namespace echidna
        */
       bool install() override;
       const char *name() const override { return active_symbol_.c_str(); }
+      const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
     private:
       /** Replacement shim wrapping the original read behaviour. */
@@ -37,6 +38,7 @@ namespace echidna
       utils::PltResolver &resolver_;
       runtime::InlineHook hook_;
       std::string active_symbol_;
+      HookInstallInfo last_info_;
     };
 
   } // namespace hooks

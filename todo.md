@@ -61,7 +61,7 @@
 ## TODO backlog
 
 ### Native hooks
-- [ ] Add AAudioStream_read/AAudioStream_write hook path with DSP routing.  
+- [x] Add AAudioStream_read/AAudioStream_write hook path with DSP routing.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [x] Implement OpenSL buffer queue PCM conversion and DSP processing.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
@@ -126,6 +126,8 @@
 - [x] Process libc read fallback buffers through the DSP pipeline.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [x] Process OpenSL buffer queue callbacks through DSP.  
+  Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
+- [x] Hook AAudio read/write paths and route through DSP.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [x] Document Magisk packaging script and release checklist.  
   Spec: [7](spec.md#7-installation--deployment-steps-developer--user-flows)

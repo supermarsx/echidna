@@ -13,6 +13,14 @@ namespace echidna
   namespace hooks
   {
 
+    struct HookInstallInfo
+    {
+      bool success{false};
+      std::string library;
+      std::string symbol;
+      std::string reason;
+    };
+
     class HookManager
     {
     public:
@@ -26,6 +34,10 @@ namespace echidna
        * @brief Returns a short human-readable hook name.
        */
       virtual const char *name() const = 0;
+      /**
+       * @brief Returns details from the most recent install attempt.
+       */
+      virtual const HookInstallInfo &lastInstallInfo() const = 0;
     };
 
   } // namespace hooks

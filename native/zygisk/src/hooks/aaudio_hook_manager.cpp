@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <dlfcn.h>
 #include <mutex>
 #include <string>
@@ -36,14 +37,20 @@ namespace echidna
         namespace
         {
             using Callback = int (*)(void *, void *, void *, int32_t);
+            using ReadFn = int32_t (*)(void *, void *, int32_t, int64_t);
+            using WriteFn = int32_t (*)(void *, const void *, int32_t, int64_t);
             Callback gOriginalCallback = nullptr;
+            ReadFn gOriginalRead = nullptr;
+            WriteFn gOriginalWrite = nullptr;
 
             // Minimal subset of AAudio types/constants to avoid extra headers.
             enum
             {
                 kAAudioFormatInvalid = 0,
                 kAAudioFormatI16 = 1,
-                kAAudioFormatFloat = 2
+                kAAudioFormatFloat = 2,
+                kAAudioDirectionOutput = 0,
+                kAAudioDirectionInput = 1
             };
 
             struct StreamConfig
@@ -51,6 +58,7 @@ namespace echidna
                 uint32_t sample_rate{48000};
                 uint32_t channels{2};
                 int32_t format{kAAudioFormatI16};
+                int32_t direction{-1};
                 bool valid{false};
             };
 
@@ -60,6 +68,7 @@ namespace echidna
                 GetIntFn get_sample_rate{nullptr};
                 GetIntFn get_channel_count{nullptr};
                 GetIntFn get_format{nullptr};
+                GetIntFn get_direction{nullptr};
                 bool resolved{false};
             };
 
@@ -74,6 +83,8 @@ namespace echidna
                         dlsym(RTLD_DEFAULT, "AAudioStream_getChannelCount"));
                     fns.get_format = reinterpret_cast<StreamFns::GetIntFn>(
                         dlsym(RTLD_DEFAULT, "AAudioStream_getFormat"));
+                    fns.get_direction = reinterpret_cast<StreamFns::GetIntFn>(
+                        dlsym(RTLD_DEFAULT, "AAudioStream_getDirection"));
                     fns.resolved = true;
                 });
                 return fns;
@@ -111,12 +122,30 @@ namespace echidna
                         cfg.format = fmt;
                     }
                 }
+                if (fns.get_direction)
+                {
+                    const int32_t direction = fns.get_direction(stream);
+                    if (direction == kAAudioDirectionInput ||
+                        direction == kAAudioDirectionOutput)
+                    {
+                        cfg.direction = direction;
+                    }
+                }
                 cfg.valid = true;
                 return cfg;
             }
 
             std::mutex gStreamCacheMutex;
             std::unordered_map<void *, StreamConfig> gStreamConfigCache;
+
+            bool AllowOutputProcessing()
+            {
+                if (const char *env = std::getenv("ECHIDNA_AAUDIO_PROCESS_OUTPUT"))
+                {
+                    return std::atoi(env) != 0;
+                }
+                return false;
+            }
 
             StreamConfig CachedConfig(void *stream)
             {
@@ -140,64 +169,201 @@ namespace echidna
                 return cfg;
             }
 
+            bool ShouldProcess(const StreamConfig &cfg)
+            {
+                if (cfg.direction == kAAudioDirectionOutput && !AllowOutputProcessing())
+                {
+                    return false;
+                }
+                return true;
+            }
+
+            bool ProcessPcmBuffer(const StreamConfig &cfg,
+                                  void *buffer,
+                                  uint32_t frames)
+            {
+                if (!buffer || frames == 0)
+                {
+                    return false;
+                }
+                const uint32_t channels = std::max<uint32_t>(1u, cfg.channels);
+                const size_t samples = static_cast<size_t>(frames) * channels;
+                if (samples == 0)
+                {
+                    return false;
+                }
+                std::vector<float> input;
+                std::vector<float> output;
+                input.reserve(samples);
+                output.resize(samples);
+
+                if (cfg.format == kAAudioFormatFloat)
+                {
+                    const float *pcm = static_cast<const float *>(buffer);
+                    input.assign(pcm, pcm + samples);
+                }
+                else
+                {
+                    const int16_t *pcm = static_cast<const int16_t *>(buffer);
+                    input.resize(samples);
+                    for (size_t i = 0; i < samples; ++i)
+                    {
+                        input[i] = static_cast<float>(pcm[i]) / 32768.0f;
+                    }
+                }
+                if (echidna_process_block(input.data(),
+                                          output.data(),
+                                          frames,
+                                          cfg.sample_rate,
+                                          channels) != ECHIDNA_RESULT_OK)
+                {
+                    return false;
+                }
+                if (cfg.format == kAAudioFormatFloat)
+                {
+                    float *pcm_out = static_cast<float *>(buffer);
+                    std::copy(output.begin(), output.end(), pcm_out);
+                }
+                else
+                {
+                    int16_t *pcm_out = static_cast<int16_t *>(buffer);
+                    for (size_t i = 0; i < samples; ++i)
+                    {
+                        const float clamped = std::clamp(output[i], -1.0f, 1.0f);
+                        pcm_out[i] = static_cast<int16_t>(clamped * 32767.0f);
+                    }
+                }
+                return true;
+            }
+
+            int32_t ForwardRead(void *stream,
+                                void *buffer,
+                                int32_t frames,
+                                int64_t timeout_ns)
+            {
+                const int32_t read_frames =
+                    gOriginalRead ? gOriginalRead(stream, buffer, frames, timeout_ns) : 0;
+                if (read_frames <= 0 || !buffer)
+                {
+                    return read_frames;
+                }
+                auto &state = state::SharedState::instance();
+                const std::string &process = utils::CachedProcessName();
+                if (!state.hooksEnabled() || !state.isProcessWhitelisted(process))
+                {
+                    return read_frames;
+                }
+                const StreamConfig cfg = CachedConfig(stream);
+                if (!ShouldProcess(cfg))
+                {
+                    return read_frames;
+                }
+                ProcessPcmBuffer(cfg, buffer, static_cast<uint32_t>(read_frames));
+                return read_frames;
+            }
+
+            int32_t ForwardWrite(void *stream,
+                                 const void *buffer,
+                                 int32_t frames,
+                                 int64_t timeout_ns)
+            {
+                if (!buffer || frames <= 0)
+                {
+                    return gOriginalWrite ? gOriginalWrite(stream, buffer, frames, timeout_ns)
+                                          : 0;
+                }
+                auto &state = state::SharedState::instance();
+                const std::string &process = utils::CachedProcessName();
+                if (!state.hooksEnabled() || !state.isProcessWhitelisted(process))
+                {
+                    return gOriginalWrite ? gOriginalWrite(stream, buffer, frames, timeout_ns)
+                                          : 0;
+                }
+                const StreamConfig cfg = CachedConfig(stream);
+                if (!ShouldProcess(cfg))
+                {
+                    return gOriginalWrite ? gOriginalWrite(stream, buffer, frames, timeout_ns)
+                                          : 0;
+                }
+                const uint32_t channels = std::max<uint32_t>(1u, cfg.channels);
+                const size_t samples = static_cast<size_t>(frames) * channels;
+                if (samples == 0)
+                {
+                    return gOriginalWrite ? gOriginalWrite(stream, buffer, frames, timeout_ns)
+                                          : 0;
+                }
+                if (cfg.format == kAAudioFormatFloat)
+                {
+                    std::vector<float> input(samples);
+                    const float *pcm = static_cast<const float *>(buffer);
+                    std::copy(pcm, pcm + samples, input.begin());
+                    std::vector<float> output(samples);
+                    if (echidna_process_block(input.data(),
+                                              output.data(),
+                                              static_cast<uint32_t>(frames),
+                                              cfg.sample_rate,
+                                              channels) == ECHIDNA_RESULT_OK)
+                    {
+                        return gOriginalWrite
+                            ? gOriginalWrite(stream,
+                                             output.data(),
+                                             frames,
+                                             timeout_ns)
+                            : frames;
+                    }
+                }
+                else
+                {
+                    std::vector<float> input(samples);
+                    const int16_t *pcm = static_cast<const int16_t *>(buffer);
+                    for (size_t i = 0; i < samples; ++i)
+                    {
+                        input[i] = static_cast<float>(pcm[i]) / 32768.0f;
+                    }
+                    std::vector<float> output(samples);
+                    if (echidna_process_block(input.data(),
+                                              output.data(),
+                                              static_cast<uint32_t>(frames),
+                                              cfg.sample_rate,
+                                              channels) == ECHIDNA_RESULT_OK)
+                    {
+                        std::vector<int16_t> out_pcm(samples);
+                        for (size_t i = 0; i < samples; ++i)
+                        {
+                            const float clamped =
+                                std::clamp(output[i], -1.0f, 1.0f);
+                            out_pcm[i] = static_cast<int16_t>(clamped * 32767.0f);
+                        }
+                        return gOriginalWrite
+                            ? gOriginalWrite(stream,
+                                             out_pcm.data(),
+                                             frames,
+                                             timeout_ns)
+                            : frames;
+                    }
+                }
+                return gOriginalWrite ? gOriginalWrite(stream, buffer, frames, timeout_ns) : 0;
+            }
+
             int ForwardCallback(void *stream, void *user, void *audio_data, int32_t num_frames)
             {
                 auto &state = state::SharedState::instance();
                 const std::string &process = utils::CachedProcessName();
                 if (!state.hooksEnabled() || !state.isProcessWhitelisted(process))
                 {
-                    return gOriginalCallback ? gOriginalCallback(stream, user, audio_data, num_frames) : 0;
+                    return gOriginalCallback
+                        ? gOriginalCallback(stream, user, audio_data, num_frames)
+                        : 0;
                 }
 
                 // Capture context before calling the app's callback so the processed buffer is
                 // delivered to the app.
                 const StreamConfig cfg = CachedConfig(stream);
-                const uint32_t channels = std::max<uint32_t>(1u, cfg.channels);
-                const uint32_t frames = num_frames > 0 ? static_cast<uint32_t>(num_frames) : 0u;
-                const size_t samples = static_cast<size_t>(frames) * channels;
-
-                std::vector<float> input;
-                std::vector<float> output;
-                input.reserve(samples);
-                output.resize(samples);
-
-                if (audio_data && frames > 0 && samples > 0)
+                if (audio_data && num_frames > 0 && ShouldProcess(cfg))
                 {
-                    if (cfg.format == kAAudioFormatFloat)
-                    {
-                        const float *pcm = static_cast<const float *>(audio_data);
-                        input.assign(pcm, pcm + samples);
-                    }
-                    else
-                    {
-                        const int16_t *pcm = static_cast<const int16_t *>(audio_data);
-                        input.resize(samples);
-                        for (size_t i = 0; i < samples; ++i)
-                        {
-                            input[i] = static_cast<float>(pcm[i]) / 32768.0f;
-                        }
-                    }
-                    if (echidna_process_block(input.data(),
-                                              output.data(),
-                                              frames,
-                                              cfg.sample_rate,
-                                              channels) == ECHIDNA_RESULT_OK)
-                    {
-                        if (cfg.format == kAAudioFormatFloat)
-                        {
-                            float *pcm_out = static_cast<float *>(audio_data);
-                            std::copy(output.begin(), output.end(), pcm_out);
-                        }
-                        else
-                        {
-                            int16_t *pcm_out = static_cast<int16_t *>(audio_data);
-                            for (size_t i = 0; i < samples; ++i)
-                            {
-                                const float clamped = std::clamp(output[i], -1.0f, 1.0f);
-                                pcm_out[i] = static_cast<int16_t>(clamped * 32767.0f);
-                            }
-                        }
-                    }
+                    ProcessPcmBuffer(cfg,
+                                     audio_data,
+                                     static_cast<uint32_t>(num_frames));
                 }
 
                 timespec wall_start{};
@@ -206,20 +372,31 @@ namespace echidna
                 timespec cpu_end{};
                 clock_gettime(CLOCK_MONOTONIC, &wall_start);
                 clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
-                int result = gOriginalCallback ? gOriginalCallback(stream, user, audio_data, num_frames) : 0;
+                int result = gOriginalCallback
+                    ? gOriginalCallback(stream, user, audio_data, num_frames)
+                    : 0;
                 clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
                 clock_gettime(CLOCK_MONOTONIC, &wall_end);
 
-                const int64_t wall_ns_raw = (static_cast<int64_t>(wall_end.tv_sec) - static_cast<int64_t>(wall_start.tv_sec)) *
-                                                1000000000ll +
-                                            (static_cast<int64_t>(wall_end.tv_nsec) - static_cast<int64_t>(wall_start.tv_nsec));
-                const int64_t cpu_ns_raw = (static_cast<int64_t>(cpu_end.tv_sec) - static_cast<int64_t>(cpu_start.tv_sec)) *
-                                               1000000000ll +
-                                           (static_cast<int64_t>(cpu_end.tv_nsec) - static_cast<int64_t>(cpu_start.tv_nsec));
-                const uint32_t wall_us = static_cast<uint32_t>(std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
-                const uint32_t cpu_us = static_cast<uint32_t>(std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
-                const uint64_t timestamp_ns = static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
-                                              static_cast<uint64_t>(wall_end.tv_nsec);
+                const int64_t wall_ns_raw =
+                    (static_cast<int64_t>(wall_end.tv_sec) -
+                     static_cast<int64_t>(wall_start.tv_sec)) *
+                        1000000000ll +
+                    (static_cast<int64_t>(wall_end.tv_nsec) -
+                     static_cast<int64_t>(wall_start.tv_nsec));
+                const int64_t cpu_ns_raw =
+                    (static_cast<int64_t>(cpu_end.tv_sec) -
+                     static_cast<int64_t>(cpu_start.tv_sec)) *
+                        1000000000ll +
+                    (static_cast<int64_t>(cpu_end.tv_nsec) -
+                     static_cast<int64_t>(cpu_start.tv_nsec));
+                const uint32_t wall_us = static_cast<uint32_t>(
+                    std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
+                const uint32_t cpu_us = static_cast<uint32_t>(
+                    std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
+                const uint64_t timestamp_ns =
+                    static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
+                    static_cast<uint64_t>(wall_end.tv_nsec);
 
                 state.telemetry().recordCallback(timestamp_ns,
                                                  wall_us,
@@ -236,24 +413,82 @@ namespace echidna
 
         bool AAudioHookManager::install()
         {
-            void *symbol = resolver_.findSymbol("libaaudio.so", "AAudioStream_dataCallback");
-            if (!symbol)
+            bool installed = false;
+            if (void *symbol =
+                    resolver_.findSymbol("libaaudio.so", "AAudioStream_dataCallback"))
             {
-                return false;
+                if (hook_.install(symbol,
+                                  reinterpret_cast<void *>(&ForwardCallback),
+                                  reinterpret_cast<void **>(&gOriginalCallback)))
+                {
+                    __android_log_print(ANDROID_LOG_INFO,
+                                        "echidna",
+                                        "AAudio data callback hook installed");
+                    installed = true;
+                }
+                else
+                {
+                    __android_log_print(ANDROID_LOG_WARN,
+                                        "echidna",
+                                        "Failed to install AAudio data callback hook");
+                }
             }
 
-            if (!hook_.install(symbol, reinterpret_cast<void *>(&ForwardCallback), reinterpret_cast<void **>(&gOriginalCallback)))
+            if (void *symbol = resolver_.findSymbol("libaaudio.so", "AAudioStream_read"))
             {
-                __android_log_print(ANDROID_LOG_WARN, "echidna", "Failed to install AAudio hook");
-                return false;
+                if (hook_read_.install(symbol,
+                                       reinterpret_cast<void *>(&ForwardRead),
+                                       reinterpret_cast<void **>(&gOriginalRead)))
+                {
+                    __android_log_print(ANDROID_LOG_INFO,
+                                        "echidna",
+                                        "AAudio read hook installed");
+                    installed = true;
+                }
             }
-            __android_log_print(ANDROID_LOG_INFO, "echidna", "AAudio hook installed");
-            return true;
+
+            if (void *symbol = resolver_.findSymbol("libaaudio.so", "AAudioStream_write"))
+            {
+                if (hook_write_.install(symbol,
+                                        reinterpret_cast<void *>(&ForwardWrite),
+                                        reinterpret_cast<void **>(&gOriginalWrite)))
+                {
+                    __android_log_print(ANDROID_LOG_INFO,
+                                        "echidna",
+                                        "AAudio write hook installed");
+                    installed = true;
+                }
+            }
+
+            if (!installed)
+            {
+                __android_log_print(ANDROID_LOG_WARN, "echidna", "AAudio hook not installed");
+            }
+            return installed;
         }
 
-        int AAudioHookManager::Replacement(void *stream, void *user, void *audio_data, int32_t num_frames)
+        int AAudioHookManager::Replacement(void *stream,
+                                           void *user,
+                                           void *audio_data,
+                                           int32_t num_frames)
         {
             return ForwardCallback(stream, user, audio_data, num_frames);
+        }
+
+        int32_t AAudioHookManager::ReplacementRead(void *stream,
+                                                   void *buffer,
+                                                   int32_t frames,
+                                                   int64_t timeout_ns)
+        {
+            return ForwardRead(stream, buffer, frames, timeout_ns);
+        }
+
+        int32_t AAudioHookManager::ReplacementWrite(void *stream,
+                                                    const void *buffer,
+                                                    int32_t frames,
+                                                    int64_t timeout_ns)
+        {
+            return ForwardWrite(stream, buffer, frames, timeout_ns);
         }
 
     } // namespace hooks
