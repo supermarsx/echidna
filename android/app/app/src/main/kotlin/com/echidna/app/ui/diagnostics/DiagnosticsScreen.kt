@@ -57,18 +57,26 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(text = "Engine: ${status.summary}")
                     Text(text = "SELinux: ${status.selinuxMode}")
                     Text(text = "Latency: ${status.latencyMs ?: 0} ms")
                     Text(text = "XRuns: ${status.xruns}")
-                    status.lastError?.let { Text(text = "Error: $it", color = MaterialTheme.colorScheme.error) }
+                    status.lastError?.let {
+                        Text(text = "Error: $it", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(text = "Metrics")
                     Text(text = "Input RMS ${metrics.inputRms} / Peak ${metrics.inputPeak}")
                     Text(text = "Output RMS ${metrics.outputRms} / Peak ${metrics.outputPeak}")
@@ -79,7 +87,10 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         }
         item {
              Card(modifier = Modifier.fillMaxWidth()) {
-                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                 Column(
+                     modifier = Modifier.padding(16.dp),
+                     verticalArrangement = Arrangement.spacedBy(12.dp)
+                 ) {
                     Text("Latency Histogram", style = MaterialTheme.typography.titleMedium)
                      LatencyHistogramView(latency)
                      Text("CPU Heatmap", style = MaterialTheme.typography.titleMedium)
@@ -89,7 +100,10 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Text("Tuner", style = MaterialTheme.typography.titleMedium)
                     TunerView(tuner)
                     Text("Formant / Pitch", style = MaterialTheme.typography.titleMedium)
@@ -99,30 +113,46 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text("Hooks", style = MaterialTheme.typography.titleMedium)
                     telemetry.hooks.forEach { hook ->
                         HookStatusRow(hook)
                     }
                     if (telemetry.hooks.isEmpty()) {
-                        Text("No hook attempts recorded yet", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "No hook attempts recorded yet",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             }
         }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Share anonymized telemetry", style = MaterialTheme.typography.titleMedium)
-                        Switch(checked = telemetryOptIn, onCheckedChange = viewModel::setTelemetryOptIn)
+                        Text(
+                            "Share anonymized telemetry",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Switch(
+                            checked = telemetryOptIn,
+                            onCheckedChange = viewModel::setTelemetryOptIn
+                        )
                     }
                     Text(
-                        text = "Allows the app to export latency and CPU statistics without storing preset names or identifiers.",
+                        text = "Allows the app to export latency and CPU statistics " +
+                            "without storing preset names or identifiers.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -150,14 +180,20 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         compatibility?.let { result ->
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Text(text = "SELinux: ${result.selinuxStatus}")
                         Text(text = "Audio Stacks")
                         result.audioStack.forEach { stack ->
                             val support = if (stack.supported) "Supported" else "Unsupported"
                             val latency = stack.latencyEstimateMs?.let { "$it ms" } ?: "n/a"
                             Text(text = "• ${stack.name}: $support ($latency)")
-                            Text(text = "  ${stack.message}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = "  ${stack.message}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                         Text(text = "Notes")
                         result.notes.forEach { Text(text = "• $it") }
@@ -178,7 +214,10 @@ private fun LatencyHistogramView(buckets: List<LatencyBucket>) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         buckets.forEach { bucket ->
             Column {
-                Text(text = "${bucket.label} (${bucket.count})", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "${bucket.label} (${bucket.count})",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 Canvas(modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 2.dp)
@@ -210,7 +249,10 @@ private fun CpuHeatmapView(points: List<CpuHeatPoint>) {
             drawLine(
                 color = Color(0xFF4CAF50).copy(alpha = 0.3f + 0.7f * intensity),
                 start = androidx.compose.ui.geometry.Offset(index * barWidth, size.height),
-                end = androidx.compose.ui.geometry.Offset(index * barWidth, size.height * (1f - intensity)),
+                end = androidx.compose.ui.geometry.Offset(
+                    index * barWidth,
+                    size.height * (1f - intensity)
+                ),
                 strokeWidth = barWidth,
                 cap = StrokeCap.Round
             )
@@ -221,7 +263,11 @@ private fun CpuHeatmapView(points: List<CpuHeatPoint>) {
 @Composable
 private fun TunerView(state: TunerState) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Detected: ${state.detectedNote} (${String.format(Locale.US, "%.1f", state.detectedHz)} Hz)", fontWeight = FontWeight.Medium)
+        Text(
+            "Detected: ${state.detectedNote} " +
+                "(${String.format(Locale.US, "%.1f", state.detectedHz)} Hz)",
+            fontWeight = FontWeight.Medium
+        )
         Text("Target: ${String.format(Locale.US, "%.1f", state.targetHz)} Hz")
         Text("Offset: ${String.format(Locale.US, "%.1f", state.centsOff)} cents")
     }
@@ -229,10 +275,18 @@ private fun TunerView(state: TunerState) {
 
 @Composable
 private fun FormantVisualizer(formant: FormantState, telemetry: TelemetrySnapshot) {
-    Text("Shift ${String.format(Locale.US, "%.0f", formant.shiftCents)} cents • Width ${String.format(Locale.US, "%.0f", formant.width)}", style = MaterialTheme.typography.bodySmall)
+    Text(
+        "Shift ${String.format(Locale.US, "%.0f", formant.shiftCents)} cents  " +
+            "Width ${String.format(Locale.US, "%.0f", formant.width)}",
+        style = MaterialTheme.typography.bodySmall
+    )
     if (telemetry.warnings.isNotEmpty()) {
         telemetry.warnings.forEach { warning ->
-            Text(text = warning, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            Text(
+                text = warning,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -240,5 +294,18 @@ private fun FormantVisualizer(formant: FormantState, telemetry: TelemetrySnapsho
 @Composable
 private fun HookStatusRow(hook: HookTelemetry) {
     val successRate = if (hook.attempts == 0) 0f else hook.successes.toFloat() / hook.attempts
-    Text("${hook.name.ifBlank { "Unknown" }}: ${hook.successes}/${hook.attempts} (${String.format(Locale.US, "%.0f", successRate * 100)}%)", style = MaterialTheme.typography.bodySmall)
+    val label = hook.name.ifBlank { "Unknown" }
+    Text(
+        "$label: ${hook.successes}/${hook.attempts} " +
+            "(${String.format(Locale.US, "%.0f", successRate * 100)}%)",
+        style = MaterialTheme.typography.bodySmall
+    )
+    if (hook.symbol.isNotBlank() || hook.library.isNotBlank() || hook.reason.isNotBlank()) {
+        val details = buildList {
+            if (hook.library.isNotBlank()) add("lib=${hook.library}")
+            if (hook.symbol.isNotBlank()) add("sym=${hook.symbol}")
+            if (hook.reason.isNotBlank()) add("reason=${hook.reason}")
+        }.joinToString(" • ")
+        Text(details, style = MaterialTheme.typography.bodySmall)
+    }
 }

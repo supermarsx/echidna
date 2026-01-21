@@ -74,6 +74,9 @@ internal object TelemetryParser {
             val name = obj.optString("name")
             list += HookTelemetry(
                 name = name,
+                library = obj.optString("library"),
+                symbol = obj.optString("symbol"),
+                reason = obj.optString("reason"),
                 attempts = obj.optInt("attempts"),
                 successes = obj.optInt("successes"),
                 failures = obj.optInt("failures"),

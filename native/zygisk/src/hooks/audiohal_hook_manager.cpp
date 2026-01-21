@@ -93,7 +93,8 @@ namespace echidna
                     }
                 }
 
-                // Attempt to read channel mask or rate from common offsets (struct audio_stream_in).
+                // Attempt to read channel mask or rate from common offsets
+                // (struct audio_stream_in).
                 struct
                 {
                     uint32_t flags;
@@ -117,14 +118,16 @@ namespace echidna
 
             ssize_t ForwardRead(void *stream, void *buffer, size_t bytes)
             {
-                const ssize_t read_bytes = gOriginalRead ? gOriginalRead(stream, buffer, bytes) : -1;
+                const ssize_t read_bytes =
+                    gOriginalRead ? gOriginalRead(stream, buffer, bytes) : -1;
                 if (read_bytes <= 0 || !buffer)
                 {
                     return read_bytes;
                 }
                 auto &state = state::SharedState::instance();
                 const std::string &process = utils::CachedProcessName();
-                if (!state.hooksEnabled() || (!state.isProcessWhitelisted(process) && process != "audioserver"))
+                if (!state.hooksEnabled() ||
+                    (!state.isProcessWhitelisted(process) && process != "audioserver"))
                 {
                     return read_bytes;
                 }
@@ -181,6 +184,7 @@ namespace echidna
 
         bool AudioHalHookManager::install()
         {
+            last_info_ = {};
             static const char *kLibs[] = {
                 "libaudiohal.so",
                 "libaudio.so",
@@ -211,9 +215,18 @@ namespace echidna
                                       reinterpret_cast<void **>(&gOriginalRead)))
                     {
                         LogHookSource(lib, sym);
+                        last_info_.success = true;
+                        last_info_.library = lib;
+                        last_info_.symbol = sym;
+                        last_info_.reason.clear();
                         return true;
                     }
+                    last_info_.reason = "hook_failed";
                 }
+            }
+            if (last_info_.reason.empty())
+            {
+                last_info_.reason = "symbol_not_found";
             }
             return false;
         }

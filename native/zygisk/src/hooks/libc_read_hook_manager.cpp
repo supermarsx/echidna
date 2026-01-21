@@ -185,18 +185,27 @@ namespace echidna
 
         bool LibcReadHookManager::install()
         {
-            void *target = resolver_.findSymbol("libc.so", "read");
+            last_info_ = {};
+            const char *library = "libc.so";
+            const char *symbol = "read";
+            void *target = resolver_.findSymbol(library, symbol);
             if (!target)
             {
+                last_info_.reason = "symbol_not_found";
                 return false;
             }
             if (hook_.install(target,
                               reinterpret_cast<void *>(&ForwardRead),
                               reinterpret_cast<void **>(&gOriginalRead)))
             {
+                last_info_.success = true;
+                last_info_.library = library;
+                last_info_.symbol = symbol;
+                last_info_.reason.clear();
                 __android_log_print(ANDROID_LOG_INFO, "echidna", "libc read hook installed");
                 return true;
             }
+            last_info_.reason = "hook_failed";
             return false;
         }
 

@@ -113,7 +113,11 @@ namespace echidna
                 }
                 std::vector<float> out(samples);
                 const echidna_result_t dsp =
-                    echidna_process_block(in.data(), out.data(), static_cast<uint32_t>(frames), ctx.sample_rate, ctx.channels);
+                    echidna_process_block(in.data(),
+                                          out.data(),
+                                          static_cast<uint32_t>(frames),
+                                          ctx.sample_rate,
+                                          ctx.channels);
                 if (dsp != ECHIDNA_RESULT_OK)
                 {
                     return result;
@@ -133,21 +137,40 @@ namespace echidna
 
         bool TinyAlsaHookManager::install()
         {
-            void *read_target = resolver_.findSymbol("libtinyalsa.so", "pcm_read");
+            last_info_ = {};
+            const char *library = "libtinyalsa.so";
+            void *read_target = resolver_.findSymbol(library, "pcm_read");
             if (read_target)
             {
                 hook_read_.install(read_target,
                                    reinterpret_cast<void *>(&ReplacementRead),
                                    reinterpret_cast<void **>(&gOriginalRead));
             }
-            void *readi_target = resolver_.findSymbol("libtinyalsa.so", "pcm_readi");
+            void *readi_target = resolver_.findSymbol(library, "pcm_readi");
             if (readi_target)
             {
                 hook_readi_.install(readi_target,
                                     reinterpret_cast<void *>(&ReplacementReadi),
                                     reinterpret_cast<void **>(&gOriginalReadi));
             }
-            return gOriginalRead || gOriginalReadi;
+            if (gOriginalRead)
+            {
+                last_info_.success = true;
+                last_info_.library = library;
+                last_info_.symbol = "pcm_read";
+                last_info_.reason.clear();
+                return true;
+            }
+            if (gOriginalReadi)
+            {
+                last_info_.success = true;
+                last_info_.library = library;
+                last_info_.symbol = "pcm_readi";
+                last_info_.reason.clear();
+                return true;
+            }
+            last_info_.reason = "symbol_not_found";
+            return false;
         }
 
         int TinyAlsaHookManager::ReplacementRead(void *pcm, void *data, unsigned int count)

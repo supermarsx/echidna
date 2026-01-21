@@ -176,6 +176,8 @@ namespace echidna
 
         bool OpenSLHookManager::install()
         {
+            last_info_ = {};
+            const char *library = "libOpenSLES.so";
             static const char *kCandidates[] = {
                 "SLAndroidSimpleBufferQueueItf_Enqueue",
                 "SLBufferQueueItf_CallbackProxy",
@@ -184,7 +186,7 @@ namespace echidna
 
             for (const char *symbol : kCandidates)
             {
-                void *target = resolver_.findSymbol("libOpenSLES.so", symbol);
+                void *target = resolver_.findSymbol(library, symbol);
                 if (!target)
                 {
                     continue;
@@ -193,12 +195,21 @@ namespace echidna
                                   reinterpret_cast<void **>(&gOriginalCallback)))
                 {
                     active_symbol_ = symbol;
+                    last_info_.success = true;
+                    last_info_.library = library;
+                    last_info_.symbol = symbol;
+                    last_info_.reason.clear();
                     __android_log_print(ANDROID_LOG_INFO,
                                         "echidna",
                                         "OpenSL hook installed at %s",
                                         symbol);
                     return true;
                 }
+                last_info_.reason = "hook_failed";
+            }
+            if (last_info_.reason.empty())
+            {
+                last_info_.reason = "symbol_not_found";
             }
             return false;
         }

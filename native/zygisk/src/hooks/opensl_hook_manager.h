@@ -31,7 +31,7 @@ namespace echidna
       explicit OpenSLHookManager(utils::PltResolver &resolver);
 
       bool install() override;
-      const char *name() const override { return active_symbol_.c_str(); }
+      const char *name() const override { return "OpenSL"; }
       const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
     private:

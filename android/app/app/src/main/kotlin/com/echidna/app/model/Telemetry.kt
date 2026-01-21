@@ -10,6 +10,9 @@ data class TelemetrySample(
 
 data class HookTelemetry(
     val name: String,
+    val library: String,
+    val symbol: String,
+    val reason: String,
     val attempts: Int,
     val successes: Int,
     val failures: Int,

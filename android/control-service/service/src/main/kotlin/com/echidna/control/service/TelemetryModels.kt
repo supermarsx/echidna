@@ -17,6 +17,9 @@ internal data class TelemetrySample(
 
 internal data class HookTelemetry(
     val name: String,
+    val library: String,
+    val symbol: String,
+    val reason: String,
     val attempts: Int,
     val successes: Int,
     val failures: Int,
@@ -88,6 +91,15 @@ internal data class TelemetrySnapshot(
         hooks.forEach { hook ->
             val obj = JSONObject()
             obj.put("name", hook.name)
+            if (hook.library.isNotEmpty()) {
+                obj.put("library", hook.library)
+            }
+            if (hook.symbol.isNotEmpty()) {
+                obj.put("symbol", hook.symbol)
+            }
+            if (hook.reason.isNotEmpty()) {
+                obj.put("reason", hook.reason)
+            }
             obj.put("attempts", hook.attempts)
             obj.put("successes", hook.successes)
             obj.put("failures", hook.failures)
@@ -110,7 +122,12 @@ internal data class TelemetrySnapshot(
             val obj = JSONObject()
             obj.put("name", hook.name)
             obj.put("attempts", hook.attempts)
-            obj.put("successRate", if (hook.attempts == 0) 0.0 else hook.successes.toDouble() / hook.attempts)
+            val successRate = if (hook.attempts == 0) {
+                0.0
+            } else {
+                hook.successes.toDouble() / hook.attempts
+            }
+            obj.put("successRate", successRate)
             hooksArray.put(obj)
         }
         root.put("hooks", hooksArray)

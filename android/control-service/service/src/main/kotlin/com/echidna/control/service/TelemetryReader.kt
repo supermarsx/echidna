@@ -7,7 +7,7 @@ import java.nio.ByteOrder
 import kotlin.collections.ArrayList
 
 private const val TELEMETRY_MAGIC = 0xEDC1DA10u
-private const val TELEMETRY_VERSION = 1
+private const val TELEMETRY_VERSION = 2
 private const val SHARED_MEMORY_PATH = "/dev/shm/echidna_telemetry"
 
 internal class TelemetryReader {
@@ -18,7 +18,11 @@ internal class TelemetryReader {
         }
         RandomAccessFile(file, "r").use { raf ->
             val channel = raf.channel
-            val buffer = channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, 0, channel.size())
+            val buffer = channel.map(
+                java.nio.channels.FileChannel.MapMode.READ_ONLY,
+                0,
+                channel.size()
+            )
             buffer.order(ByteOrder.LITTLE_ENDIAN)
             return parse(buffer)
         }
@@ -33,7 +37,7 @@ internal class TelemetryReader {
             return null
         }
         val version = buffer.int
-        if (version != TELEMETRY_VERSION) {
+        if (version != 1 && version != TELEMETRY_VERSION) {
             return null
         }
         val layoutSize = buffer.int
@@ -85,6 +89,27 @@ internal class TelemetryReader {
             val nameBytes = ByteArray(32)
             buffer.get(nameBytes)
             val name = nameBytes.decodeToString().trimEnd('\u0000')
+            val library = if (version >= 2) {
+                val bytes = ByteArray(32)
+                buffer.get(bytes)
+                bytes.decodeToString().trimEnd('\u0000')
+            } else {
+                ""
+            }
+            val symbol = if (version >= 2) {
+                val bytes = ByteArray(48)
+                buffer.get(bytes)
+                bytes.decodeToString().trimEnd('\u0000')
+            } else {
+                ""
+            }
+            val reason = if (version >= 2) {
+                val bytes = ByteArray(48)
+                buffer.get(bytes)
+                bytes.decodeToString().trimEnd('\u0000')
+            } else {
+                ""
+            }
             val attempts = buffer.int
             val successes = buffer.int
             val failures = buffer.int
@@ -92,18 +117,36 @@ internal class TelemetryReader {
             val lastAttempt = buffer.long
             val lastSuccess = buffer.long
             if (name.isNotEmpty() || attempts > 0 || successes > 0) {
-                hooks += HookTelemetry(name, attempts, successes, failures, lastAttempt, lastSuccess)
+                hooks += HookTelemetry(
+                    name,
+                    library,
+                    symbol,
+                    reason,
+                    attempts,
+                    successes,
+                    failures,
+                    lastAttempt,
+                    lastSuccess
+                )
             }
         }
 
-        val avgLatencyMsComputed = if (totalCallbacks == 0L) 0f else (totalCallbackNs / totalCallbacks) / 1_000_000f
+        val avgLatencyMsComputed = if (totalCallbacks == 0L) {
+            0f
+        } else {
+            (totalCallbackNs / totalCallbacks) / 1_000_000f
+        }
         val avgCpuPercentComputed = if (totalCallbackNs == 0L) 0f
         else (totalCpuNs.toDouble() / totalCallbackNs.toDouble() * 100.0).toFloat()
 
         return TelemetrySnapshot(
             totalCallbacks = totalCallbacks,
             averageLatencyMs = if (avgLatencyMs.isFinite()) avgLatencyMs else avgLatencyMsComputed,
-            averageCpuPercent = if (avgCpuPercent.isFinite()) avgCpuPercent else avgCpuPercentComputed,
+            averageCpuPercent = if (avgCpuPercent.isFinite()) {
+                avgCpuPercent
+            } else {
+                avgCpuPercentComputed
+            },
             inputRms = inputRms,
             outputRms = outputRms,
             inputPeak = inputPeak,

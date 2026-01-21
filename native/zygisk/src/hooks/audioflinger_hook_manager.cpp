@@ -160,7 +160,9 @@ namespace echidna
                     uint32_t sr = 0;
                     uint32_t mask = 0;
                     std::memcpy(&sr, base + static_cast<size_t>(gSampleRateOffset), sizeof(sr));
-                    std::memcpy(&mask, base + static_cast<size_t>(gChannelMaskOffset), sizeof(mask));
+                    std::memcpy(&mask,
+                                base + static_cast<size_t>(gChannelMaskOffset),
+                                sizeof(mask));
                     if (sr > 8000 && sr < 192000)
                     {
                         ctx.sample_rate = sr;
@@ -228,7 +230,8 @@ namespace echidna
                 auto &state = state::SharedState::instance();
                 const std::string &process = utils::CachedProcessName();
                 const bool allow = state.hooksEnabled() &&
-                                   (state.isProcessWhitelisted(process) || process == "audioserver");
+                                   (state.isProcessWhitelisted(process) ||
+                                    process == "audioserver");
                 if (!allow)
                 {
                     return gOriginalThreadLoop ? gOriginalThreadLoop(thiz) : false;
@@ -267,10 +270,13 @@ namespace echidna
                                                1000000000ll +
                                            (static_cast<int64_t>(cpu_end.tv_nsec) -
                                             static_cast<int64_t>(cpu_start.tv_nsec));
-                const uint32_t wall_us = static_cast<uint32_t>(std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
-                const uint32_t cpu_us = static_cast<uint32_t>(std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
-                const uint64_t timestamp_ns = static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
-                                              static_cast<uint64_t>(wall_end.tv_nsec);
+                const uint32_t wall_us = static_cast<uint32_t>(
+                    std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
+                const uint32_t cpu_us = static_cast<uint32_t>(
+                    std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
+                const uint64_t timestamp_ns =
+                    static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
+                    static_cast<uint64_t>(wall_end.tv_nsec);
 
                 state.telemetry().recordCallback(timestamp_ns,
                                                  wall_us,
@@ -288,6 +294,8 @@ namespace echidna
 
         bool AudioFlingerHookManager::install()
         {
+            last_info_ = {};
+            const char *library = "libaudioflinger.so";
             static const char *kCandidates[] = {
                 "_ZN7android12AudioFlinger11RecordThread10threadLoopEv",
                 "_ZN7android12AudioFlinger17RecordTrackHandle10threadLoopEv",
@@ -295,7 +303,7 @@ namespace echidna
             bool installed = false;
             for (const char *symbol : kCandidates)
             {
-                void *target = resolver_.findSymbol("libaudioflinger.so", symbol);
+                void *target = resolver_.findSymbol(library, symbol);
                 if (!target)
                 {
                     continue;
@@ -308,13 +316,19 @@ namespace echidna
                                         "echidna",
                                         "AudioFlinger threadLoop hook installed at %s",
                                         symbol);
+                    last_info_.success = true;
+                    last_info_.library = library;
+                    last_info_.symbol = symbol;
+                    last_info_.reason.clear();
                     installed = true;
                     break;
                 }
+                last_info_.reason = "hook_failed";
             }
 
-            void *read_target = resolver_.findSymbol("libaudioflinger.so",
-                                                     "_ZN7android12AudioFlinger10RecordThread4readEPvjj");
+            void *read_target =
+                resolver_.findSymbol(library,
+                                     "_ZN7android12AudioFlinger10RecordThread4readEPvjj");
             if (read_target)
             {
                 hook_read_.install(read_target,
@@ -323,7 +337,7 @@ namespace echidna
             }
 
             void *process_target =
-                resolver_.findSymbol("libaudioflinger.so",
+                resolver_.findSymbol(library,
                                      "_ZN7android12AudioFlinger10RecordThread13processVolumeEPKvj");
             if (process_target)
             {
@@ -334,6 +348,10 @@ namespace echidna
 
             if (!installed)
             {
+                if (last_info_.reason.empty())
+                {
+                    last_info_.reason = "symbol_not_found";
+                }
                 __android_log_print(ANDROID_LOG_WARN, "echidna", "AudioFlinger hook not installed");
             }
             return installed;
@@ -426,14 +444,19 @@ namespace echidna
 
             auto &state = state::SharedState::instance();
             const std::string &process = utils::CachedProcessName();
-            if (!state.hooksEnabled() || (!state.isProcessWhitelisted(process) && process != "audioserver"))
+            if (!state.hooksEnabled() ||
+                (!state.isProcessWhitelisted(process) && process != "audioserver"))
             {
                 return read_bytes;
             }
 
             const CaptureContext ctx = ResolveContext(thiz);
 
-            if (!ProcessPcmBuffer(thiz, buffer, static_cast<size_t>(read_bytes), ctx, gOriginalRead))
+            if (!ProcessPcmBuffer(thiz,
+                                  buffer,
+                                  static_cast<size_t>(read_bytes),
+                                  ctx,
+                                  gOriginalRead))
             {
                 return read_bytes;
             }
@@ -444,7 +467,8 @@ namespace echidna
         {
             auto &state = state::SharedState::instance();
             const std::string &process = utils::CachedProcessName();
-            if (!state.hooksEnabled() || (!state.isProcessWhitelisted(process) && process != "audioserver"))
+            if (!state.hooksEnabled() ||
+                (!state.isProcessWhitelisted(process) && process != "audioserver"))
             {
                 return gOriginalProcess ? gOriginalProcess(thiz, buffer, bytes) : -1;
             }

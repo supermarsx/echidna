@@ -126,16 +126,25 @@ namespace echidna
                     }
                 }
 
-                const int64_t wall_ns_raw = (static_cast<int64_t>(wall_end.tv_sec) - static_cast<int64_t>(wall_start.tv_sec)) *
-                                                1000000000ll +
-                                            (static_cast<int64_t>(wall_end.tv_nsec) - static_cast<int64_t>(wall_start.tv_nsec));
-                const int64_t cpu_ns_raw = (static_cast<int64_t>(cpu_end.tv_sec) - static_cast<int64_t>(cpu_start.tv_sec)) *
-                                               1000000000ll +
-                                           (static_cast<int64_t>(cpu_end.tv_nsec) - static_cast<int64_t>(cpu_start.tv_nsec));
-                const uint32_t wall_us = static_cast<uint32_t>(std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
-                const uint32_t cpu_us = static_cast<uint32_t>(std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
-                const uint64_t timestamp_ns = static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
-                                              static_cast<uint64_t>(wall_end.tv_nsec);
+                const int64_t wall_ns_raw =
+                    (static_cast<int64_t>(wall_end.tv_sec) -
+                     static_cast<int64_t>(wall_start.tv_sec)) *
+                        1000000000ll +
+                    (static_cast<int64_t>(wall_end.tv_nsec) -
+                     static_cast<int64_t>(wall_start.tv_nsec));
+                const int64_t cpu_ns_raw =
+                    (static_cast<int64_t>(cpu_end.tv_sec) -
+                     static_cast<int64_t>(cpu_start.tv_sec)) *
+                        1000000000ll +
+                    (static_cast<int64_t>(cpu_end.tv_nsec) -
+                     static_cast<int64_t>(cpu_start.tv_nsec));
+                const uint32_t wall_us = static_cast<uint32_t>(
+                    std::max<int64_t>(wall_ns_raw, 0ll) / 1000ll);
+                const uint32_t cpu_us = static_cast<uint32_t>(
+                    std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
+                const uint64_t timestamp_ns =
+                    static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
+                    static_cast<uint64_t>(wall_end.tv_nsec);
 
                 state.telemetry().recordCallback(timestamp_ns,
                                                  wall_us,
@@ -153,14 +162,17 @@ namespace echidna
 
         bool AudioRecordHookManager::install()
         {
+            last_info_ = {};
+            const char *library = "libmedia.so";
             static const char *kCandidates[] = {
                 "_ZN7android11AudioRecord4readEPvj",  // AudioRecord::read(void*, unsigned int)
-                "_ZN7android11AudioRecord4readEPvjb", // AudioRecord::read(void*, unsigned int, bool)
+                "_ZN7android11AudioRecord4readEPvjb",
+                // AudioRecord::read(void*, unsigned int, bool)
             };
 
             for (const char *symbol : kCandidates)
             {
-                void *target = resolver_.findSymbol("libmedia.so", symbol);
+                void *target = resolver_.findSymbol(library, symbol);
                 if (!target)
                 {
                     continue;
@@ -169,14 +181,29 @@ namespace echidna
                                   reinterpret_cast<void **>(&gOriginalRead)))
                 {
                     active_symbol_ = symbol;
-                    __android_log_print(ANDROID_LOG_INFO, "echidna", "AudioRecord hook installed at %s", symbol);
+                    last_info_.success = true;
+                    last_info_.library = library;
+                    last_info_.symbol = symbol;
+                    last_info_.reason.clear();
+                    __android_log_print(ANDROID_LOG_INFO,
+                                        "echidna",
+                                        "AudioRecord hook installed at %s",
+                                        symbol);
                     return true;
                 }
+                last_info_.reason = "hook_failed";
+            }
+            if (last_info_.reason.empty())
+            {
+                last_info_.reason = "symbol_not_found";
             }
             return false;
         }
 
-        ssize_t AudioRecordHookManager::Replacement(void *instance, void *buffer, size_t bytes, bool blocking)
+        ssize_t AudioRecordHookManager::Replacement(void *instance,
+                                                    void *buffer,
+                                                    size_t bytes,
+                                                    bool blocking)
         {
             return ForwardRead(instance, buffer, bytes, blocking);
         }

@@ -188,7 +188,9 @@ namespace echidna
                 layout_->rolling_cpu_percent = static_cast<float>(cpu_ratio * 100.0);
             }
 
-            layout_->warning_flags &= ~(kTelemetryWarningHighLatency | kTelemetryWarningHighCpu | kTelemetryWarningXrun);
+            layout_->warning_flags &= ~(kTelemetryWarningHighLatency |
+                                        kTelemetryWarningHighCpu |
+                                        kTelemetryWarningXrun);
             if (duration_us > 30000)
             {
                 layout_->warning_flags |= kTelemetryWarningHighLatency;
@@ -232,7 +234,10 @@ namespace echidna
 
         void TelemetrySharedMemory::registerHookResult(const std::string &hook_name,
                                                        bool success,
-                                                       uint64_t timestamp_ns)
+                                                       uint64_t timestamp_ns,
+                                                       const std::string &library,
+                                                       const std::string &symbol,
+                                                       const std::string &reason)
         {
             std::scoped_lock lock(mutex_);
             if (!layout_)
@@ -271,6 +276,21 @@ namespace echidna
                 std::strncpy(record->name, hook_name.c_str(), sizeof(record->name) - 1);
             }
 
+            std::memset(record->library, 0, sizeof(record->library));
+            std::memset(record->symbol, 0, sizeof(record->symbol));
+            std::memset(record->reason, 0, sizeof(record->reason));
+            if (!library.empty())
+            {
+                std::strncpy(record->library, library.c_str(), sizeof(record->library) - 1);
+            }
+            if (!symbol.empty())
+            {
+                std::strncpy(record->symbol, symbol.c_str(), sizeof(record->symbol) - 1);
+            }
+            if (!reason.empty())
+            {
+                std::strncpy(record->reason, reason.c_str(), sizeof(record->reason) - 1);
+            }
             record->attempts += 1;
             record->last_attempt_ns = timestamp_ns;
             if (success)

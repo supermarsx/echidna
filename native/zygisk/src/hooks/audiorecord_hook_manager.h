@@ -28,7 +28,7 @@ namespace echidna
        * @brief Installs AudioRecord::read hooks (native bridge).
        */
       bool install() override;
-      const char *name() const override { return active_symbol_.c_str(); }
+      const char *name() const override { return "AudioRecord"; }
       const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
     private:

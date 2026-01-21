@@ -69,7 +69,7 @@
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [ ] Extend PltResolver with PLT/GOT scan and vendor symbol heuristics.  
   Spec: [4.1](spec.md#41-symbol-discovery--hooking-method)
-- [ ] Add hook selection telemetry (symbol path, lib, fallback reason).  
+- [x] Add hook selection telemetry (symbol path, lib, fallback reason).  
   Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)
 - [ ] Add API-level guards to hook managers for vendor ABI changes.  
   Spec: [4.3](spec.md#43-hooking-details--robustness)
@@ -129,6 +129,8 @@
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [x] Hook AAudio read/write paths and route through DSP.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
+- [x] Capture hook selection telemetry details for diagnostics.  
+  Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)
 - [x] Document Magisk packaging script and release checklist.  
   Spec: [7](spec.md#7-installation--deployment-steps-developer--user-flows)
 - [x] Validate process names before updating the whitelist snapshot.  

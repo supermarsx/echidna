@@ -413,9 +413,10 @@ namespace echidna
 
         bool AAudioHookManager::install()
         {
+            last_info_ = {};
             bool installed = false;
-            if (void *symbol =
-                    resolver_.findSymbol("libaaudio.so", "AAudioStream_dataCallback"))
+            const char *library = "libaaudio.so";
+            if (void *symbol = resolver_.findSymbol(library, "AAudioStream_dataCallback"))
             {
                 if (hook_.install(symbol,
                                   reinterpret_cast<void *>(&ForwardCallback),
@@ -424,6 +425,10 @@ namespace echidna
                     __android_log_print(ANDROID_LOG_INFO,
                                         "echidna",
                                         "AAudio data callback hook installed");
+                    last_info_.success = true;
+                    last_info_.library = library;
+                    last_info_.symbol = "AAudioStream_dataCallback";
+                    last_info_.reason.clear();
                     installed = true;
                 }
                 else
@@ -431,10 +436,11 @@ namespace echidna
                     __android_log_print(ANDROID_LOG_WARN,
                                         "echidna",
                                         "Failed to install AAudio data callback hook");
+                    last_info_.reason = "hook_failed";
                 }
             }
 
-            if (void *symbol = resolver_.findSymbol("libaaudio.so", "AAudioStream_read"))
+            if (void *symbol = resolver_.findSymbol(library, "AAudioStream_read"))
             {
                 if (hook_read_.install(symbol,
                                        reinterpret_cast<void *>(&ForwardRead),
@@ -443,11 +449,15 @@ namespace echidna
                     __android_log_print(ANDROID_LOG_INFO,
                                         "echidna",
                                         "AAudio read hook installed");
+                    last_info_.success = true;
+                    last_info_.library = library;
+                    last_info_.symbol = "AAudioStream_read";
+                    last_info_.reason.clear();
                     installed = true;
                 }
             }
 
-            if (void *symbol = resolver_.findSymbol("libaaudio.so", "AAudioStream_write"))
+            if (void *symbol = resolver_.findSymbol(library, "AAudioStream_write"))
             {
                 if (hook_write_.install(symbol,
                                         reinterpret_cast<void *>(&ForwardWrite),
@@ -456,12 +466,20 @@ namespace echidna
                     __android_log_print(ANDROID_LOG_INFO,
                                         "echidna",
                                         "AAudio write hook installed");
+                    last_info_.success = true;
+                    last_info_.library = library;
+                    last_info_.symbol = "AAudioStream_write";
+                    last_info_.reason.clear();
                     installed = true;
                 }
             }
 
             if (!installed)
             {
+                if (last_info_.reason.empty())
+                {
+                    last_info_.reason = "symbol_not_found";
+                }
                 __android_log_print(ANDROID_LOG_WARN, "echidna", "AAudio hook not installed");
             }
             return installed;

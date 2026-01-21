@@ -21,7 +21,7 @@ namespace echidna
 
         constexpr const char *kTelemetrySharedMemoryName = "/echidna_telemetry";
         constexpr uint32_t kTelemetryMagic = 0xEDC1DA10u;
-        constexpr uint32_t kTelemetryVersion = 1u;
+        constexpr uint32_t kTelemetryVersion = 2u;
         constexpr size_t kTelemetryMaxSamples = 96;
         constexpr size_t kTelemetryMaxHooks = 8;
 
@@ -58,6 +58,9 @@ namespace echidna
         struct TelemetryHookRecord
         {
             char name[32];
+            char library[32];
+            char symbol[48];
+            char reason[48];
             uint32_t attempts;
             uint32_t successes;
             uint32_t failures;
@@ -126,7 +129,10 @@ namespace echidna
              */
             void registerHookResult(const std::string &hook_name,
                                     bool success,
-                                    uint64_t timestamp_ns);
+                                    uint64_t timestamp_ns,
+                                    const std::string &library,
+                                    const std::string &symbol,
+                                    const std::string &reason);
 
             /**
              * @brief Sets warning flags (latency/CPU/xrun).
