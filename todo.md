@@ -17,7 +17,7 @@
   Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)
 
 ### DSP pipeline
-- [ ] Panic and auto-bypass triggers are not implemented in the native path.  
+- [x] Panic and auto-bypass triggers are not implemented in the native path.  
   Spec: [12](spec.md#12-safety--emergency-ux-native-risks)
 - [ ] Hybrid worker mode lacks watchdog and xrun reporting integration.  
   Spec: [5](spec.md#5-dsp-pipeline--low-level-performance)
@@ -47,7 +47,7 @@
 ### LSPosed shim
 - [ ] Per-app whitelist UI and profile binding status are missing.  
   Spec: [16.4](spec.md#164-per-app-scope-unchanged-with-preset-binding)
-- [ ] Java AudioRecord hook does not enforce per-app policy fail-closed.  
+- [x] Java AudioRecord hook does not enforce per-app policy fail-closed.  
   Spec: [Java/Kotlin](spec.md#3-high-level-native-architecture-detailed)
 
 ### Tooling, CI, docs
@@ -75,9 +75,9 @@
   Spec: [4.3](spec.md#43-hooking-details--robustness)
 
 ### DSP pipeline
-- [ ] Implement latency watchdog and auto-bypass for sustained overruns.  
+- [x] Implement latency watchdog and auto-bypass for sustained overruns.  
   Spec: [12](spec.md#12-safety--emergency-ux-native-risks)
-- [ ] Add panic bypass toggle and timer to native engine state.  
+- [x] Add panic bypass toggle and timer to native engine state.  
   Spec: [12](spec.md#12-safety--emergency-ux-native-risks)
 - [ ] Expose preset safety warnings in telemetry shared memory.  
   Spec: [17](spec.md#17-effect-parameter-reference-safe-ranges--warnings)

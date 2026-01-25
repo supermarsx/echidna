@@ -8,6 +8,7 @@ import com.echidna.lsposed.core.ModuleState;
 import com.echidna.lsposed.core.NativeBridge;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -22,6 +23,7 @@ public final class AudioRecordHook {
 
     private static final String TAG = "EchidnaAudioRecord";
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
+    private static final byte[] ZERO_BYTES = new byte[4096];
 
     private AudioRecordHook() {
     }
@@ -161,7 +163,18 @@ public final class AudioRecordHook {
                 return;
             }
             int samplesOrBytes = (Integer) result;
-            if (samplesOrBytes <= 0 || !state.shouldProcessAudio()) {
+            if (samplesOrBytes <= 0) {
+                return;
+            }
+            if (!state.isHookAllowed()) {
+                BufferContext context = BufferContext.from(param);
+                if (context.isValid()) {
+                    zeroBuffer(context, samplesOrBytes);
+                }
+                param.setResult(0);
+                return;
+            }
+            if (!state.shouldProcessAudio()) {
                 return;
             }
             BufferContext context = BufferContext.from(param);
@@ -180,6 +193,55 @@ public final class AudioRecordHook {
         abstract int computeFrames(BufferContext context, int resultUnits);
 
         abstract boolean process(BufferContext context, int frames, int resultUnits);
+
+        void zeroBuffer(BufferContext context, int resultUnits) {
+            Object buffer = context.args[0];
+            if (buffer instanceof byte[]) {
+                int offset = (Integer) context.args[1];
+                byte[] data = (byte[]) buffer;
+                int end = Math.min(data.length, offset + resultUnits);
+                if (offset >= 0 && offset < end) {
+                    Arrays.fill(data, offset, end, (byte) 0);
+                }
+                return;
+            }
+            if (buffer instanceof short[]) {
+                int offset = (Integer) context.args[1];
+                short[] data = (short[]) buffer;
+                int end = Math.min(data.length, offset + resultUnits);
+                if (offset >= 0 && offset < end) {
+                    Arrays.fill(data, offset, end, (short) 0);
+                }
+                return;
+            }
+            if (buffer instanceof float[]) {
+                int offset = (Integer) context.args[1];
+                float[] data = (float[]) buffer;
+                int end = Math.min(data.length, offset + resultUnits);
+                if (offset >= 0 && offset < end) {
+                    Arrays.fill(data, offset, end, 0.0f);
+                }
+                return;
+            }
+            if (buffer instanceof ByteBuffer) {
+                ByteBuffer byteBuffer = (ByteBuffer) buffer;
+                int end = Math.min(byteBuffer.position(), byteBuffer.capacity());
+                int start = end - resultUnits;
+                if (start < 0) {
+                    start = 0;
+                }
+                if (start >= end) {
+                    return;
+                }
+                ByteBuffer dup = byteBuffer.duplicate();
+                dup.position(start);
+                dup.limit(end);
+                while (dup.remaining() > 0) {
+                    int chunk = Math.min(dup.remaining(), ZERO_BYTES.length);
+                    dup.put(ZERO_BYTES, 0, chunk);
+                }
+            }
+        }
     }
 
     private static final class BufferContext {

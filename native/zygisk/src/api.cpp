@@ -13,6 +13,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
+#include <time.h>
 #include <string>
 #include <string_view>
 #include <vector>

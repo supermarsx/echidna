@@ -67,6 +67,13 @@ public final class ModuleState {
         return hooksActivated.get() && !isBypassActive() && NativeBridge.isEngineReady();
     }
 
+    /**
+     * Returns whether this process is explicitly allowed to hook AudioRecord.
+     */
+    public boolean isHookAllowed() {
+        return hooksActivated.get();
+    }
+
     public boolean isBypassActive() {
         return bypassOverride.get() || currentConfig.get().bypassRequested();
     }

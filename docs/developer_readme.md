@@ -28,6 +28,21 @@ entry points are:
 
 `echidna_status_t` mirrors the shared state flags used by the hook managers and the companion app.
 
+## Safety Watchdog
+
+The native DSP bridge implements an auto-bypass watchdog for sustained overruns as described in
+spec: [12](spec.md#12-safety--emergency-ux-native-risks). When callback processing exceeds the
+threshold for N consecutive blocks, the process enters bypass mode for a short cooldown window.
+
+Runtime tuning is available via environment variables:
+
+- `ECHIDNA_WATCHDOG_US` sets the per-callback overrun threshold in microseconds.
+- `ECHIDNA_WATCHDOG_CONSEC` sets the consecutive overrun count needed to trigger auto-bypass.
+- `ECHIDNA_BYPASS_MS` sets the auto-bypass cooldown duration in milliseconds.
+- `ECHIDNA_PANIC_MS` sets the bypass duration used by the Java panic toggle (0 = manual).
+
+Bypassed callbacks set telemetry flags and increment XRuns in shared memory for diagnostics.
+
 ## Control Service Binder Surface
 
 The control service exposes `IEchidnaControlService` over Binder. Companion applications should
