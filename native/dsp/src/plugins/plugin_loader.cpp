@@ -20,7 +20,11 @@
 #include <cctype>
 #include <cerrno>
 #include <cstring>
+#ifdef _WIN32
+#include <filesystem>
+#else
 #include <dirent.h>
+#endif
 #include <fstream>
 #include <memory>
 #include <string>
@@ -41,7 +45,15 @@ namespace
   bool FileExists(const std::string &path)
   {
     struct stat st;
-    return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+    if (stat(path.c_str(), &st) != 0)
+    {
+      return false;
+    }
+#ifdef _WIN32
+    return (st.st_mode & _S_IFREG) != 0;
+#else
+    return S_ISREG(st.st_mode);
+#endif
   }
 
 #ifdef ECHIDNA_HAS_BORINGSSL
@@ -246,6 +258,28 @@ namespace echidna::dsp::plugins
     {
       return;
     }
+#ifdef _WIN32
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator(directory, error))
+    {
+      if (error)
+      {
+        break;
+      }
+      if (!entry.is_regular_file())
+      {
+        continue;
+      }
+      const std::string name = entry.path().filename().string();
+      if (!HasSuffix(name, ".so"))
+      {
+        continue;
+      }
+      LoadPlugin(entry.path().string());
+    }
+    loaded_ = true;
+    return;
+#else
     DIR *dir = opendir(directory.c_str());
     if (!dir)
     {
@@ -272,6 +306,7 @@ namespace echidna::dsp::plugins
     }
     closedir(dir);
     loaded_ = true;
+#endif
   }
 
   /**
