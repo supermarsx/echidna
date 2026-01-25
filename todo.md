@@ -11,7 +11,7 @@
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [ ] Symbol discovery lacks multi-stage heuristics (PLT scan, signature match).  
   Spec: [4.1](spec.md#41-symbol-discovery--hooking-method)
-- [ ] Per-API level guards are not explicit around vendor symbol variants.  
+- [x] Per-API level guards are not explicit around vendor symbol variants.  
   Spec: [4.3](spec.md#43-hooking-details--robustness)
 - [ ] Hook failure telemetry does not surface which symbol path was chosen.  
   Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)
@@ -71,7 +71,7 @@
   Spec: [4.1](spec.md#41-symbol-discovery--hooking-method)
 - [x] Add hook selection telemetry (symbol path, lib, fallback reason).  
   Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)
-- [ ] Add API-level guards to hook managers for vendor ABI changes.  
+- [x] Add API-level guards to hook managers for vendor ABI changes.  
   Spec: [4.3](spec.md#43-hooking-details--robustness)
 
 ### DSP pipeline

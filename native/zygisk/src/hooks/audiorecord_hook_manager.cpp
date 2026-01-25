@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "state/shared_state.h"
+#include "utils/api_level_probe.h"
 #include "utils/process_utils.h"
 #include "utils/telemetry_shared_memory.h"
 #include "echidna/api.h"
@@ -34,6 +35,12 @@ namespace echidna
         {
             using ReadFn = ssize_t (*)(void *, void *, size_t, bool);
             ReadFn gOriginalRead = nullptr;
+            struct SymbolCandidate
+            {
+                const char *symbol;
+                int min_api;
+                int max_api;
+            };
 
             uint32_t DefaultSampleRate()
             {
@@ -164,38 +171,67 @@ namespace echidna
         {
             last_info_ = {};
             const char *library = "libmedia.so";
-            static const char *kCandidates[] = {
-                "_ZN7android11AudioRecord4readEPvj",  // AudioRecord::read(void*, unsigned int)
-                "_ZN7android11AudioRecord4readEPvjb",
+            static const SymbolCandidate kCandidates[] = {
+                {"_ZN7android11AudioRecord4readEPvjb", 23, -1},
                 // AudioRecord::read(void*, unsigned int, bool)
+                {"_ZN7android11AudioRecord4readEPvj", 0, 22},
+                // AudioRecord::read(void*, unsigned int)
             };
 
-            for (const char *symbol : kCandidates)
+            const int api_level = utils::ApiLevelProbe().apiLevel();
+            bool skipped_by_guard = false;
+            auto attempt_install = [&](bool enforce_guard) -> bool
             {
-                void *target = resolver_.findSymbol(library, symbol);
-                if (!target)
+                for (const auto &candidate : kCandidates)
                 {
-                    continue;
+                    if (enforce_guard)
+                    {
+                        if (api_level < candidate.min_api ||
+                            (candidate.max_api >= 0 && api_level > candidate.max_api))
+                        {
+                            skipped_by_guard = true;
+                            continue;
+                        }
+                    }
+                    void *target = resolver_.findSymbol(library, candidate.symbol);
+                    if (!target)
+                    {
+                        continue;
+                    }
+                    if (hook_.install(target, reinterpret_cast<void *>(&ForwardRead),
+                                      reinterpret_cast<void **>(&gOriginalRead)))
+                    {
+                        active_symbol_ = candidate.symbol;
+                        last_info_.success = true;
+                        last_info_.library = library;
+                        last_info_.symbol = candidate.symbol;
+                        last_info_.reason.clear();
+                        __android_log_print(ANDROID_LOG_INFO,
+                                            "echidna",
+                                            "AudioRecord hook installed at %s",
+                                            candidate.symbol);
+                        return true;
+                    }
+                    last_info_.reason = "hook_failed";
                 }
-                if (hook_.install(target, reinterpret_cast<void *>(&ForwardRead),
-                                  reinterpret_cast<void **>(&gOriginalRead)))
+                return false;
+            };
+
+            if (attempt_install(true))
+            {
+                return true;
+            }
+            if (attempt_install(false))
+            {
+                if (last_info_.reason.empty())
                 {
-                    active_symbol_ = symbol;
-                    last_info_.success = true;
-                    last_info_.library = library;
-                    last_info_.symbol = symbol;
-                    last_info_.reason.clear();
-                    __android_log_print(ANDROID_LOG_INFO,
-                                        "echidna",
-                                        "AudioRecord hook installed at %s",
-                                        symbol);
-                    return true;
+                    last_info_.reason = "api_guard_relaxed";
                 }
-                last_info_.reason = "hook_failed";
+                return true;
             }
             if (last_info_.reason.empty())
             {
-                last_info_.reason = "symbol_not_found";
+                last_info_.reason = skipped_by_guard ? "api_guard_blocked" : "symbol_not_found";
             }
             return false;
         }

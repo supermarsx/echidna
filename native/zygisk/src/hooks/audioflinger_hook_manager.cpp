@@ -24,6 +24,7 @@
 
 #include "echidna/api.h"
 #include "state/shared_state.h"
+#include "utils/api_level_probe.h"
 #include "utils/offset_probe.h"
 #include "utils/process_utils.h"
 #include "utils/telemetry_shared_memory.h"
@@ -41,6 +42,12 @@ namespace echidna
             ThreadLoopFn gOriginalThreadLoop = nullptr;
             RecordTrackReadFn gOriginalRead = nullptr;
             ProcessChunkFn gOriginalProcess = nullptr;
+            struct SymbolCandidate
+            {
+                const char *symbol;
+                int min_api;
+                int max_api;
+            };
 
             struct CaptureContext
             {
@@ -296,34 +303,58 @@ namespace echidna
         {
             last_info_ = {};
             const char *library = "libaudioflinger.so";
-            static const char *kCandidates[] = {
-                "_ZN7android12AudioFlinger11RecordThread10threadLoopEv",
-                "_ZN7android12AudioFlinger17RecordTrackHandle10threadLoopEv",
+            static const SymbolCandidate kCandidates[] = {
+                {"_ZN7android12AudioFlinger17RecordTrackHandle10threadLoopEv", 29, -1},
+                {"_ZN7android12AudioFlinger11RecordThread10threadLoopEv", 0, 28},
             };
+            const int api_level = utils::ApiLevelProbe().apiLevel();
+            bool skipped_by_guard = false;
             bool installed = false;
-            for (const char *symbol : kCandidates)
+            auto attempt_install = [&](bool enforce_guard) -> bool
             {
-                void *target = resolver_.findSymbol(library, symbol);
-                if (!target)
+                for (const auto &candidate : kCandidates)
                 {
-                    continue;
+                    if (enforce_guard)
+                    {
+                        if (api_level < candidate.min_api ||
+                            (candidate.max_api >= 0 && api_level > candidate.max_api))
+                        {
+                            skipped_by_guard = true;
+                            continue;
+                        }
+                    }
+                    void *target = resolver_.findSymbol(library, candidate.symbol);
+                    if (!target)
+                    {
+                        continue;
+                    }
+                    if (hook_.install(target,
+                                      reinterpret_cast<void *>(&ForwardThreadLoop),
+                                      reinterpret_cast<void **>(&gOriginalThreadLoop)))
+                    {
+                        __android_log_print(ANDROID_LOG_INFO,
+                                            "echidna",
+                                            "AudioFlinger threadLoop hook installed at %s",
+                                            candidate.symbol);
+                        last_info_.success = true;
+                        last_info_.library = library;
+                        last_info_.symbol = candidate.symbol;
+                        last_info_.reason.clear();
+                        return true;
+                    }
+                    last_info_.reason = "hook_failed";
                 }
-                if (hook_.install(target,
-                                  reinterpret_cast<void *>(&ForwardThreadLoop),
-                                  reinterpret_cast<void **>(&gOriginalThreadLoop)))
+                return false;
+            };
+
+            installed = attempt_install(true);
+            if (!installed)
+            {
+                installed = attempt_install(false);
+                if (installed && last_info_.reason.empty())
                 {
-                    __android_log_print(ANDROID_LOG_INFO,
-                                        "echidna",
-                                        "AudioFlinger threadLoop hook installed at %s",
-                                        symbol);
-                    last_info_.success = true;
-                    last_info_.library = library;
-                    last_info_.symbol = symbol;
-                    last_info_.reason.clear();
-                    installed = true;
-                    break;
+                    last_info_.reason = "api_guard_relaxed";
                 }
-                last_info_.reason = "hook_failed";
             }
 
             void *read_target =
@@ -350,7 +381,7 @@ namespace echidna
             {
                 if (last_info_.reason.empty())
                 {
-                    last_info_.reason = "symbol_not_found";
+                    last_info_.reason = skipped_by_guard ? "api_guard_blocked" : "symbol_not_found";
                 }
                 __android_log_print(ANDROID_LOG_WARN, "echidna", "AudioFlinger hook not installed");
             }
