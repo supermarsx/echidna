@@ -7,8 +7,13 @@
  * objects.
  */
 
-#include <dlfcn.h>
 #include <sys/stat.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -159,6 +164,41 @@ namespace
     return std::equal(suffix.rbegin(), suffix.rend(), value.rbegin());
   }
 
+  void *OpenLibrary(const char *path)
+  {
+#ifdef _WIN32
+    return static_cast<void *>(LoadLibraryA(path));
+#else
+    return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#endif
+  }
+
+  void *ResolveSymbol(void *handle, const char *name)
+  {
+    if (!handle)
+    {
+      return nullptr;
+    }
+#ifdef _WIN32
+    return reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(handle), name));
+#else
+    return dlsym(handle, name);
+#endif
+  }
+
+  void CloseLibrary(void *handle)
+  {
+    if (!handle)
+    {
+      return;
+    }
+#ifdef _WIN32
+    FreeLibrary(static_cast<HMODULE>(handle));
+#else
+    dlclose(handle);
+#endif
+  }
+
 } // namespace
 
 namespace echidna::dsp::plugins
@@ -188,7 +228,7 @@ namespace echidna::dsp::plugins
       }
       if (module.library)
       {
-        dlclose(module.library);
+        CloseLibrary(module.library);
         module.library = nullptr;
       }
     }
@@ -249,23 +289,23 @@ namespace echidna::dsp::plugins
     {
       return false;
     }
-    void *handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    void *handle = OpenLibrary(path.c_str());
     if (!handle)
     {
       return false;
     }
     auto *registration = reinterpret_cast<echidna_plugin_registration_fn>(
-        dlsym(handle, "echidna_get_plugin_module"));
+        ResolveSymbol(handle, "echidna_get_plugin_module"));
     if (!registration)
     {
-      dlclose(handle);
+      CloseLibrary(handle);
       return false;
     }
     const echidna_plugin_module_t *module = registration();
     if (!module || module->abi_version != ECHIDNA_DSP_PLUGIN_ABI_VERSION ||
         !module->descriptors || module->descriptor_count == 0)
     {
-      dlclose(handle);
+      CloseLibrary(handle);
       return false;
     }
 
@@ -301,7 +341,7 @@ namespace echidna::dsp::plugins
       modules_.emplace_back(std::move(module_handle));
       return true;
     }
-    dlclose(handle);
+    CloseLibrary(handle);
     return false;
   }
 

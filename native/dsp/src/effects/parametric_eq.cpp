@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace echidna::dsp::effects
 {
@@ -84,7 +85,8 @@ namespace echidna::dsp::effects
       const float gain_db = std::clamp(b.gain_db, -12.0f, 12.0f);
       const float q = std::clamp(b.q, 0.3f, 10.0f);
       const float a = std::pow(10.0f, gain_db / 40.0f);
-      const float w0 = 2.0f * static_cast<float>(M_PI) * freq / sr;
+      const float w0 =
+          2.0f * std::numbers::pi_v<float> * freq / sr;
       const float alpha = std::sin(w0) / (2.0f * q);
       const float cosw0 = std::cos(w0);
 
