@@ -3,17 +3,17 @@
 ## Gap analysis
 
 ### Native hooks
-- [ ] AAudio coverage is limited to data callback; no read/write hook path.  
+- [x] AAudio coverage is limited to data callback; no read/write hook path.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
-- [ ] OpenSL hook logs telemetry only; PCM is not processed.  
+- [x] OpenSL hook logs telemetry only; PCM is not processed.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
-- [ ] libc read fallback captures telemetry but does not run DSP.  
+- [x] libc read fallback captures telemetry but does not run DSP.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [ ] Symbol discovery lacks signature-match fallback for vendor-only exports.  
   Spec: [4.1](spec.md#41-symbol-discovery--hooking-method)
 - [x] Per-API level guards are not explicit around vendor symbol variants.  
   Spec: [4.3](spec.md#43-hooking-details--robustness)
-- [ ] Hook failure telemetry does not surface which symbol path was chosen.  
+- [x] Hook failure telemetry does not surface which symbol path was chosen.  
   Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)
 
 ### DSP pipeline
