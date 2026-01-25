@@ -9,7 +9,7 @@
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [ ] libc read fallback captures telemetry but does not run DSP.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
-- [ ] Symbol discovery lacks multi-stage heuristics (PLT scan, signature match).  
+- [ ] Symbol discovery lacks signature-match fallback for vendor-only exports.  
   Spec: [4.1](spec.md#41-symbol-discovery--hooking-method)
 - [x] Per-API level guards are not explicit around vendor symbol variants.  
   Spec: [4.3](spec.md#43-hooking-details--robustness)
@@ -67,7 +67,7 @@
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
 - [x] Add DSP processing to libc read fallback for /dev/snd captures.  
   Spec: [4.2](spec.md#42-primary-hook-targets-priority-order)
-- [ ] Extend PltResolver with PLT/GOT scan and vendor symbol heuristics.  
+- [x] Extend PltResolver with PLT/GOT scan and vendor symbol heuristics.  
   Spec: [4.1](spec.md#41-symbol-discovery--hooking-method)
 - [x] Add hook selection telemetry (symbol path, lib, fallback reason).  
   Spec: [9](spec.md#9-diagnostics--instrumentation-native-specific)

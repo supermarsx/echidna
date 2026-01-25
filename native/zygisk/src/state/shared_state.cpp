@@ -22,7 +22,9 @@ namespace echidna
 
         SharedState::SharedState()
             : status_(InternalStatus::kDisabled),
-              profile_("default")
+              profile_("default"),
+              bypass_enabled_(false),
+              bypass_until_ns_(0)
         {
             refreshFromSharedMemory();
         }
@@ -66,6 +68,40 @@ namespace echidna
         {
             std::scoped_lock lock(mutex_);
             return cached_snapshot_.hooks_enabled;
+        }
+
+        void SharedState::setBypass(bool enabled)
+        {
+            std::scoped_lock lock(mutex_);
+            bypass_enabled_ = enabled;
+            bypass_until_ns_ = 0;
+        }
+
+        void SharedState::setBypassUntil(uint64_t until_ns)
+        {
+            std::scoped_lock lock(mutex_);
+            bypass_enabled_ = true;
+            bypass_until_ns_ = until_ns;
+        }
+
+        bool SharedState::isBypassed(uint64_t now_ns)
+        {
+            std::scoped_lock lock(mutex_);
+            if (!bypass_enabled_)
+            {
+                return false;
+            }
+            if (bypass_until_ns_ == 0)
+            {
+                return true;
+            }
+            if (now_ns >= bypass_until_ns_)
+            {
+                bypass_enabled_ = false;
+                bypass_until_ns_ = 0;
+                return false;
+            }
+            return true;
         }
 
         void SharedState::updateConfiguration(const utils::ConfigurationSnapshot &snapshot)

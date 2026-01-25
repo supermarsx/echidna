@@ -7,6 +7,7 @@
  */
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -62,6 +63,18 @@ namespace echidna
        * @brief Returns whether hooks are globally enabled.
        */
       bool hooksEnabled() const;
+      /**
+       * @brief Enables or disables local bypass mode (no DSP processing).
+       */
+      void setBypass(bool enabled);
+      /**
+       * @brief Enables bypass until the provided monotonic timestamp (ns).
+       */
+      void setBypassUntil(uint64_t until_ns);
+      /**
+       * @brief Returns true when bypass is active; clears timer when expired.
+       */
+      bool isBypassed(uint64_t now_ns);
 
       /**
        * @brief Applies configuration snapshot from controller.
@@ -84,6 +97,8 @@ namespace echidna
       mutable std::mutex mutex_;
       InternalStatus status_;
       std::string profile_;
+      bool bypass_enabled_;
+      uint64_t bypass_until_ns_;
       utils::ConfigSharedMemory shared_memory_;
       utils::ConfigurationSnapshot cached_snapshot_;
       utils::TelemetrySharedMemory telemetry_memory_;

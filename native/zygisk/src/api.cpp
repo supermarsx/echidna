@@ -7,7 +7,9 @@
  */
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
@@ -23,6 +25,10 @@ using echidna::state::SharedState;
 
 namespace
 {
+
+    constexpr uint32_t kDefaultOverrunUs = 30000;
+    constexpr uint32_t kDefaultOverrunCount = 6;
+    constexpr uint32_t kDefaultBypassMs = 180000;
 
     struct DspBridge
     {
@@ -44,6 +50,19 @@ namespace
         std::vector<float> scratch_output;
     };
 
+    struct WatchdogConfig
+    {
+        uint32_t overrun_us{kDefaultOverrunUs};
+        uint32_t overrun_count{kDefaultOverrunCount};
+        uint64_t bypass_ns{static_cast<uint64_t>(kDefaultBypassMs) * 1000000ull};
+    };
+
+    struct WatchdogState
+    {
+        std::atomic<uint32_t> overrun_streak{0};
+        std::atomic<uint32_t> xruns{0};
+    };
+
     DspBridge &GetDspBridge()
     {
         static DspBridge bridge;
@@ -54,6 +73,53 @@ namespace
     {
         static std::mutex mutex;
         return mutex;
+    }
+
+    uint64_t MonotonicNowNs()
+    {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull +
+               static_cast<uint64_t>(ts.tv_nsec);
+    }
+
+    WatchdogConfig &GetWatchdogConfig()
+    {
+        static WatchdogConfig config;
+        static std::once_flag once;
+        std::call_once(once, []() {
+            if (const char *env = std::getenv("ECHIDNA_WATCHDOG_US"))
+            {
+                const long value = std::strtol(env, nullptr, 10);
+                if (value >= 1000 && value <= 1000000)
+                {
+                    config.overrun_us = static_cast<uint32_t>(value);
+                }
+            }
+            if (const char *env = std::getenv("ECHIDNA_WATCHDOG_CONSEC"))
+            {
+                const long value = std::strtol(env, nullptr, 10);
+                if (value >= 1 && value <= 60)
+                {
+                    config.overrun_count = static_cast<uint32_t>(value);
+                }
+            }
+            if (const char *env = std::getenv("ECHIDNA_BYPASS_MS"))
+            {
+                const long value = std::strtol(env, nullptr, 10);
+                if (value >= 1000 && value <= 900000)
+                {
+                    config.bypass_ns = static_cast<uint64_t>(value) * 1000000ull;
+                }
+            }
+        });
+        return config;
+    }
+
+    WatchdogState &GetWatchdogState()
+    {
+        static WatchdogState state;
+        return state;
     }
 
     /** Convert DSP status codes to echidna API result codes. */
@@ -262,6 +328,31 @@ namespace
         return ToEchidnaResult(status);
     }
 
+    uint32_t UpdateWatchdog(uint32_t wall_us, uint64_t now_ns, SharedState &state)
+    {
+        auto &config = GetWatchdogConfig();
+        auto &watchdog = GetWatchdogState();
+        if (config.overrun_us == 0 || config.overrun_count == 0 || config.bypass_ns == 0)
+        {
+            return watchdog.xruns.load(std::memory_order_relaxed);
+        }
+        if (wall_us <= config.overrun_us)
+        {
+            watchdog.overrun_streak.store(0, std::memory_order_relaxed);
+            return watchdog.xruns.load(std::memory_order_relaxed);
+        }
+        const uint32_t streak =
+            watchdog.overrun_streak.fetch_add(1, std::memory_order_relaxed) + 1;
+        const uint32_t xruns =
+            watchdog.xruns.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (streak >= config.overrun_count)
+        {
+            state.setBypassUntil(now_ns + config.bypass_ns);
+            watchdog.overrun_streak.store(0, std::memory_order_relaxed);
+        }
+        return xruns;
+    }
+
 } // namespace
 
 uint32_t echidna_api_get_version(void)
@@ -334,7 +425,20 @@ echidna_result_t echidna_process_block(const float *input,
     float target_pitch = 0.0f;
     float formant_shift_cents = 0.0f;
     float formant_width = 0.0f;
+    const bool bypassed = state.isBypassed(MonotonicNowNs());
 
+    if (bypassed)
+    {
+        flags |= echidna::utils::kTelemetryFlagBypassed;
+        output_levels = input_levels;
+        if (output && output != input)
+        {
+            std::memcpy(output,
+                        input,
+                        sizeof(float) * static_cast<size_t>(frames) * channel_count);
+        }
+    }
+    else
     {
         std::lock_guard<std::mutex> lock(DspMutex());
         auto &dsp = GetDspBridge();
@@ -405,8 +509,9 @@ echidna_result_t echidna_process_block(const float *input,
     const uint32_t cpu_us = static_cast<uint32_t>(std::max<int64_t>(cpu_ns_raw, 0ll) / 1000ll);
     const uint64_t timestamp_ns = static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
                                   static_cast<uint64_t>(wall_end.tv_nsec);
+    const uint32_t xruns = bypassed ? 0 : UpdateWatchdog(wall_us, timestamp_ns, state);
 
-    state.telemetry().recordCallback(timestamp_ns, wall_us, cpu_us, flags, 0);
+    state.telemetry().recordCallback(timestamp_ns, wall_us, cpu_us, flags, xruns);
     state.telemetry().updateAudioLevels(input_levels.rms_db,
                                         output_levels.rms_db,
                                         input_levels.peak_db,
@@ -415,9 +520,13 @@ echidna_result_t echidna_process_block(const float *input,
                                         target_pitch,
                                         formant_shift_cents,
                                         formant_width,
-                                        0);
+                                        xruns);
 
-    if (result == ECHIDNA_RESULT_OK)
+    if (bypassed)
+    {
+        state.setStatus(echidna::state::InternalStatus::kDisabled);
+    }
+    else if (result == ECHIDNA_RESULT_OK)
     {
         state.setStatus(echidna::state::InternalStatus::kHooked);
     }

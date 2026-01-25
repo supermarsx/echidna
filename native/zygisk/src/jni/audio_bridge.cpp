@@ -8,7 +8,9 @@
  */
 
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
+#include <time.h>
 #include <vector>
 
 #ifdef __ANDROID__
@@ -35,6 +37,14 @@ namespace
     constexpr int kEncodingPcm16Bit = 2;
     constexpr int kEncodingPcm8Bit = 3;
     constexpr int kEncodingPcmFloat = 4;
+
+    uint64_t MonotonicNowNs()
+    {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull +
+               static_cast<uint64_t>(ts.tv_nsec);
+    }
     constexpr int kEncodingPcm24BitPacked = 20;
     constexpr int kEncodingPcm32Bit = 21;
     constexpr int kEncodingPcm24Bit = 22;
@@ -331,8 +341,32 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_echidna_lsposed_core_NativeBridge_nativeSetBypass(JNIEnv *, jclass, jboolean bypass)
 {
     auto &state = echidna::state::SharedState::instance();
-    state.setStatus(bypass ? echidna::state::InternalStatus::kDisabled
-                           : echidna::state::InternalStatus::kWaitingForAttach);
+    if (bypass)
+    {
+        uint64_t duration_ns = 0;
+        if (const char *env = std::getenv("ECHIDNA_PANIC_MS"))
+        {
+            const long value = std::strtol(env, nullptr, 10);
+            if (value >= 1000 && value <= 900000)
+            {
+                duration_ns = static_cast<uint64_t>(value) * 1000000ull;
+            }
+        }
+        if (duration_ns > 0)
+        {
+            state.setBypassUntil(MonotonicNowNs() + duration_ns);
+        }
+        else
+        {
+            state.setBypass(true);
+        }
+        state.setStatus(echidna::state::InternalStatus::kDisabled);
+    }
+    else
+    {
+        state.setBypass(false);
+        state.setStatus(echidna::state::InternalStatus::kWaitingForAttach);
+    }
 }
 
 /** Set current profile JSON in the native engine (applies preset). */
