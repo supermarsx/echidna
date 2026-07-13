@@ -6,6 +6,7 @@
  * libraries. Used by inline hook machinery to resolve target addresses.
  */
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>

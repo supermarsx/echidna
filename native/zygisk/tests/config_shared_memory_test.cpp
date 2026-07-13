@@ -56,9 +56,8 @@ namespace
         const auto profile = memory.snapshot().profile;
         CHECK(!profile.empty(), "truncated profile must remain readable");
         CHECK(profile.size() < long_profile.size(), "profile must be bounded by shared layout");
-        CHECK(std::all_of(profile.begin(), profile.end(), [](char value) {
-                  return value == 'x';
-              }),
+        CHECK(std::all_of(profile.begin(), profile.end(), [](char value)
+                          { return value == 'x'; }),
               "truncated profile must preserve prefix bytes");
     }
 } // namespace

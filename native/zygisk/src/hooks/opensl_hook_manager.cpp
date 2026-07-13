@@ -306,8 +306,8 @@ namespace echidna
         }
 
         SLresult OpenSLHookManager::ReplacementRegisterCallback(void *queue,
-                                                               OpenSlCallback callback,
-                                                               void *context)
+                                                                OpenSlCallback callback,
+                                                                void *context)
         {
             return ForwardRegisterCallback(queue, callback, context);
         }

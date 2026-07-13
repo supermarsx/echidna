@@ -222,7 +222,7 @@ jobs:
         run: >
           cmake --build build/native-tests
           --target zygisk_dsp_smoke_test capture_buffer_router_test
-          dsp_effects_test dsp_preset_test dsp_engine_test
+          config_shared_memory_test dsp_effects_test dsp_preset_test dsp_engine_test
 
       - name: Run hook/DSP smoke harness
         run: ./build/native-tests/zygisk_dsp_smoke_test

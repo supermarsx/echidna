@@ -41,8 +41,8 @@ namespace echidna
                                                const void *buffer,
                                                uint32_t size);
             static SLresult ReplacementRegisterCallback(void *queue,
-                                                       OpenSlCallback callback,
-                                                       void *context);
+                                                        OpenSlCallback callback,
+                                                        void *context);
 
             utils::PltResolver &resolver_;
             runtime::InlineHook hook_enqueue_;
