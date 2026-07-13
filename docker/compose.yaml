@@ -1,0 +1,87 @@
+# Echidna dockerized helper pipeline.
+#
+# Run from the repo root, e.g.:
+#   docker compose -f docker/compose.yaml build
+#   docker compose -f docker/compose.yaml run --rm native-build
+#   docker compose -f docker/compose.yaml run --rm magisk-packager
+#   docker compose -f docker/compose.yaml run --rm android-build
+#
+# Build contexts are `.` (this docker/ directory, which holds the entrypoints);
+# the repo itself is bind-mounted read-write at /workspace so a source change
+# never needs an image rebuild. ${ECHIDNA_REPO} defaults to `..` (the repo root
+# relative to this file); ci-local overrides it with the host absolute path so
+# the sibling containers it spawns resolve the same bind mount (see README).
+
+name: echidna
+
+services:
+  # 1. Per-ABI NDK cross-compile -> build/<abi>/lib/{libech_dsp,libechidna}.so
+  native-build:
+    image: echidna/native-build
+    build:
+      context: .
+      dockerfile: native-build/Dockerfile
+    volumes:
+      - ${ECHIDNA_REPO:-..}:/workspace
+    # Optional: help the BoringSSL FetchContent sub-build skip its own test tree
+    # (see README "Known limitations"). ABIs/platform overridable here.
+    environment:
+      ANDROID_PLATFORM: android-26
+      # ECHIDNA_ABIS: "arm64-v8a armeabi-v7a x86_64"
+
+  # 2. Flashable Magisk module -> out/echidna-magisk.zip (consumes native-build).
+  magisk-packager:
+    image: echidna/magisk-packager
+    build:
+      context: .
+      dockerfile: magisk-packager/Dockerfile
+    volumes:
+      - ${ECHIDNA_REPO:-..}:/workspace
+    depends_on:
+      native-build:
+        condition: service_completed_successfully
+
+  # 3. Companion APK -> android/app/app/build/outputs/apk/debug/app-debug.apk.
+  #    Independent of 1/2. Persistent Gradle cache makes re-runs offline.
+  android-build:
+    image: echidna/android-build
+    build:
+      context: .
+      dockerfile: android-build/Dockerfile
+    volumes:
+      - ${ECHIDNA_REPO:-..}:/workspace
+      - gradle-cache:/opt/gradle-cache
+
+  # Local orchestration of 1 -> 2 -> 3 against the HOST Docker daemon.
+  # Requires the docker socket; set ECHIDNA_REPO to the host absolute repo path
+  # so the sibling containers bind the same directory (see README).
+  ci-local:
+    image: echidna/ci-local
+    build:
+      context: .
+      dockerfile: ci-local/Dockerfile
+    profiles: ["ci"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${ECHIDNA_REPO:-..}:/workspace
+    working_dir: /workspace
+    environment:
+      # Propagate so nested `docker compose` resolves the same host bind mount.
+      ECHIDNA_REPO: ${ECHIDNA_REPO:-..}
+      ECHIDNA_COMPOSE_FILE: docker/compose.yaml
+
+  # OPTIONAL: KVM Android emulator for instrumentation/E2E (spec §11/§20).
+  # Gated behind the `emulator` profile; requires --device /dev/kvm.
+  emulator:
+    image: echidna/emulator
+    build:
+      context: .
+      dockerfile: emulator/Dockerfile
+    profiles: ["emulator"]
+    devices:
+      - /dev/kvm
+    volumes:
+      - ${ECHIDNA_REPO:-..}:/workspace
+
+volumes:
+  gradle-cache:

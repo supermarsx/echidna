@@ -1,0 +1,43 @@
+# Echidna shared config/telemetry region — SELinux policy.
+#
+# The controller (root/service) publishes the whitelist + active preset into a
+# small shared-memory region that every hooked app process must be able to read
+# under ENFORCING SELinux. The region lives under /data/local/tmp/echidna, which
+# is labelled shell_data_file — app domains are denied even `search` on it, so
+# without these rules a hooked app cannot reach the region and falls back to a
+# process-local memfd (the controller's config never propagates).
+#
+# Least privilege:
+#   - config region  -> apps get READ-ONLY (writer stays root/the service)
+#   - telemetry region -> apps get READ-WRITE (each hooked app publishes its own
+#     live pipeline telemetry the controller reads)
+#   - the shell_data_file grant is TRAVERSE-ONLY (dir search), not file read.
+
+# Dedicated types for the two regions (kept off shell_data_file so the grants
+# below do not widen access to unrelated /data/local/tmp files).
+type echidna_config_file
+typeattribute echidna_config_file file_type
+typeattribute echidna_config_file data_file_type
+type echidna_telemetry_file
+typeattribute echidna_telemetry_file file_type
+typeattribute echidna_telemetry_file data_file_type
+
+# Traverse into /data/local/tmp (the region's parent). Search only: this does
+# not grant reading shell files, only path traversal to the labelled region.
+allow appdomain shell_data_file dir search
+
+# Config: hooked apps READ the controller-published whitelist/preset.
+allow appdomain echidna_config_file dir { search getattr open read }
+allow appdomain echidna_config_file file { getattr open read map }
+allow untrusted_app echidna_config_file dir { search getattr open read }
+allow untrusted_app echidna_config_file file { getattr open read map }
+# Hooked apps probe the region O_RDWR first (the writer path); silence the
+# expected write denial on the read-only config region so it does not spam AVCs.
+dontaudit appdomain echidna_config_file file write
+dontaudit untrusted_app echidna_config_file file write
+
+# Telemetry: hooked apps WRITE their live pipeline telemetry the controller reads.
+allow appdomain echidna_telemetry_file dir { search getattr open read }
+allow appdomain echidna_telemetry_file file { getattr open read write append map }
+allow untrusted_app echidna_telemetry_file dir { search getattr open read }
+allow untrusted_app echidna_telemetry_file file { getattr open read write append map }

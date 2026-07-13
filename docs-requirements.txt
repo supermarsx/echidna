@@ -1,0 +1,10 @@
+# Documentation site toolchain (MkDocs + Material).
+# Install with a neutralized pip config on this host (pip.ini is corrupt):
+#   PIP_CONFIG_FILE=/dev/null pip install -r docs-requirements.txt
+# then build with:  mkdocs build --strict
+
+mkdocs-material==9.5.39
+mkdocs==1.6.1
+
+# Pulled in transitively by mkdocs-material, pinned for reproducible builds:
+pymdown-extensions==10.11.2

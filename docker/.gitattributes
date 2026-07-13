@@ -1,0 +1,7 @@
+# Container scripts must stay LF regardless of the host's core.autocrlf:
+# a CRLF shebang makes Linux reject the interpreter ("bad interpreter: no such
+# file or directory"). Force LF for everything under docker/.
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+entrypoint.sh text eol=lf
+run-pipeline.sh text eol=lf

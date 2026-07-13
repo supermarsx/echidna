@@ -1,0 +1,8 @@
+id=echidna
+name=Echidna
+version=@ECHIDNA_VERSION@
+versionCode=@ECHIDNA_VERSION_CODE@
+author=supermarsx
+description=Zygisk audio-hooking engine (libechidna.so) + DSP pipeline (libech_dsp.so) with the control-service SELinux/socket bootstrap. Requires Magisk 24+ with Zygisk enabled.
+minMagisk=24000
+updateJson=

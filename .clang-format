@@ -1,0 +1,24 @@
+# Echidna C/C++ style. Inferred from the native sources (native/dsp,
+# native/zygisk): Allman braces, indented namespaces, right-aligned
+# pointers/references, author-controlled line breaks. See t2-e3 log for the
+# indent-width rationale (the two native trees historically diverged on
+# indent width; this config standardises on 4 spaces, matching the larger
+# native/zygisk tree).
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+# 0 disables column-based reflow so clang-format preserves the existing
+# line breaks (the sources are not wrapped to any single column).
+ColumnLimit: 0
+BreakBeforeBraces: Allman
+NamespaceIndentation: All
+PointerAlignment: Right
+ReferenceAlignment: Right
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+SortIncludes: false

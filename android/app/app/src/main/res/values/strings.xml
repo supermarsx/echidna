@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Echidna</string>
+    <string name="dashboard_title">Dashboard</string>
+    <string name="preset_manager_title">Preset Manager</string>
+    <string name="effects_editor_title">Effects Editor</string>
+    <string name="diagnostics_title">Diagnostics</string>
+    <string name="settings_title">Settings</string>
+    <string name="compatibility_wizard_title">Compatibility Wizard</string>
+    <string name="notification_channel_name">Echidna Controls</string>
+    <string name="notification_channel_description">Quick access to Echidna voice engine</string>
+    <string name="notification_toggle">Toggle</string>
+    <string name="notification_cycle">Cycle Preset</string>
+    <string name="notification_open">Open App</string>
+</resources>

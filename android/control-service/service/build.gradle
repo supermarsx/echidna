@@ -1,0 +1,83 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def repoRoot = file('../../..')
+def nativeRuntimeLibsDir = file("$buildDir/generated/echidnaRuntimeJniLibs")
+def nativeRuntimeAbis = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
+def stageEchidnaRuntimeJniLibs = tasks.register('stageEchidnaRuntimeJniLibs', Copy) {
+    def nativeBuildRoot = new File(repoRoot, 'build')
+    onlyIf {
+        nativeRuntimeAbis.any { abi ->
+            new File(nativeBuildRoot, "$abi/lib/libechidna.so").exists() &&
+                new File(nativeBuildRoot, "$abi/lib/libech_dsp.so").exists()
+        }
+    }
+    into nativeRuntimeLibsDir
+    nativeRuntimeAbis.each { abi ->
+        from(new File(nativeBuildRoot, "$abi/lib")) {
+            include 'libechidna.so', 'libech_dsp.so'
+            into abi
+        }
+    }
+}
+
+android {
+    namespace 'com.echidna.control'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 26
+        targetSdk 34
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildFeatures {
+        aidl = true
+        buildConfig = false
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDir nativeRuntimeLibsDir
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+
+    lint {
+        warningsAsErrors true
+        abortOnError false
+    }
+
+    testOptions {
+        // The service's input-rejection paths log via android.util.Log, which the stock JVM
+        // android.jar throws "not mocked" on. Return defaults so JSON-based unit tests execute.
+        unitTests.returnDefaultValues = true
+    }
+}
+
+tasks.named('preBuild') {
+    dependsOn stageEchidnaRuntimeJniLibs
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.7.1'
+    implementation 'androidx.core:core-ktx:1.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

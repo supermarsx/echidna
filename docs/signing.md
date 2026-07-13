@@ -1,0 +1,65 @@
+# Release Signing Model
+
+Echidna ships as a **single companion APK** (`com.echidna.app`) that hosts the control service
+in-process. Because there is only one APK, the historical cross-package co-signing problem is moot:
+there is no separate service APK to co-sign, and the old `signature`-level `BIND_CONTROL_SERVICE`
+permission has been removed as self-referential. This document covers how the release APK is signed.
+
+## Distribution model
+
+Distribution is **root / sideload via Magisk only** — there is no Play Store channel. `compileSdk`
+and `targetSdk` are 34, which is sufficient for sideload; Play-store distribution (targetSdk 35 +
+package-visibility hygiene) is explicitly out of scope.
+
+## Where signing material comes from
+
+The app module (`android/app/app/build.gradle.kts`) resolves release signing material in priority
+order. **No keystore or password is ever hardcoded or committed.**
+
+1. A git-ignored `keystore.properties` next to the app project
+   (`android/app/keystore.properties`). Copy `android/app/keystore.properties.example` and fill in
+   real values. `keystore.properties`, `*.jks`, and `*.keystore` are git-ignored.
+2. Gradle properties / environment variables (preferred in CI, supplied as secrets):
+   - `RELEASE_STORE_FILE` — path to the keystore (absolute, or relative to `android/app/`).
+   - `RELEASE_STORE_PASSWORD` — keystore password.
+   - `RELEASE_KEY_ALIAS` — key entry alias.
+   - `RELEASE_KEY_PASSWORD` — key entry password.
+
+The `keystore.properties` keys are `storeFile`, `storePassword`, `keyAlias`, `keyPassword`.
+
+## Graceful fallback
+
+When **no** signing material is available (local debug builds, CI without secrets), the release build
+falls back to **debug signing** so the build still succeeds. The result is a debug-signed,
+**non-distributable** APK — do not ship it. A real release requires real keystore material.
+
+```sh
+cd android/app
+./gradlew :app:assembleRelease   # release-signed if keystore present, else debug-signed
+```
+
+## Minification
+
+Minification and resource-shrinking are **disabled** for the first release. The app is heavy on
+reflection-sensitive entry points — AIDL stubs (`IEchidnaControlService`), JNI
+(`libechidna_control_jni`), and Compose — so shipping R8/resource-shrinking without a proven keep-rule
+set risks silently stripping live code. Enabling `isMinifyEnabled` + a `proguard-rules.pro` that keeps
+the AIDL/JNI/Compose surfaces is a deliberate follow-up (tracked in [todo.md](https://github.com/supermarsx/echidna/blob/main/todo.md)).
+
+## Generating a keystore
+
+```sh
+keytool -genkeypair -v -keystore echidna-release.jks -alias echidna \
+        -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Keep the keystore and passwords out of the repository. In CI, provide them as encrypted secrets via
+the `RELEASE_*` environment variables rather than a checked-in file.
+
+## Native / Magisk signing
+
+The native libraries and the Magisk flashable zip are **not** APK-signed. Integrity for the module is
+provided by Magisk's own flashing flow, and third-party DSP plugins are gated by an **Ed25519
+signature** over the plugin `.so` (see the DSP plugin schema in
+[developer_readme.md](developer_readme.md#dsp-plugin-schema)). The trusted plugin public key is a
+build-provisioned compile definition with a fail-closed all-zero placeholder.

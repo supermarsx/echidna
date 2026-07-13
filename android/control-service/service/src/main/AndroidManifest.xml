@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The control service now ships inside the companion APK (com.echidna.app).
+         It is bound in-process by ControlServiceClient, so it is not exported and
+         no longer needs the self-referential signature permission. The hosting
+         app manifest also declares this component; the merged result is consistent. -->
+    <application>
+        <service
+            android:name=".service.EchidnaControlService"
+            android:enabled="true"
+            android:exported="false" />
+    </application>
+</manifest>

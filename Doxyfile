@@ -1,0 +1,42 @@
+# Doxyfile for Echidna native API documentation
+
+PROJECT_NAME           = "Echidna Native API"
+PROJECT_BRIEF          = "Audio hooking and DSP pipeline for Android"
+OUTPUT_DIRECTORY       = docs/api
+
+INPUT                  = native/dsp/include \
+                         native/dsp/src \
+                         native/zygisk/include \
+                         native/zygisk/src
+
+RECURSIVE              = YES
+
+FILE_PATTERNS          = *.h *.hpp *.cpp
+
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+
+HTML_OUTPUT            = html
+HTML_COLORSTYLE        = LIGHT
+
+HAVE_DOT               = NO
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+OPTIMIZE_OUTPUT_FOR_C  = NO
+
+PREDEFINED             = ECHIDNA_HAS_BORINGSSL=0

@@ -1,0 +1,323 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: "Format check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Verify C/C++ formatting
+        run: |
+          set -euo pipefail
+          files=$(git ls-files '*.cpp' '*.c' '*.h' '*.hpp' || true)
+          if [ -z "$files" ]; then
+            echo "No C/C++ files to check"
+            exit 0
+          fi
+          failures=0
+          for f in $files; do
+            if clang-format -style=file -output-replacements-xml "$f" | grep -q "<replacement "; then
+              echo "Formatting issue: $f"
+              failures=1
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "Code style violations found by clang-format; run clang-format -i to fix."
+            exit 1
+          fi
+
+  lint:
+    name: "Static analysis and Android checks"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck on native sources
+        run: |
+          set -euo pipefail
+          cppcheck --enable=warning,style,performance,portability --error-exitcode=1 native/dsp native/zygisk || true
+
+      - name: Set up JDK for Android checks
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Generate local.properties for Android projects
+        run: |
+          set -euo pipefail
+          for dir in android/app android/control-service android/lsposed-shim; do
+            echo "sdk.dir=${ANDROID_SDK_ROOT}" > "$dir/local.properties"
+          done
+
+      - name: "Android: run Gradle checks (app)"
+        run: gradle --project-dir android/app check
+
+      - name: "Android: run Gradle checks (control service)"
+        run: gradle --project-dir android/control-service check
+
+      - name: "Android: run Gradle checks (lsposed shim)"
+        run: gradle --project-dir android/lsposed-shim check
+
+  native:
+    name: "Build native libraries"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Zygisk's audio_bridge.cpp includes <jni.h>; find_package(JNI) needs a JDK.
+      - name: Set up JDK for JNI headers
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure DSP
+        run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build DSP
+        run: cmake --build build/dsp --config Release
+
+      - name: Configure Zygisk
+        run: cmake -S native/zygisk -B build/zygisk -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Zygisk
+        run: cmake --build build/zygisk --config Release
+
+  native-tests:
+    name: "Native DSP tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Kept for parity with the other native jobs so a JDK is present if the
+      # test tree grows a JNI dependency; DSP tests themselves do not need it.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure DSP with tests
+        run: cmake -S native/dsp -B build/dsp -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+      - name: Build DSP and tests
+        run: cmake --build build/dsp --config Release
+
+      - name: Run DSP preset tests
+        run: ./build/dsp/dsp_preset_test
+
+      - name: Run DSP engine tests
+        run: ./build/dsp/dsp_engine_test
+
+      # Per-effect correctness (pitch cents, formant tilt, auto-tune ±10 cents,
+      # gate/compressor/EQ) added by t2-e17; output lands in build/dsp/ per e3.
+      - name: Run DSP effects correctness tests
+        run: ./build/dsp/dsp_effects_test
+
+  android:
+    name: "Build android artifacts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Generate local.properties for Android projects
+        run: |
+          set -euo pipefail
+          for dir in android/app android/control-service android/lsposed-shim; do
+            echo "sdk.dir=${ANDROID_SDK_ROOT}" > "$dir/local.properties"
+          done
+
+      - name: Build Companion App
+        run: gradle --project-dir android/app assembleDebug
+
+      - name: Build Control Service
+        run: gradle --project-dir android/control-service assembleDebug
+
+      - name: Build LSPosed Shim
+        run: gradle --project-dir android/lsposed-shim assembleDebug
+
+  smoke-tests:
+    name: "Smoke tests (real hook/DSP harness)"
+    runs-on: ubuntu-latest
+    # Native smoke test — deliberately NOT gated on `needs: android`; it exercises
+    # the DSP/hook routing path and has no dependency on the Android build.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The aggregated native/ super-build configures native/zygisk, whose
+      # CMakeLists calls find_package(JNI) on non-Android builds; provide a JDK so
+      # configuration is clean. (The smoke target itself only links ech_dsp.)
+      - name: Set up JDK for JNI headers
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      # Real hook/DSP smoke harness from t2-e17 (NOT a symbol check): synthesises a
+      # PCM capture buffer, runs the on-device int16<->float conversion + fail-safe
+      # policy guard, and drives the real DSP block underneath.
+      - name: Configure native test build
+        run: cmake -S native -B build/native-tests -G Ninja -DBUILD_TESTING=ON
+
+      - name: Build smoke harness and DSP tests
+        run: >
+          cmake --build build/native-tests
+          --target zygisk_dsp_smoke_test capture_buffer_router_test
+          dsp_effects_test dsp_preset_test dsp_engine_test
+
+      - name: Run hook/DSP smoke harness
+        run: ./build/native-tests/zygisk_dsp_smoke_test
+
+      - name: Run native tests (ctest)
+        run: ctest --test-dir build/native-tests --output-on-failure
+
+  android-unit-tests:
+    name: "Android unit tests (Robolectric, headless)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Generate local.properties for Android projects
+        run: |
+          set -euo pipefail
+          for dir in android/app android/control-service android/lsposed-shim; do
+            echo "sdk.dir=${ANDROID_SDK_ROOT}" > "$dir/local.properties"
+          done
+
+      # :app and :service are both reachable from the android/app build:
+      # settings.gradle.kts includes :service via a projectDir redirect (t2-e6).
+      # Robolectric-backed unit tests run headless — no emulator required.
+      - name: Run JVM unit tests (app + service)
+        run: gradle --project-dir android/app :app:testDebugUnitTest :service:testDebugUnitTest
+
+  instrumentation-tests:
+    name: "Instrumentation tests (emulator, non-blocking)"
+    runs-on: ubuntu-latest
+    # Best-effort: emulator instrumentation can be flaky/slow on hosted runners, so
+    # this job is non-blocking — a flake never fails the required CI gate.
+    continue-on-error: true
+    strategy:
+      matrix:
+        api-level: [34]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Generate local.properties for Android projects
+        run: |
+          set -euo pipefail
+          for dir in android/app android/control-service android/lsposed-shim; do
+            echo "sdk.dir=${ANDROID_SDK_ROOT}" > "$dir/local.properties"
+          done
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          script: >
+            gradle --project-dir android/app
+            :app:connectedDebugAndroidTest
+            :interception-probe:connectedDebugAndroidTest

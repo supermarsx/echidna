@@ -1,0 +1,103 @@
+site_name: Echidna
+site_description: >-
+  Echidna — a native-first, root/LSPosed-Zygisk real-time voice changer for
+  Android. Architecture, build & install, DSP reference, and honest E2E
+  verification.
+site_author: supermarsx
+site_url: https://supermarsx.github.io/echidna/
+
+repo_name: supermarsx/echidna
+repo_url: https://github.com/supermarsx/echidna
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; Echidna contributors — MIT-derived non-commercial license
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - toc.integrate
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/supermarsx/echidna
+      name: Echidna on GitHub
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+      permalink_title: Anchor link to this section
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Overview:
+      - Architecture: architecture.md
+      - Design Rationale: design-rationale.md
+      - Why It's Hard: why-hard.md
+  - Using Echidna:
+      - Build & Install: build-install.md
+      - DSP & Effects: dsp-effects.md
+      - Screenshots: screenshots.md
+  - Reference:
+      - Comparison: comparison.md
+      - Limitations: limitations.md
+      - Verification: verification.md
+  - Developer:
+      - Developer Guide: developer_readme.md
+      - Signing: signing.md
+      - Magisk Release: magisk_release.md

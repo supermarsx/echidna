@@ -1,0 +1,342 @@
+name: Release
+
+# Releases are NOT auto-published on every push. The workflow only runs for a
+# pushed tag or a manual `workflow_dispatch`, and the `publish` job is further
+# gated on that condition (defense in depth). A changelog body is generated in
+# `prepare` and attached to the GitHub Release.
+on:
+  push:
+    tags:
+      - "[0-9][0-9].[1-9]*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. 26.1). Leave empty to auto-compute next YY.N."
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: >-
+    release-${{ github.workflow }}-${{ github.event.inputs.tag ||
+    (github.event_name == 'workflow_dispatch' && 'auto') || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      tag_source: ${{ steps.resolve.outputs.source }}
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      changelog: ${{ steps.changelog.outputs.body }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Resolve the release tag:
+      #   - tag push       -> use the pushed YY.N tag (never create)
+      #   - workflow_dispatch with an input -> validate YY.N, create the ref if new
+      #   - workflow_dispatch without input -> auto-compute next YY.N, create the ref
+      - name: Resolve release tag
+        id: resolve
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.tag || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          git tag --list > "${RUNNER_TEMP}/release-tags.txt"
+          python3 tools/resolve_release_tag.py \
+            --event-name "${GITHUB_EVENT_NAME}" \
+            --ref "${GITHUB_REF}" \
+            --manual-tag "${RELEASE_TAG_INPUT}" \
+            --tags-file "${RUNNER_TEMP}/release-tags.txt"
+
+      - name: Create tag if needed and reject duplicate releases
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
+          RELEASE_TAG_SOURCE: ${{ steps.resolve.outputs.source }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const source = process.env.RELEASE_TAG_SOURCE;
+            const { owner, repo } = context.repo;
+
+            let tagExists = false;
+            try {
+              const ref = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `tags/${tag}`,
+              });
+              tagExists = true;
+              core.info(`Tag ${tag} exists at ${ref.data.object.sha}.`);
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            if (context.eventName === "push" && !tagExists) {
+              core.setFailed(`Pushed tag ${tag} was not found through the refs API.`);
+              return;
+            }
+
+            if (source === "auto" && tagExists) {
+              core.setFailed(
+                `Auto-computed tag ${tag} already exists. Re-run to compute the next YY.N tag.`
+              );
+              return;
+            }
+
+            if (!tagExists) {
+              await github.rest.git.createRef({
+                owner,
+                repo,
+                ref: `refs/tags/${tag}`,
+                sha: context.sha,
+              });
+              core.info(`Created tag ${tag} at ${context.sha}.`);
+            }
+
+            try {
+              const release = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag,
+              });
+              core.setFailed(
+                `Release for tag ${tag} already exists: ${release.data.html_url}`
+              );
+              return;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            await core.summary
+              .addHeading("Release tag")
+              .addTable([
+                [
+                  { data: "Field", header: true },
+                  { data: "Value", header: true },
+                ],
+                ["Resolved tag", tag],
+                ["Source", source],
+                ["Checkout ref", `refs/tags/${tag}`],
+              ])
+              .write();
+
+      - name: Checkout resolved tag
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          git checkout --force "${{ steps.resolve.outputs.checkout_ref }}"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          set -euo pipefail
+          CURRENT="${{ steps.resolve.outputs.tag }}"
+          # Most recent existing tag other than the one being released.
+          PREV="$(git tag --sort=-creatordate | grep -vxF "$CURRENT" | head -n1 || true)"
+          if [ -n "$PREV" ]; then
+            echo "Changes since ${PREV}:" > changelog.md
+            RANGE="${PREV}..HEAD"
+          else
+            echo "Initial release." > changelog.md
+            RANGE="HEAD"
+          fi
+          echo "" >> changelog.md
+          git log --no-merges --pretty=format:'- %s (%h)' ${RANGE} >> changelog.md || true
+          echo "" >> changelog.md
+          {
+            echo "body<<CHANGELOG_EOF"
+            cat changelog.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  native:
+    name: "Native per-ABI (NDK) + Magisk module"
+    runs-on: ubuntu-latest
+    needs: prepare
+    env:
+      ECHIDNA_VERSION: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Install Android NDK r27
+        run: sdkmanager --install "ndk;27.0.12077973" > /dev/null
+
+      - name: Install build tools (Ninja, zip)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zip
+
+      # Cross-compiles libech_dsp.so + libechidna.so for arm64-v8a, armeabi-v7a,
+      # x86_64 into build/<abi>/lib/ (tools/build_native_ndk.sh, t2-e10).
+      - name: Build native libraries (per-ABI NDK)
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
+          ANDROID_PLATFORM=android-26 bash tools/build_native_ndk.sh
+
+      # Packages the per-ABI engine (zygisk/<abi>.so) + DSP libs into a flashable
+      # Magisk zip at out/echidna-magisk.zip (tools/build_magisk_module.sh, t2-e14).
+      - name: Build flashable Magisk module
+        run: bash tools/build_magisk_module.sh
+
+      - name: Collect native artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/native
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            mkdir -p "artifacts/native/${abi}"
+            cp "build/${abi}/lib/libech_dsp.so" "artifacts/native/${abi}/libech_dsp.so"
+            cp "build/${abi}/lib/libechidna.so" "artifacts/native/${abi}/libechidna.so"
+          done
+          mkdir -p artifacts/magisk
+          cp out/echidna-magisk.zip artifacts/magisk/echidna-magisk.zip
+
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: artifacts/native
+
+      - name: Upload Magisk module
+        uses: actions/upload-artifact@v4
+        with:
+          name: magisk
+          path: artifacts/magisk/echidna-magisk.zip
+
+  android:
+    name: "Signed release APK"
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Generate local.properties for Android projects
+        run: |
+          set -euo pipefail
+          for dir in android/app android/control-service android/lsposed-shim; do
+            echo "sdk.dir=${ANDROID_SDK_ROOT}" > "$dir/local.properties"
+          done
+
+      # Materialize the release keystore from a base64 secret. When the secret is
+      # absent (e.g. a fork), leave has_keystore=false so the build below never
+      # exports RELEASE_STORE_FILE and build.gradle.kts falls back to debug signing.
+      - name: Decode release keystore
+        id: keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_KEYSTORE_BASE64:-}" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "store_file=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
+            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No RELEASE_KEYSTORE_BASE64 secret set -> release APK will be debug-signed" \
+              "(non-distributable)."
+            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # RELEASE_STORE_FILE is exported ONLY when a keystore exists. build.gradle.kts
+      # resolves it via System.getenv(); an empty value would be non-null and break
+      # the fallback, so we must leave the variable unset in the no-secret path.
+      - name: Build signed release APK
+        env:
+          HAS_KEYSTORE: ${{ steps.keystore.outputs.has_keystore }}
+          STORE_FILE: ${{ steps.keystore.outputs.store_file }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_KEYSTORE}" = "true" ]; then
+            export RELEASE_STORE_FILE="${STORE_FILE}"
+            echo "Building release with the configured keystore."
+          else
+            echo "Building release with debug-signing fallback."
+          fi
+          gradle --project-dir android/app :app:assembleRelease
+
+      - name: Collect Android artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/android
+          cp android/app/app/build/outputs/apk/release/app-release.apk \
+            artifacts/android/app-release.apk
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: artifacts/android
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [prepare, native, android]
+    # Manual gate: only publish a GitHub Release for a pushed tag or an explicit
+    # workflow_dispatch — never as a side effect of an ordinary branch push.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Echidna ${{ needs.prepare.outputs.tag }}
+          body: ${{ needs.prepare.outputs.changelog }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          files: release_artifacts/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
