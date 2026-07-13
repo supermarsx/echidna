@@ -7,7 +7,13 @@
  */
 
 #include <arpa/inet.h>
+#ifdef __ANDROID__
 #include <android/log.h>
+#else
+#define __android_log_print(...) ((void)0)
+#define ANDROID_LOG_INFO 0
+#define ANDROID_LOG_WARN 0
+#endif
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
