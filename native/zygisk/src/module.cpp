@@ -196,6 +196,7 @@ namespace
         if (!g_profile_server)
         {
             g_profile_server = std::make_unique<echidna::runtime::ProfileSyncServer>();
+            (void)g_profile_server->refreshOnce();
             g_profile_server->start();
         }
 

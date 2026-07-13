@@ -10,8 +10,8 @@
  * kept in a process-global, name-keyed registry. Multiple helper instances that
  * ask for the same logical name therefore map the SAME region — this preserves
  * the intra-process sharing the old shm_open("/name") design relied on (e.g.
- * ProfileSyncServer writes config through one ConfigSharedMemory instance while
- * SharedState reads it through another).
+ * the profile-sync reader applies config through one ConfigSharedMemory instance
+ * while SharedState reads it through another).
  *
  * The region is a real fd + fixed size while it is being created: it is
  * ftruncate'd and mmap'd, then the fd is closed immediately (the mapping keeps
@@ -22,8 +22,8 @@
  * non-allowlisted fd (e.g. Chrome crashing on "/memfd:echidna_config"). These
  * config/telemetry regions are intra-process only and their fd is never handed
  * to another process, so dropping the fd after mmap costs nothing. (The
- * profile-sync SCM_RIGHTS fd hand-off is a separate path in
- * profile_sync_server.cpp and is unaffected.)
+ * profile-sync socket reader is a separate path in profile_sync_server.cpp and
+ * is unaffected.)
  *
  * Header-only (all functions inline) so no new translation unit / CMakeLists
  * source entry is required. The function-local statics give a single registry

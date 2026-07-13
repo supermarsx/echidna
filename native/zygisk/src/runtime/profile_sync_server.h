@@ -2,9 +2,8 @@
 
 /**
  * @file profile_sync_server.h
- * @brief Simple local socket server allowing a controller to push profile
- * updates into the runtime. Used by the development tooling to synchronise
- * presets/profiles with running processes.
+ * @brief Local socket reader for profile snapshots published by the companion
+ * service.
  */
 
 #include <atomic>
@@ -24,7 +23,12 @@ namespace echidna
             ~ProfileSyncServer();
 
             /**
-             * @brief Starts the profile sync listener thread (idempotent).
+             * @brief Reads one snapshot synchronously when the publisher is reachable.
+             */
+            bool refreshOnce();
+
+            /**
+             * @brief Starts the profile sync reader thread (idempotent).
              */
             void start();
 
@@ -36,11 +40,10 @@ namespace echidna
         private:
             std::atomic<bool> running_{false};
             std::thread worker_;
-            int listener_fd_{-1};
+            std::atomic<int> client_fd_{-1};
 
             void run();
-            int createListener();
-            void handleClient(int client_fd);
+            bool readAndApply(int client_fd);
             void handlePayload(const std::string &payload);
         };
 

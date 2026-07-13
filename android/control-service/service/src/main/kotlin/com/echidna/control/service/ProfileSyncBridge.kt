@@ -1,185 +1,185 @@
 package com.echidna.control.service
 
-import android.os.Build
-import android.os.Parcel
-import android.os.ParcelFileDescriptor
-import android.os.SharedMemory
-import android.system.ErrnoException
+import android.net.LocalServerSocket
+import android.net.LocalSocket
 import android.util.Log
+import java.io.Closeable
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
-import kotlin.math.max
+import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val SYNC_TAG = "EchidnaProfileSync"
-private const val DEFAULT_SHARED_MEMORY_CAPACITY = 64 * 1024
-private const val SOCKET_PATH = "/data/local/tmp/echidna_profiles.sock"
+private const val SOCKET_NAME = "echidna_profiles"
+private const val MAX_PROFILE_PAYLOAD_BYTES = 10 * 1024 * 1024
+private val EMPTY_PROFILE_SNAPSHOT =
+    "{" +
+        "\"profiles\":{}," +
+        "\"whitelist\":{}," +
+        "\"appBindings\":{}," +
+        "\"control\":{" +
+        "\"masterEnabled\":true," +
+        "\"bypass\":false," +
+        "\"panicUntilEpochMs\":0," +
+        "\"sidetoneEnabled\":false," +
+        "\"sidetoneGainDb\":0.0," +
+        "\"engineMode\":\"native_first\"" +
+        "}" +
+        "}"
 
 /**
- * Pushes profile updates to the native Zygisk module via shared memory or sockets.
+ * Publishes profile updates to hooked readers.
  */
 interface ProfileSyncChannel {
     fun pushProfiles(json: String)
 }
 
 /**
- * Pushes profile updates to the native Zygisk module via shared memory or sockets.
+ * Publishes profile updates to native Zygisk readers and the LSPosed shim.
+ *
+ * The companion service owns one abstract AF_UNIX socket. Hooked readers connect
+ * to it and receive the last snapshot immediately, then stay connected for later
+ * update frames. This removes the former per-hooked-process unlink-then-bind
+ * ownership race on the profile-sync socket.
+ *
  * Note: used as the production implementation of [ProfileSyncChannel].
  */
-class ProfileSyncBridge : ProfileSyncChannel {
-    private val socketChannel = UnixSocketProfileChannel(SOCKET_PATH)
-    private val sharedMemoryChannel: SharedMemoryProfileChannel? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            SharedMemoryProfileChannel(
-                "echidna_profiles",
-                DEFAULT_SHARED_MEMORY_CAPACITY,
-                socketChannel,
-            )
-        } else {
-            null
-        }
-
-    override fun pushProfiles(json: String) {
-        var delivered = false
-        val memoryChannel = sharedMemoryChannel
-        if (memoryChannel != null) {
-            delivered = memoryChannel.write(json)
-        }
-        if (!delivered) {
-            delivered = socketChannel.write(json)
-        }
-        if (!delivered) {
-            Log.w(SYNC_TAG, "No profile sync channel accepted the payload")
-        }
-    }
-}
-
-private class SharedMemoryProfileChannel(
-    private val name: String,
-    private val defaultCapacity: Int,
-    private val signalChannel: UnixSocketProfileChannel,
-) {
-    @Volatile
-    private var sharedMemory: SharedMemory? = null
-
-    fun write(json: String): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) {
-            return false
-        }
-        val bytes = json.toByteArray(StandardCharsets.UTF_8)
-        val required = bytes.size + Int.SIZE_BYTES
-        return try {
-            ensureCapacity(required)
-            val memory = sharedMemory ?: return false
-            val buffer = memory.mapReadWrite()
-            try {
-                buffer.order(ByteOrder.BIG_ENDIAN)
-                buffer.putInt(bytes.size)
-                buffer.put(bytes)
-                while (buffer.hasRemaining()) {
-                    buffer.put(0)
-                }
-            } finally {
-                SharedMemory.unmap(buffer)
-            }
-            signalChannel.write(json, memory)
-        } catch (err: ErrnoException) {
-            Log.w(SYNC_TAG, "SharedMemory write failed", err)
-            false
-        } catch (io: IOException) {
-            Log.w(SYNC_TAG, "SharedMemory write failed", io)
-            false
-        }
-    }
-
-    @Throws(ErrnoException::class)
-    private fun ensureCapacity(required: Int) {
-        val memory = sharedMemory
-        if (memory != null && memory.size >= required) {
-            return
-        }
-        memory?.close()
-        sharedMemory = SharedMemory.create(name, max(required, defaultCapacity))
-    }
-}
-
-private class UnixSocketProfileChannel(private val socketPath: String) {
-    fun write(json: String, sharedMemory: SharedMemory? = null): Boolean {
-        return try {
-            LocalSocketHelper(socketPath).use { socket ->
-                socket.write(json, sharedMemory)
-            }
-            true
-        } catch (e: IOException) {
-            Log.v(SYNC_TAG, "Socket push skipped: ${e.message}")
-            false
-        }
-    }
-}
-
-private class LocalSocketHelper(path: String) : AutoCloseable {
-    private val socket = android.net.LocalSocket()
+class ProfileSyncBridge : ProfileSyncChannel, Closeable {
+    private val publisher = ProfileSnapshotPublisher(SOCKET_NAME)
 
     init {
-        val address = android.net.LocalSocketAddress(
-            path,
-            android.net.LocalSocketAddress.Namespace.FILESYSTEM,
-        )
-        socket.connect(address)
+        publisher.start()
     }
 
-    fun write(payload: String, sharedMemory: SharedMemory? = null) {
-        val bytes = payload.toByteArray(StandardCharsets.UTF_8)
-        val header = ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN)
-        header.putInt(bytes.size)
-        val duplicated = sharedMemory?.let { memory -> dupSharedMemoryFd(memory) }
-        try {
-            duplicated?.let { pfd ->
-                socket.setFileDescriptorsForSend(arrayOf(pfd.fileDescriptor))
-            }
-            val output = socket.outputStream
-            output.write(header.array())
-            output.write(bytes)
-            output.flush()
-        } finally {
-            duplicated?.close()
-        }
-    }
-
-    /**
-     * Extracts an owned [ParcelFileDescriptor] for [memory] using only public API.
-     *
-     * [SharedMemory] does not expose its backing file descriptor directly, but it is
-     * [android.os.Parcelable] and writes exactly one (dup'd) descriptor when marshalled.
-     * We round-trip it through a local [Parcel]: the parcel owns the descriptor read back,
-     * so we dup it into an independent descriptor that outlives the parcel and hand that to
-     * the native side over the socket. Returns null if the descriptor cannot be obtained.
-     */
-    private fun dupSharedMemoryFd(memory: SharedMemory): ParcelFileDescriptor? {
-        val parcel = Parcel.obtain()
-        return try {
-            memory.writeToParcel(parcel, 0)
-            parcel.setDataPosition(0)
-            val borrowed = parcel.readFileDescriptor() ?: return null
-            // The parcel retains ownership of `borrowed`'s fd (closed on recycle), so dup it.
-            ParcelFileDescriptor.dup(borrowed.fileDescriptor)
-        } catch (e: IOException) {
-            Log.w(SYNC_TAG, "Unable to duplicate SharedMemory descriptor", e)
-            null
-        } catch (e: RuntimeException) {
-            Log.w(SYNC_TAG, "Unable to marshal SharedMemory descriptor", e)
-            null
-        } finally {
-            parcel.recycle()
-        }
+    override fun pushProfiles(json: String) {
+        publisher.publish(json)
     }
 
     override fun close() {
+        publisher.close()
+    }
+}
+
+private class ProfileSnapshotPublisher(private val socketName: String) : Closeable {
+    private val running = AtomicBoolean(false)
+    private val clients = CopyOnWriteArraySet<LocalSocket>()
+    @Volatile private var latestSnapshot: String = EMPTY_PROFILE_SNAPSHOT
+    @Volatile private var server: LocalServerSocket? = null
+    private var thread: Thread? = null
+
+    fun start() {
+        if (!running.compareAndSet(false, true)) {
+            return
+        }
+        thread = Thread(this::run, "echidna-profile-publisher").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    fun publish(json: String) {
+        if (json.toByteArray(StandardCharsets.UTF_8).size > MAX_PROFILE_PAYLOAD_BYTES) {
+            Log.w(SYNC_TAG, "Profile snapshot too large; not publishing")
+            return
+        }
+        latestSnapshot = json
+        broadcast(json)
+    }
+
+    private fun run() {
+        try {
+            val localServer = LocalServerSocket(socketName)
+            server = localServer
+            while (running.get()) {
+                val client = localServer.accept()
+                clients.add(client)
+                if (!writeSnapshot(client, latestSnapshot)) {
+                    closeClient(client)
+                } else {
+                    monitorClient(client)
+                }
+            }
+        } catch (e: IOException) {
+            if (running.get()) {
+                Log.w(SYNC_TAG, "Profile snapshot publisher stopped", e)
+            }
+        } finally {
+            running.set(false)
+            server = null
+            closeClients()
+        }
+    }
+
+    private fun broadcast(json: String) {
+        clients.forEach { client ->
+            if (!writeSnapshot(client, json)) {
+                closeClient(client)
+            }
+        }
+    }
+
+    private fun writeSnapshot(socket: LocalSocket, payload: String): Boolean {
+        val bytes = payload.toByteArray(StandardCharsets.UTF_8)
+        if (bytes.size > MAX_PROFILE_PAYLOAD_BYTES) {
+            return false
+        }
+        val header = ByteBuffer.allocate(Int.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN)
+            .putInt(bytes.size)
+            .array()
+        return try {
+            val output = socket.outputStream
+            output.write(header)
+            output.write(bytes)
+            output.flush()
+            true
+        } catch (e: IOException) {
+            Log.v(SYNC_TAG, "Dropping profile reader: ${e.message}")
+            false
+        }
+    }
+
+    private fun closeClient(socket: LocalSocket) {
+        clients.remove(socket)
         try {
             socket.close()
         } catch (ignored: IOException) {
             // Nothing to do.
         }
+    }
+
+    private fun monitorClient(socket: LocalSocket) {
+        Thread({
+            try {
+                val input = socket.inputStream
+                while (running.get() && input.read() >= 0) {
+                    // Readers do not send data; EOF means the connection closed.
+                }
+            } catch (ignored: IOException) {
+                // The writer path closes the socket to drop failed clients.
+            } finally {
+                closeClient(socket)
+            }
+        }, "echidna-profile-reader").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun closeClients() {
+        clients.forEach(::closeClient)
+    }
+
+    override fun close() {
+        running.set(false)
+        val localServer = server
+        server = null
+        try {
+            localServer?.close()
+        } catch (ignored: IOException) {
+            // Nothing to do.
+        }
+        closeClients()
     }
 }

@@ -23,6 +23,7 @@ class EchidnaControlService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val telemetryExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor()
+    private lateinit var syncBridge: ProfileSyncBridge
     private lateinit var profileStore: ProfileStore
     private lateinit var privilegedController: PrivilegedController
     private lateinit var telemetryExporter: TelemetryExporter
@@ -40,7 +41,7 @@ class EchidnaControlService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val syncBridge = ProfileSyncBridge()
+        syncBridge = ProfileSyncBridge()
         profileStore = ProfileStore(File(filesDir, "profiles"), syncBridge)
         val rootExecutor = RootCommandExecutor()
         val selinuxChecker = SelinuxCompatChecker(rootExecutor)
@@ -62,6 +63,7 @@ class EchidnaControlService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         profileStore.close()
+        syncBridge.close()
         executor.shutdownNow()
         telemetryTask?.cancel(true)
         telemetryExecutor.shutdownNow()

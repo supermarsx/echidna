@@ -2,8 +2,8 @@
 
 /**
  * @file profile_sync_server.cpp
- * @brief Socket-based profile sync server used by development tools to
- * push configuration and presets to a running process.
+ * @brief Socket-based profile sync reader used by hooked processes to consume
+ * snapshots from the companion service.
  */
 
 #include <arpa/inet.h>
@@ -18,9 +18,12 @@
 #include <array>
 #include <cerrno>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <cstddef>
 #include <optional>
 #include <string_view>
+#include <thread>
 
 #include "echidna/api.h"
 #include "state/shared_state.h"
@@ -28,12 +31,61 @@
 
 namespace
 {
-    constexpr const char *kSocketPath = "/data/local/tmp/echidna_profiles.sock";
+    constexpr const char *kSocketName = "echidna_profiles";
     constexpr const char *kLogTag = "echidna_profile_sync";
     constexpr size_t kMaxPresetSize = 512 * 1024;
     constexpr size_t kMaxWhitelistEntries = 256;
     constexpr size_t kMaxProcessNameLength = 128;
     constexpr size_t kMaxProfileIdLength = 64;
+    constexpr int kReconnectDelayMs = 1000;
+    constexpr int kInitialReadTimeoutMs = 750;
+
+    bool SetReadTimeout(int fd, int timeout_ms)
+    {
+        timeval timeout{};
+        timeout.tv_sec = timeout_ms / 1000;
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
+        return ::setsockopt(fd,
+                            SOL_SOCKET,
+                            SO_RCVTIMEO,
+                            &timeout,
+                            sizeof(timeout)) == 0;
+    }
+
+    int ConnectAbstractSocket()
+    {
+        const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd < 0)
+        {
+            return -1;
+        }
+
+        sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        const size_t name_len = std::strlen(kSocketName);
+        if (name_len + 1 >= sizeof(addr.sun_path))
+        {
+            ::close(fd);
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        addr.sun_path[0] = '\0';
+        std::memcpy(addr.sun_path + 1, kSocketName, name_len);
+        const auto addr_len =
+            static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + name_len);
+
+        if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), addr_len) != 0)
+        {
+            ::close(fd);
+            return -1;
+        }
+        return fd;
+    }
+
+    int ConnectPublisher()
+    {
+        return ConnectAbstractSocket();
+    }
 
     bool ReadBytes(int fd, void *buffer, size_t bytes)
     {
@@ -457,6 +509,19 @@ namespace echidna
 
         ProfileSyncServer::~ProfileSyncServer() { stop(); }
 
+        bool ProfileSyncServer::refreshOnce()
+        {
+            const int fd = ConnectPublisher();
+            if (fd < 0)
+            {
+                return false;
+            }
+            (void)SetReadTimeout(fd, kInitialReadTimeoutMs);
+            const bool applied = readAndApply(fd);
+            ::close(fd);
+            return applied;
+        }
+
         void ProfileSyncServer::start()
         {
             if (running_.exchange(true))
@@ -470,10 +535,11 @@ namespace echidna
         void ProfileSyncServer::stop()
         {
             running_ = false;
-            if (listener_fd_ >= 0)
+            const int fd = client_fd_.exchange(-1);
+            if (fd >= 0)
             {
-                ::close(listener_fd_);
-                listener_fd_ = -1;
+                ::shutdown(fd, SHUT_RDWR);
+                ::close(fd);
             }
             if (worker_.joinable())
             {
@@ -481,60 +547,35 @@ namespace echidna
             }
         }
 
-        int ProfileSyncServer::createListener()
-        {
-            const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-            if (fd < 0)
-            {
-                return -1;
-            }
-            ::unlink(kSocketPath);
-            sockaddr_un addr{};
-            addr.sun_family = AF_UNIX;
-            std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", kSocketPath);
-            if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0)
-            {
-                ::close(fd);
-                return -1;
-            }
-            if (::listen(fd, 4) != 0)
-            {
-                ::close(fd);
-                return -1;
-            }
-            return fd;
-        }
-
         void ProfileSyncServer::run()
         {
-            listener_fd_ = createListener();
-            if (listener_fd_ < 0)
-            {
-                __android_log_print(ANDROID_LOG_WARN, kLogTag, "Failed to create profile listener");
-                running_ = false;
-                return;
-            }
             while (running_)
             {
-                int client = ::accept4(listener_fd_, nullptr, nullptr, SOCK_CLOEXEC);
+                const int client = ConnectPublisher();
                 if (client < 0)
                 {
-                    if (errno == EINTR)
-                    {
-                        continue;
-                    }
-                    __android_log_print(ANDROID_LOG_WARN,
-                                        kLogTag,
-                                        "Accept failed: %s",
-                                        strerror(errno));
-                    break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kReconnectDelayMs));
+                    continue;
                 }
-                handleClient(client);
-                ::close(client);
+                client_fd_.store(client);
+                __android_log_print(ANDROID_LOG_INFO, kLogTag, "Connected to profile publisher");
+                while (running_ && readAndApply(client))
+                {
+                    // Keep consuming update frames on the long-lived connection.
+                }
+                const int fd = client_fd_.exchange(-1);
+                if (fd >= 0)
+                {
+                    ::close(fd);
+                }
+                if (running_)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kReconnectDelayMs));
+                }
             }
         }
 
-        void ProfileSyncServer::handleClient(int client_fd)
+        bool ProfileSyncServer::readAndApply(int client_fd)
         {
             int shared_fd = -1;
             std::string payload = ReceiveWithFd(client_fd, &shared_fd);
@@ -549,11 +590,9 @@ namespace echidna
             if (!payload.empty())
             {
                 handlePayload(payload);
+                return true;
             }
-            else
-            {
-                __android_log_print(ANDROID_LOG_WARN, kLogTag, "Profile sync payload empty");
-            }
+            return false;
         }
 
         void ProfileSyncServer::handlePayload(const std::string &payload)

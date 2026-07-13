@@ -69,7 +69,7 @@ namespace echidna
 
             // bionic has no shm_open; back the region with an anonymous memfd kept
             // in a process-global name registry so separate ConfigSharedMemory
-            // instances (ProfileSyncServer writer, SharedState reader) share it.
+            // instances (profile-sync reader, SharedState reader) share it.
             AndroidSharedRegion region = AcquireSharedRegion(kSharedMemoryName, layout_size_);
             if (!region.addr)
             {
