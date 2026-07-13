@@ -3,9 +3,13 @@
 This gallery documents the companion app state used for emulator validation and
 UI reference.
 
-- `01-dashboard.png` through `06-whitelist.png`, plus `08-qstile.png`, are real
-  captures from an **unrooted Android 14 (API 34) x86_64 emulator** using
-  `adb exec-out screencap` at 1080 x 2400.
+- `01-dashboard.png` is the current app entry screen, freshly captured from an
+  Android 14 (API 34) x86_64 emulator using `adb shell screencap` at 1080 x
+  2400. The available AVD was rooted with Magisk, so the dashboard shows the
+  active-engine state.
+- `02-presets.png` through `06-whitelist.png`, plus `08-qstile.png`, are earlier
+  real captures from the companion app's fallback state using `adb exec-out
+  screencap` at 1080 x 2400.
 - `07-settings.png` is a **generated UI documentation screenshot**, not a
   device capture. It reflects the current settings state/view-model surface:
   profiles, startup behavior, engine mode, safety, diagnostics, notification,
@@ -15,9 +19,9 @@ The gallery supports the UI scope in [spec section 16][spec-16] and the QA
 split in [spec section 20][spec-20].
 
 !!! warning "Honest state - what the emulator can and cannot show"
-    The real captures come from a **stock, unrooted** emulator, so the native
-    engine is **not installed** and SELinux is enforcing with no policy tool. The
-    app therefore runs its **Java-only fallback**. Diagnostics report **Engine Not
+    Except for the refreshed dashboard entry screenshot, the real captures come
+    from a fallback emulator state, so the native engine is **not installed** and
+    SELinux is enforcing with no policy tool. Diagnostics report **Engine Not
     Installed** with empty telemetry, the Compatibility Wizard reports **Magisk
     not installed / Zygisk disabled / `su` permission denied**, the Quick Settings
     tile shows **Unavailable**, and the audio meters rest at **-120 dBFS**.
@@ -34,16 +38,14 @@ Helium preset bound to Chrome.
 
 ### Dashboard
 
-![Echidna Dashboard with the Darth Vader preset active](assets/screenshots/01-dashboard.png)
+![Echidna Dashboard with Natural Mask active and engine active](assets/screenshots/01-dashboard.png)
 
-The home screen: Master **ON**, active preset **Darth Vader** (FX / low-latency
-tags), Latency Mode set to **Low-Latency**, and Sidetone at -24 dB. The selected
-latency segment renders in a darker tonal style while unselected segments are
-filled purple; that is the app's segmented-control styling.
-
-*Honest state:* the Engine Status card reads **Native Not Installed / SELinux
-Enforcing (Java-only fallback) / Latency 0 ms**, and the meters sit at -120 dBFS
-because there is no live audio path on an unrooted emulator.
+The current app entry screen: Master **ON**, active preset **Natural Mask**,
+and the Dashboard tab selected. This capture was taken from the available rooted
+Android 14 emulator after the status card settled, so the Engine Status card
+reads **Engine active** and the meters show live sample values. This is an app
+state capture, not proof that Magisk flashing or LSPosed injection succeeded in
+the release install flow; those remain covered by [Verification](verification.md).
 
 ## Presets And Effects
 
