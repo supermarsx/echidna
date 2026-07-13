@@ -106,8 +106,11 @@ The `echidna/magisk-packager` docker image runs this step in a pinned environmen
 
 ## GitHub release workflow
 
-`.github/workflows/release.yml` publishes only from a pushed release tag or a manual
-`workflow_dispatch`. Release tags use `YY.N` format, such as `26.1` and `26.2` in 2026.
+`.github/workflows/ci.yml` calls `.github/workflows/release.yml` after the normal CI gates pass on
+each push to `main`. The release workflow scans existing release tags, creates the next `YY.N` tag
+on the pushed commit, builds the release assets, and publishes a GitHub Release. Pushed release tags
+and manual `workflow_dispatch` releases remain supported. Release tags use `YY.N` format, such as
+`26.1` and `26.2` in 2026.
 
 Each GitHub Release now gets a part-by-part asset set:
 
@@ -130,6 +133,14 @@ Manual dispatch behavior:
 - Existing tags can be released manually only when no GitHub Release already exists for that tag.
 - If release signing secrets are absent, the APK builds keep the documented debug-signing fallback
   and produce non-distributable release APKs.
+
+Automatic push behavior:
+
+- Every accepted push to `main` becomes a release candidate and publishes only after the normal CI
+  gates plus the native, Magisk, and Android release jobs complete.
+- The auto tag is created from the latest existing tag in the current UTC year. For example, if
+  `26.3` is the latest 2026 release tag, the next `main` push publishes `26.4`.
+- Auto-tagging is serialized by workflow concurrency so consecutive pushes compute tags in order.
 
 ## Release checklist
 

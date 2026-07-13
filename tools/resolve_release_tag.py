@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Iterable, TextIO
 
 TAG_PATTERN = re.compile(r"^(?P<yy>\d{2})\.(?P<sequence>[1-9]\d*)$")
+AUTO_RELEASE_BRANCH_REF = "refs/heads/main"
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def resolve_tag(
         tag = validate_release_tag(ref.removeprefix(prefix), label="pushed tag")
         return Resolution(tag=tag, source="push", should_create_tag=False)
 
-    if event_name != "workflow_dispatch":
+    if event_name not in {"workflow_dispatch", "workflow_call"}:
         raise ValueError(f"unsupported release event {event_name!r}")
 
     if manual_tag.strip():
@@ -97,8 +98,15 @@ def resolve_tag(
             should_create_tag=tag not in existing_tags,
         )
 
+    if event_name == "workflow_call" and ref != AUTO_RELEASE_BRANCH_REF:
+        raise ValueError(
+            "CI auto-release workflow_call expected "
+            f"{AUTO_RELEASE_BRANCH_REF}, got {ref!r}"
+        )
+
     tag = compute_next_tag(existing_tags, today)
-    return Resolution(tag=tag, source="auto", should_create_tag=tag not in existing_tags)
+    source = "ci" if event_name == "workflow_call" else "auto"
+    return Resolution(tag=tag, source=source, should_create_tag=tag not in existing_tags)
 
 
 def write_github_outputs(output_file: str | None, resolution: Resolution) -> None:

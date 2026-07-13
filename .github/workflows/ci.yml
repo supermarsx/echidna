@@ -321,3 +321,23 @@ jobs:
             gradle --project-dir android/app
             :app:connectedDebugAndroidTest
             :interception-probe:connectedDebugAndroidTest
+
+  release:
+    name: "Release"
+    needs:
+      - format
+      - lint
+      - native
+      - native-tests
+      - android
+      - smoke-tests
+      - android-unit-tests
+      - instrumentation-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ""
+      prerelease: false
+    secrets: inherit
