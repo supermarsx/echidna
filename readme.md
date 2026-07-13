@@ -17,9 +17,9 @@ a rich companion app.
 
 <br />
 
-<img src="docs/assets/screenshots/07-settings.png" alt="Echidna settings — profiles, engine mode, safety, diagnostics, and device actions" width="300" />
+<img src="docs/assets/screenshots/01-dashboard.png" alt="Echidna dashboard — active preset, latency mode, and engine status" width="300" />
 <br />
-<sub>Latest generated Settings screenshot; live emulator captures are in the docs gallery.</sub>
+<sub>Actual app entry screen captured from the emulator; the full gallery is in the docs.</sub>
 
 </div>
 
