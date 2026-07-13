@@ -4,9 +4,9 @@ set -eu
 MODDIR="${0%/*}"
 RUNTIME_DIR="/data/adb/echidna"
 LIB_DST="$RUNTIME_DIR/lib/libechidna.so"
-# DSP engine plugin dir (native/dsp/src/engine.cpp default) and profile-sync
-# socket dir (native/zygisk/src/runtime/profile_sync_server.cpp). /dev/shm does
-# not exist on stock Android, so the socket + shared regions live under /data.
+# DSP engine plugin dir (native/dsp/src/engine.cpp default) and shared runtime
+# region dir. /dev/shm does not exist on stock Android, so the shared regions
+# live under /data.
 TMP_DIR="/data/local/tmp/echidna"
 PLUGIN_DIR="$TMP_DIR/plugins"
 # Shared config/telemetry regions read by hooked app processes. They must exist,
@@ -34,7 +34,6 @@ bootstrap() {
 }
 
 prepare_tmp() {
-    # Socket dir must exist and be writable by the hooked processes that bind it.
     mkdir -p "$PLUGIN_DIR"
     chmod 0771 "$TMP_DIR"
     chmod 0771 "$PLUGIN_DIR"

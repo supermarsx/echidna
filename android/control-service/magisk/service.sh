@@ -5,7 +5,6 @@ MODDIR="${0%/*}"
 LIB_SRC="$MODDIR/lib/libechidna.so"
 RUNTIME_DIR="/data/adb/echidna"
 LIB_DST="$RUNTIME_DIR/lib/libechidna.so"
-SOCKET_PATH="/data/local/tmp/echidna_profiles.sock"
 OFFSETS_SRC="$MODDIR/common/echidna_af_offsets.txt"
 OFFSETS_DST="/data/local/tmp/echidna_af_offsets.txt"
 
@@ -38,16 +37,6 @@ install_offsets() {
     fi
 }
 
-prepare_socket_endpoint() {
-    if [ -S "$SOCKET_PATH" ]; then
-        chown root:shell "$SOCKET_PATH" 2>/dev/null || true
-        chmod 0666 "$SOCKET_PATH" 2>/dev/null || true
-    else
-        log "Socket will be created on demand by the Zygisk side"
-    fi
-    chcon u:object_r:device:s0 "$SOCKET_PATH" 2>/dev/null || true
-}
-
 patch_selinux() {
     if [ "$(getenforce 2>/dev/null || echo Enforcing)" != "Enforcing" ]; then
         return
@@ -68,5 +57,4 @@ patch_selinux() {
 prepare_runtime_dir
 install_library
 install_offsets
-prepare_socket_endpoint
 patch_selinux
