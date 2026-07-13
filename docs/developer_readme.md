@@ -6,8 +6,8 @@ the tree after the Phase 1–3 remediation (buildable debug APK → runnable-on-
 release scaffolding).
 
 > **Status honesty (read this first).** The host build is verified on the development host
-> (Android SDK, NDK r27, JDK 21, Gradle 8.5): the APK builds, all six per-ABI native `.so`
-> cross-compile, the Magisk zip is packaged, and host DSP tests pass. Rooted Android 13/14
+> (Android SDK, NDK r27, JDK 21, Gradle 8.5): the companion and shim APKs build, all six per-ABI
+> native `.so` cross-compile, the Magisk zip is packaged, and host DSP tests pass. Rooted Android 13/14
 > emulators also prove the in-app control-service native `processBlock` path and one live
 > `AudioRecord.read` interception slice. Magisk flashing, live LSPosed injection,
 > physical-device SELinux/HAL behavior, and broader hook-manager coverage are still separate
@@ -24,7 +24,7 @@ android/
   control-service/   # The :service Android library folded into the app build.
     service/         # EchidnaControlService, canonical AIDL, echidna_control_jni.
     magisk/          # SELinux/socket bootstrap scripts consumed by the Magisk packager.
-  lsposed-shim/      # LSPosed/Xposed Java shim (reads the ProfileSyncBridge snapshot).
+  lsposed-shim/      # Installable LSPosed/Xposed Java shim APK.
 native/
   dsp/               # libech_dsp.so — the DSP engine (host-testable).
   zygisk/            # libechidna.so — the Zygisk module + audio hooks.
@@ -113,7 +113,7 @@ This produces a debug-signed APK that bundles `libechidna_control_jni.so` for al
 (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`). It does **not** contain `libech_dsp.so` or the Zygisk
 `libechidna.so` — those ship system-side in the Magisk module, not inside the app.
 
-### Release APK
+### Release APKs
 
 See [the signing model](signing.md). In short: supply keystore material via a git-ignored
 `keystore.properties` or `RELEASE_*` environment variables, then:
@@ -121,12 +121,15 @@ See [the signing model](signing.md). In short: supply keystore material via a gi
 ```sh
 cd android/app
 ./gradlew :app:assembleRelease
+
+cd ../lsposed-shim
+./gradlew :shim:assembleRelease
 ```
 
-Without keystore material the release build falls back to debug signing so CI/local builds still
-succeed (producing a non-distributable APK). Minification/resource-shrinking is intentionally
-disabled for the first release (reflection-sensitive AIDL/JNI/Compose surfaces); enabling R8 with a
-proven keep-rule set is a documented follow-up.
+Without keystore material the release builds fall back to debug signing so CI/local builds still
+succeed (producing non-distributable APKs). Minification/resource-shrinking is intentionally
+disabled for the first release (reflection-sensitive AIDL/JNI/Compose/LSPosed entry points);
+enabling R8 with a proven keep-rule set is a documented follow-up.
 
 ### Native per-ABI build (NDK)
 
@@ -368,8 +371,10 @@ signal). arm64 is the primary target.
 
 **Host-build-verified (on the development host, from clean):**
 
-- Debug APK compiles (~20 MB); packages the `:service` JNI for four ABIs; the merged manifest carries
-  the `<queries>` block and the in-app `EchidnaControlService` (app↔service topology intact).
+- Debug companion APK compiles (~20 MB); packages the `:service` JNI for four ABIs; the merged
+  manifest carries the `<queries>` block and the in-app `EchidnaControlService` (app↔service
+  topology intact).
+- LSPosed shim APK compiles as an installable `com.echidna.lsposed` package.
 - All six per-ABI native artifacts (`libech_dsp.so` + `libechidna.so` × arm64-v8a/armeabi-v7a/x86_64)
   cross-compile and link with the correct ELF architecture.
 - Host DSP unit tests (preset + engine) pass; the BoringSSL Android cross-build compiles the Ed25519

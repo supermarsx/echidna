@@ -207,34 +207,54 @@ jobs:
       - name: Build flashable Magisk module
         run: bash tools/build_magisk_module.sh
 
-      - name: Collect native artifacts
+      - name: Collect native release packages
         run: |
           set -euo pipefail
-          mkdir -p artifacts/native
+          VERSION="${{ needs.prepare.outputs.tag }}"
+          mkdir -p artifacts/native/package/native-libs
           for abi in arm64-v8a armeabi-v7a x86_64; do
-            mkdir -p "artifacts/native/${abi}"
-            cp "build/${abi}/lib/libech_dsp.so" "artifacts/native/${abi}/libech_dsp.so"
-            cp "build/${abi}/lib/libechidna.so" "artifacts/native/${abi}/libechidna.so"
+            mkdir -p "artifacts/native/package/native-libs/${abi}"
+            cp "build/${abi}/lib/libech_dsp.so" \
+              "artifacts/native/package/native-libs/${abi}/libech_dsp.so"
+            cp "build/${abi}/lib/libechidna.so" \
+              "artifacts/native/package/native-libs/${abi}/libechidna.so"
           done
-          mkdir -p artifacts/magisk
-          cp out/echidna-magisk.zip artifacts/magisk/echidna-magisk.zip
+          cat > artifacts/native/package/README.md <<EOF
+          # Echidna native libraries ${VERSION}
 
-      - name: Upload native artifacts
+          This package contains the raw Android NDK outputs for each supported ABI:
+
+          - libechidna.so: Zygisk/native hook engine
+          - libech_dsp.so: DSP engine library
+
+          End users normally install echidna-magisk-${VERSION}.zip instead. These
+          raw libraries are attached for inspection, debugging, and integrators.
+          EOF
+          (
+            cd artifacts/native/package
+            zip -r -X "../echidna-native-libs-${VERSION}.zip" .
+          )
+          mkdir -p artifacts/magisk
+          cp out/echidna-magisk.zip "artifacts/magisk/echidna-magisk-${VERSION}.zip"
+
+      - name: Upload native libraries package
         uses: actions/upload-artifact@v4
         with:
-          name: native
-          path: artifacts/native
+          name: native-libs
+          path: artifacts/native/echidna-native-libs-*.zip
 
       - name: Upload Magisk module
         uses: actions/upload-artifact@v4
         with:
           name: magisk
-          path: artifacts/magisk/echidna-magisk.zip
+          path: artifacts/magisk/echidna-magisk-*.zip
 
   android:
-    name: "Signed release APK"
+    name: "Signed release APKs"
     runs-on: ubuntu-latest
     needs: prepare
+    env:
+      ECHIDNA_VERSION: ${{ needs.prepare.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -280,7 +300,7 @@ jobs:
             echo "store_file=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
             echo "has_keystore=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No RELEASE_KEYSTORE_BASE64 secret set -> release APK will be debug-signed" \
+            echo "No RELEASE_KEYSTORE_BASE64 secret set -> release APKs will be debug-signed" \
               "(non-distributable)."
             echo "has_keystore=false" >> "$GITHUB_OUTPUT"
           fi
@@ -288,7 +308,7 @@ jobs:
       # RELEASE_STORE_FILE is exported ONLY when a keystore exists. build.gradle.kts
       # resolves it via System.getenv(); an empty value would be non-null and break
       # the fallback, so we must leave the variable unset in the no-secret path.
-      - name: Build signed release APK
+      - name: Build signed release APKs
         env:
           HAS_KEYSTORE: ${{ steps.keystore.outputs.has_keystore }}
           STORE_FILE: ${{ steps.keystore.outputs.store_file }}
@@ -304,19 +324,41 @@ jobs:
             echo "Building release with debug-signing fallback."
           fi
           gradle --project-dir android/app :app:assembleRelease
+          gradle --project-dir android/lsposed-shim :shim:assembleRelease
 
-      - name: Collect Android artifacts
+      - name: Collect Android release packages
         run: |
           set -euo pipefail
-          mkdir -p artifacts/android
+          VERSION="${{ needs.prepare.outputs.tag }}"
+          mkdir -p artifacts/android/package/apks
           cp android/app/app/build/outputs/apk/release/app-release.apk \
-            artifacts/android/app-release.apk
+            "artifacts/android/package/apks/echidna-companion-${VERSION}.apk"
+          cp android/lsposed-shim/shim/build/outputs/apk/release/shim-release.apk \
+            "artifacts/android/package/apks/echidna-lsposed-shim-${VERSION}.apk"
+          cat > artifacts/android/package/README.md <<EOF
+          # Echidna APKs ${VERSION}
+
+          - echidna-companion-${VERSION}.apk: companion app and in-process control service.
+          - echidna-lsposed-shim-${VERSION}.apk: installable LSPosed/Xposed Java fallback shim.
+
+          The release APKs are signed with the configured release key when the RELEASE_*
+          secrets are present. Without those secrets, CI falls back to debug signing and the
+          APKs are non-distributable.
+          EOF
+          (
+            cd artifacts/android/package
+            zip -r -X "../echidna-apks-${VERSION}.zip" .
+          )
+          cp artifacts/android/package/apks/*.apk artifacts/android/
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: android
-          path: artifacts/android
+          name: android-apks
+          path: |
+            artifacts/android/echidna-companion-*.apk
+            artifacts/android/echidna-lsposed-shim-*.apk
+            artifacts/android/echidna-apks-*.zip
 
   publish:
     runs-on: ubuntu-latest
@@ -330,6 +372,57 @@ jobs:
         with:
           path: release_artifacts
 
+      - name: Prepare release asset set
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare.outputs.tag }}"
+          mkdir -p release_upload
+          find release_artifacts -type f -print0 | sort -z | while IFS= read -r -d '' file; do
+            cp "${file}" release_upload/
+          done
+          cd release_upload
+          expected=(
+            "echidna-companion-${VERSION}.apk"
+            "echidna-lsposed-shim-${VERSION}.apk"
+            "echidna-apks-${VERSION}.zip"
+            "echidna-magisk-${VERSION}.zip"
+            "echidna-native-libs-${VERSION}.zip"
+          )
+          for file in "${expected[@]}"; do
+            test -f "${file}" || {
+              echo "missing release asset: ${file}" >&2
+              exit 1
+            }
+          done
+          cat > RELEASE_ARTIFACTS.md <<EOF
+          # Echidna ${VERSION} release artifacts
+
+          ## Installable packages
+
+          - echidna-companion-${VERSION}.apk: companion app and in-process control service.
+          - echidna-magisk-${VERSION}.zip: flashable Magisk/Zygisk native engine module.
+          - echidna-lsposed-shim-${VERSION}.apk: optional LSPosed Java fallback shim.
+
+          ## Convenience packages
+
+          - echidna-apks-${VERSION}.zip: companion APK plus LSPosed shim APK.
+          - echidna-native-libs-${VERSION}.zip: raw per-ABI libechidna.so and libech_dsp.so.
+          - echidna-complete-${VERSION}.zip: all release assets above plus this manifest.
+
+          Install the Magisk/Zygisk module and companion APK for the native path. Install
+          the LSPosed shim only when validating or using the Java fallback path. Avoid
+          scoping the same target app into both Zygisk and LSPosed unless explicitly testing
+          duplicate-hook behavior.
+          EOF
+          zip -r -X "echidna-complete-${VERSION}.zip" \
+            "echidna-companion-${VERSION}.apk" \
+            "echidna-lsposed-shim-${VERSION}.apk" \
+            "echidna-apks-${VERSION}.zip" \
+            "echidna-magisk-${VERSION}.zip" \
+            "echidna-native-libs-${VERSION}.zip" \
+            "RELEASE_ARTIFACTS.md"
+          sha256sum * > SHA256SUMS.txt
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -337,6 +430,6 @@ jobs:
           name: Echidna ${{ needs.prepare.outputs.tag }}
           body: ${{ needs.prepare.outputs.changelog }}
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
-          files: release_artifacts/**
+          files: release_upload/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

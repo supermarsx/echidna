@@ -48,7 +48,7 @@ flowchart TB
     SHIM -->|"JNI buffer handoff"| DSP
 ```
 
-### The five runtime pieces
+### The six runtime pieces
 
 | Component | Artifact | Runs in | Role |
 | --- | --- | --- | --- |
@@ -57,6 +57,7 @@ flowchart TB
 | **JNI bridge** | `echidna_control_jni` (`.so` in the APK) | companion app process | App-side native glue; `dlopen`s the Magisk-delivered `libechidna.so` for status/control. |
 | **Zygisk module** | `libechidna.so` (Magisk `zygisk/<abi>.so`) | every specialized app process | Registered Zygisk module; installs the audio hook chain and routes captured PCM through the DSP. |
 | **DSP engine** | `libech_dsp.so` (Magisk `system/lib(64)`) | whichever process loaded the hooks | Real-time C++ effect chain; exposes the `echidna_process_block` C ABI. |
+| **LSPosed shim** | `shim-release.apk` (`com.echidna.lsposed`) | LSPosed-scoped app process | Optional Java `AudioRecord` fallback; reads the same profile-sync snapshot as native readers. |
 
 ## Control plane: app to service to native
 

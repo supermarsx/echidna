@@ -1,15 +1,52 @@
 plugins {
-    id 'com.android.library'
+    id 'com.android.application'
 }
+
+import java.util.Properties
+
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+def releaseSigningValue = { String propertyKey, String envKey ->
+    keystoreProperties.getProperty(propertyKey)
+        ?: project.findProperty(envKey)
+        ?: System.getenv(envKey)
+}
+
+def releaseStoreFile = releaseSigningValue("storeFile", "RELEASE_STORE_FILE")
+def hasReleaseKeystore = releaseStoreFile != null
 
 android {
     namespace 'com.echidna.lsposed'
     compileSdk 34
 
     defaultConfig {
+        applicationId 'com.echidna.lsposed'
         minSdk 26
         targetSdk 34
-        consumerProguardFiles 'consumer-rules.pro'
+        versionCode 1
+        versionName '0.1'
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseSigningValue("storePassword", "RELEASE_STORE_PASSWORD")
+                keyAlias releaseSigningValue("keyAlias", "RELEASE_KEY_ALIAS")
+                keyPassword releaseSigningValue("keyPassword", "RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+        }
     }
 
     compileOptions {

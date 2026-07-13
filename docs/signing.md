@@ -1,9 +1,10 @@
 # Release Signing Model
 
-Echidna ships as a **single companion APK** (`com.echidna.app`) that hosts the control service
-in-process. Because there is only one APK, the historical cross-package co-signing problem is moot:
-there is no separate service APK to co-sign, and the old `signature`-level `BIND_CONTROL_SERVICE`
-permission has been removed as self-referential. This document covers how the release APK is signed.
+Echidna's control plane ships as a **single companion APK** (`com.echidna.app`) that hosts the
+control service in-process. The optional Java fallback ships as a separate LSPosed shim APK
+(`com.echidna.lsposed`). Because there is no separate service APK, the historical cross-package
+co-signing problem is moot: the old `signature`-level `BIND_CONTROL_SERVICE` permission has been
+removed as self-referential. This document covers how the release APKs are signed.
 
 ## Distribution model
 
@@ -13,14 +14,16 @@ package-visibility hygiene) is explicitly out of scope.
 
 ## Where signing material comes from
 
-The app module (`android/app/app/build.gradle.kts`) resolves release signing material in priority
-order. **No keystore or password is ever hardcoded or committed.**
+The app module (`android/app/app/build.gradle.kts`) and LSPosed shim module
+(`android/lsposed-shim/shim/build.gradle`) resolve release signing material in priority order.
+**No keystore or password is ever hardcoded or committed.**
 
 1. A git-ignored `keystore.properties` next to the app project
    (`android/app/keystore.properties`). Copy `android/app/keystore.properties.example` and fill in
-   real values. `keystore.properties`, `*.jks`, and `*.keystore` are git-ignored.
+   real values. The shim can also read `android/lsposed-shim/keystore.properties` when building it
+   directly. `keystore.properties`, `*.jks`, and `*.keystore` are git-ignored.
 2. Gradle properties / environment variables (preferred in CI, supplied as secrets):
-   - `RELEASE_STORE_FILE` — path to the keystore (absolute, or relative to `android/app/`).
+   - `RELEASE_STORE_FILE` — path to the keystore (absolute is preferred in CI).
    - `RELEASE_STORE_PASSWORD` — keystore password.
    - `RELEASE_KEY_ALIAS` — key entry alias.
    - `RELEASE_KEY_PASSWORD` — key entry password.
@@ -36,15 +39,19 @@ falls back to **debug signing** so the build still succeeds. The result is a deb
 ```sh
 cd android/app
 ./gradlew :app:assembleRelease   # release-signed if keystore present, else debug-signed
+
+cd ../lsposed-shim
+./gradlew :shim:assembleRelease  # same RELEASE_* environment, same fallback
 ```
 
 ## Minification
 
 Minification and resource-shrinking are **disabled** for the first release. The app is heavy on
 reflection-sensitive entry points — AIDL stubs (`IEchidnaControlService`), JNI
-(`libechidna_control_jni`), and Compose — so shipping R8/resource-shrinking without a proven keep-rule
-set risks silently stripping live code. Enabling `isMinifyEnabled` + a `proguard-rules.pro` that keeps
-the AIDL/JNI/Compose surfaces is a deliberate follow-up (tracked in [todo.md](https://github.com/supermarsx/echidna/blob/main/todo.md)).
+(`libechidna_control_jni`), and Compose — while the shim is loaded reflectively by LSPosed through
+`assets/xposed_init`. Shipping R8/resource-shrinking without proven keep rules risks silently
+stripping live code. Enabling `isMinifyEnabled` + keep rules is a deliberate follow-up (tracked in
+[todo.md](https://github.com/supermarsx/echidna/blob/main/todo.md)).
 
 ## Generating a keystore
 

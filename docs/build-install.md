@@ -1,11 +1,12 @@
 # Build & Install
 
-This page is the reproducible, end-to-end guide to building Echidna's three shippable
-artifacts and installing them on a device:
+This page is the reproducible, end-to-end guide to building Echidna's shippable artifacts and
+installing them on a device:
 
 | Artifact | Produced by | What it is |
 | -------- | ----------- | ---------- |
 | `app-debug.apk` / `app-release.apk` | Gradle | The companion app (UI + in-app control service + `libechidna_control_jni.so`). |
+| `shim-release.apk` | Gradle | The optional LSPosed/Xposed Java fallback shim APK. |
 | Six per-ABI `.so` | `tools/build_native_ndk.sh` | `libech_dsp.so` + `libechidna.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`. |
 | `out/echidna-magisk.zip` | `tools/build_magisk_module.sh` | The flashable Magisk module that delivers the native libraries system-side. |
 
@@ -14,9 +15,9 @@ The Docker path is the most reproducible and is the one the native → Magisk pi
 container-verified against. Pick whichever matches your setup — the outputs are identical.
 
 !!! info "Honesty about what is verified"
-    Everything on this page up to *installing* is host-/container-verified: the APK builds,
-    all six `.so` cross-compile with the correct ELF architecture, and the flashable zip is
-    produced with the correct layout. Rooted-emulator validation also proves native
+    Everything on this page up to *installing* is host-/container-verified: the companion and
+    LSPosed APKs build, all six `.so` cross-compile with the correct ELF architecture, and the
+    flashable zip is produced with the correct layout. Rooted-emulator validation also proves native
     `processBlock` and one `AudioRecord.read` interception slice. Full Magisk flashing,
     LSPosed injection, and broad device/HAL hook coverage are still marked below and
     covered in depth in [Verification](verification.md).
@@ -72,7 +73,20 @@ so CI and local builds still succeed (producing a non-distributable APK). The fu
 property/env resolution order, the fallback, and why minification is disabled for v1 — is in
 [the signing guide](signing.md).
 
-### 2. Build the native libraries (per ABI)
+### 2. Build the LSPosed shim APK
+
+The shim is an installable APK used only for the Java/`AudioRecord` fallback path:
+
+```sh
+cd android/lsposed-shim
+./gradlew :shim:assembleRelease
+# -> android/lsposed-shim/shim/build/outputs/apk/release/shim-release.apk
+```
+
+The shim uses the same `RELEASE_*` signing environment as the companion app and falls back to debug
+signing when no release key is present. See [the signing guide](signing.md).
+
+### 3. Build the native libraries (per ABI)
 
 `tools/build_native_ndk.sh` configures the `native/` aggregate once per ABI with the NDK
 toolchain file. Point `ANDROID_NDK` at your r27 install:
@@ -110,7 +124,7 @@ never silently off on device: (1) a prebuilt BoringSSL via `-DECHIDNA_BORINGSSL_
 (2) a toolchain/system `libcrypto`; (3) FetchContent BoringSSL (Android-only, default on,
 pinned tag `0.20240913.0`, nothing vendored). If none resolve, the loader stays fail-closed.
 
-### 3. Build the flashable Magisk module
+### 4. Build the flashable Magisk module
 
 With the six per-ABI `.so` present under `build/<abi>/lib/`:
 
@@ -136,6 +150,16 @@ The script fails loudly if any per-ABI `libechidna.so` / `libech_dsp.so` is miss
 parameterized via `ECHIDNA_ABIS`, `ECHIDNA_VERSION`, `ECHIDNA_VERSION_CODE`,
 `ECHIDNA_BUILD_ROOT`, `ECHIDNA_OUT_DIR`, `ECHIDNA_ZIP_PATH`. See
 [the Magisk release guide](magisk_release.md) for the on-device layout details.
+
+GitHub Releases publish these parts separately:
+
+- `echidna-companion-<tag>.apk`
+- `echidna-lsposed-shim-<tag>.apk`
+- `echidna-magisk-<tag>.zip`
+- `echidna-native-libs-<tag>.zip`
+- `echidna-apks-<tag>.zip`
+- `echidna-complete-<tag>.zip`
+- `SHA256SUMS.txt` and `RELEASE_ARTIFACTS.md`
 
 ---
 
@@ -218,9 +242,9 @@ recovery), then reboot. The installer requires **Magisk 24.0+** and aborts on AP
 ### 3. Enable Zygisk and LSPosed *(device-gated)*
 
 1. In Magisk, enable **Zygisk** (Settings → Zygisk) and reboot if you just turned it on.
-2. Install and enable **LSPosed**, then enable the Echidna module and select its **scope**
-   (the target apps you want hooked). LSPosed provides the Java/`AudioRecord` fallback path;
-   the Zygisk native module provides the primary native hooks.
+2. Install `echidna-lsposed-shim-<tag>.apk` if you need the Java fallback path, install and enable
+   **LSPosed**, then enable the Echidna module and select its **scope** (the target apps you want
+   hooked). The Zygisk native module remains the primary native hook path.
 
 ### 4. Grant the per-app whitelist
 
