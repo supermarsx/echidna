@@ -3,10 +3,10 @@
 This page describes the **real, end-to-end architecture** of Echidna as it is
 built in this repository — the companion app, the in-app control service, the
 JNI bridge, the Zygisk native module, the DSP engine, and the LSPosed
-compatibility shim. Where a behaviour can only be exercised on a rooted device
-it is marked **device-gated**; those paths are source-complete and build-verified
-here, but their on-device runtime behaviour has not been observed in this
-environment.
+compatibility shim. Rooted-emulator testing now proves the service-side native
+DSP path and one live `AudioRecord.read` interception slice; broader hook
+coverage, Magisk flashing, LSPosed injection, and physical-device SELinux/HAL
+behavior are still marked as release-device validation.
 
 ## Component overview
 
@@ -133,10 +133,10 @@ sequenceDiagram
 `postAppSpecialize` is the attach point because by then `/proc/self/cmdline`
 reflects the **target app's** process name, which the whitelist check reads. The
 module deliberately keeps itself mapped so the installed inline/PLT hooks persist
-for the process lifetime. **Device-gated:** the actual Zygisk load, lifecycle
-firing, and hook installation require a rooted device with Magisk + Zygisk; they
-are source-complete and the `.so` links for all ABIs, but on-device execution has
-not been observed here.
+for the process lifetime. The `AudioRecord.read` slice has rooted x86_64 emulator
+coverage through the interception probe. Full Magisk loader lifecycle, reboot
+survival, arbitrary target-app specialization, and non-`AudioRecord` hook
+managers still require release-device validation.
 
 ### Multi-ABI hooking
 
@@ -149,7 +149,8 @@ trampoline support differs by ABI (t2-e11):
 - **x86_64** — full trampoline implemented (14-byte absolute `jmp [rip]` patch
   with an allow-listed length decoder that relocates RIP-relative and rel32
   operands, failing closed on anything unrecognized). Verified with a host
-  decoder + end-to-end hook harness; **on-emulator confirmation is device-gated.**
+  decoder + end-to-end hook harness, plus the rooted-emulator `AudioRecord`
+  interception probe.
 - **armeabi-v7a** — **graceful degrade**: it builds and loads, but `install()`
   returns `false` and emits a `hook_unsupported_abi` log signal, because Thumb-2 /
   IT-block relocation is unsafe and untested. armv7 hooking is intentionally
@@ -237,9 +238,11 @@ implementation. See [Limitations](limitations.md).
   build and the debug/release APKs assemble; all six per-ABI `.so` cross-compile
   and link (arm64-v8a / armeabi-v7a / x86_64, DSP + Zygisk); host DSP tests pass;
   the x86_64 trampoline passes a host end-to-end hook harness; the app installs,
-  launches crash-free, and navigates on an unrooted emulator.
-- **Device-gated (source-complete, not observed here):** live Zygisk load and
-  lifecycle firing, real hook installation inside target processes, the LSPosed
-  injected-process path, Audio HAL / SELinux interaction, and the on-device
-  socket/`SCM_RIGHTS` fd hand-off. See [Verification](verification.md) for the
-  full matrix and a reproduce-on-device procedure.
+  launches crash-free, and navigates on an unrooted emulator; rooted Android
+  13/14 emulators pass app instrumentation with native `processBlock` coverage
+  and an `AudioRecord.read` interception probe with `processed=1`.
+- **Still release-device validation:** Magisk flashing/reboot/module-manager load,
+  live LSPosed shim injection, physical-device Zygisk lifecycle on arm64,
+  AAudio/OpenSL/AudioFlinger/tinyalsa/HAL hooks, SELinux / audio-HAL interaction,
+  and multi-process profile-sync behavior. See [Verification](verification.md)
+  for the full matrix and a reproduce-on-device procedure.

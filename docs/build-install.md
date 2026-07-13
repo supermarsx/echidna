@@ -16,9 +16,10 @@ container-verified against. Pick whichever matches your setup — the outputs ar
 !!! info "Honesty about what is verified"
     Everything on this page up to *installing* is host-/container-verified: the APK builds,
     all six `.so` cross-compile with the correct ELF architecture, and the flashable zip is
-    produced with the correct layout. **Live audio hooking is device-gated** — it requires a
-    rooted Magisk + Zygisk device and cannot be exercised on a stock emulator. Those steps
-    are marked below and covered in depth in [Verification](verification.md).
+    produced with the correct layout. Rooted-emulator validation also proves native
+    `processBlock` and one `AudioRecord.read` interception slice. Full Magisk flashing,
+    LSPosed injection, and broad device/HAL hook coverage are still marked below and
+    covered in depth in [Verification](verification.md).
 
 ---
 
@@ -189,8 +190,9 @@ all six architecture-correct `.so`, and `magisk-packager` consumed them into a c
 ## Install & activate on a device
 
 Steps 1 and 2 (APK install, launch, screen navigation) are verified on an unrooted emulator.
-Everything from step 3 on is **device-gated** — it needs a rooted device running Magisk with
-Zygisk, and cannot be reproduced on a stock AVD.
+The app/service native `processBlock` path and one `AudioRecord.read` hook probe are verified on
+rooted Android 13/14 emulators. Magisk flashing, LSPosed activation, and broader device/HAL hook
+coverage are still **device-gated**.
 
 ### 1. Install the companion app
 
@@ -249,7 +251,9 @@ with a lab counterpart and confirm the processed voice.
 | Flashable `echidna-magisk.zip` layout | Verified (correct arch, single id) |
 | Docker native → Magisk pipeline | Container-verified end-to-end |
 | APK install + launch + screen nav | Emulator-verified (unrooted) |
-| Magisk flash, Zygisk/LSPosed activation, live hooking, SELinux/HAL | **Device-gated** |
+| Native `processBlock` via in-app service | Rooted-emulator verified (Android 13/14) |
+| `AudioRecord.read` interception + DSP routing | Rooted-emulator verified (Android 13/14) |
+| Magisk flash, Zygisk/LSPosed activation, broad hook coverage, SELinux/HAL | **Device-gated** |
 
 The full matrix and a step-by-step reproduce-on-real-device procedure are in
 [Verification](verification.md).

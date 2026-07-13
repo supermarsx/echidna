@@ -1,20 +1,21 @@
 # End-to-End Verification
 
 This page is the honest answer to *"does Echidna actually work end to end?"* It separates
-what was **really built, run, and measured on this build host and emulator** (reproducible)
-from what is **device-gated** — behaviour that can only be exercised on a rooted
-Magisk + Zygisk device and is therefore documented, not claimed as verified.
+what was **really built, run, and measured on this build host, stock emulator, and rooted
+emulators** from what still needs release-device validation: full Magisk/LSPosed install,
+physical-device SELinux/HAL behavior, and broader hook coverage.
 
 > **Reading guide.** Every row in the "Verified" table below corresponds to a real build,
-> test run, or on-device action with recorded output. The "Device-gated" section lists
-> exactly what was **not** run here, and why, followed by a step-by-step procedure to
-> reproduce it on real hardware. Nothing in the device-gated section is presented as
-> having passed.
+> test run, or on-device action with recorded output. The "Still not verified" section
+> lists exactly what was **not** run here, and why, followed by a step-by-step procedure
+> to reproduce it on release hardware.
 
 Verification host: Windows 11, PowerShell + Bash. Toolchain: Android SDK `C:\android-sdk`,
 NDK r27 (`27.0.12077973`), JBR OpenJDK 21, Gradle 8.5 (wrapper), CMake 4.2.1 / Ninja 1.13.2,
-apksigner (build-tools 34.0.0), Docker Desktop 4.72.0 (engine 29.4.2), emulator `emulator-5554`
-(AVD `echidna_e2e`, API 34 / Android 14, x86_64, google_apis, **unrooted**).
+apksigner (build-tools 34.0.0), Docker Desktop 4.72.0 (engine 29.4.2), stock emulator
+`emulator-5554` (AVD `echidna_e2e`, API 34 / Android 14, x86_64, **unrooted**), plus rooted
+x86_64 AVDs `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) for the native
+`processBlock` and `AudioRecord.read` interception probes.
 
 ---
 
@@ -31,6 +32,8 @@ apksigner (build-tools 34.0.0), Docker Desktop 4.72.0 (engine 29.4.2), emulator 
 | **App unit tests** | `./gradlew :app:testDebugUnitTest` (Robolectric, headless) | **PASS 24/24** — preset serialize/round-trip, status/control/whitelist JSON parsing, repository CRUD |
 | **Service unit tests** | `./gradlew :service:testDebugUnitTest` (headless) | **PASS 11/11** — unified control-plane snapshot, master/bypass/panic propagation, fail-closed whitelist default |
 | **Android instrumentation** | `:app:connectedDebugAndroidTest` on `emulator-5554` (clean install) | **PASS 12/12** — real in-APK `EchidnaControlService` bind + AIDL round-trips (control-state read, master, panic, whitelist write/read-back, `pushProfileSnapshot`/`listProfiles`, `getModuleStatus`), profile-switch flow, QS-tile state source, Compose dashboard render |
+| **Rooted Android app instrumentation** | `.\gradlew.bat :app:connectedDebugAndroidTest` on `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) | **PASS 13/13 on both** — includes the real in-APK service bind and `processBlockAppliesPresetWhenNativeEngineIsAvailable`, which applies a native cut preset and asserts finite, measurably attenuated output when `libechidna.so`/`libech_dsp.so` are reachable |
+| **Rooted `AudioRecord` interception probe** | `.\gradlew.bat :interception-probe:connectedDebugAndroidTest` on the same rooted emulators | **PASS 1/1 on both** — the probe opens Android `AudioRecord`, reads real PCM, and observes current-process hook evidence with `processed=1`; telemetry hook metadata is checked when available |
 | **App install + launch** | `adb install -r app-debug.apk`; launch `.MainActivity` | **PASS** — install `Success`, `MainActivity` resumed, process stays up |
 | **Crash-free relaunch** | 8 cold relaunches (`am force-stop` + `am start`) with a persisted `echidna_presets.json` present, scanning logcat | **PASS 8/8** — 0 crashes, process alive every launch. This is the exact trigger of the startup crash found by instrumentation (see highlight below) |
 | **In-app screen navigation** | `adb input` nav + `uiautomator dump` across screens | **PASS (honest)** — 6 screens rendered live and navigated (Dashboard, Preset Manager, Effects Editor, Diagnostics, Settings, Compatibility Wizard) with correct *module-not-active* state on the unrooted emulator; the Whitelist Editor was wired into the nav graph afterward (t2-e27) and verified to render; the QS tile is a registered `TileService` that cannot be driven headless-unrooted (its state source is unit-verified) |
@@ -59,34 +62,39 @@ release-blocking startup crash:
 
 ---
 
-## 2. Device-gated — NOT verified here (requires a rooted Magisk + Zygisk device)
+## 2. Still not verified / device-gated
 
-The verification host is a stock **unrooted** AVD (no Magisk, no Zygisk; SELinux enforcing with
-no policy tool, so the app runs its Java-only fallback — exactly as the on-device Compatibility
-Wizard reports: *Magisk not installed, Zygisk disabled*). The following therefore **cannot be
-exercised here and are not claimed as verified.** They require real rooted hardware:
+The rooted-emulator pass proves a narrow but important live slice: x86_64 `AudioRecord.read`
+interception in the current process, plus service-side native `processBlock` routing through the
+DSP. It does **not** prove the whole release install path. Attempts to install the refreshed zip
+with `magisk --install-module /sdcard/Download/echidna-magisk.zip` on the rooted emulator images
+returned `Incomplete Magisk install`, so Magisk flashing remains unverified here.
 
-- **Live audio hooking** — symbol resolve + inline patch inside a live victim media process, and
-  the on-device Zygisk module load into audio processes (AAudio / OpenSL / AudioFlinger per HAL).
-- **Magisk flash + reboot** — `magisk --install-module` / Manager flow, reboot, and the
-  **magic-mount namespace resolution** of the bare `dlopen("libech_dsp.so")` against the
-  magic-mounted `system/lib(64)`.
-- **`magiskpolicy --live` SELinux relaxations** and the SELinux / audio-HAL interaction on a
-  real enforcing device.
-- **x86_64 trampoline under real injection** — the inline-hook decoder passed a host harness
-  (23/23) but the full injection into a live process is emulator/device-pending.
-- **armeabi-v7a runtime hooking** — ships as **graceful-degrade** (builds and loads, but
-  `install()` returns false and fails closed; Thumb-2/IT-block relocation is untested).
-- **Single-holder profile-sync socket** — a known limitation, not a bug: do **not** run the
-  Zygisk module and the LSPosed shim simultaneously on the same device, and with multiple hooked
-  apps only the last binder receives snapshot pushes (others stay fail-closed).
+Still not claimed as verified:
+
+- **Magisk Manager / `magisk --install-module` flash + reboot** — including magic-mount namespace
+  resolution of `dlopen("libech_dsp.so")` against `system/lib(64)`.
+- **Full Zygisk lifecycle on release hardware** — loading from Magisk at zygote time, specializing
+  into arbitrary target apps, and surviving reboot/module-manager install paths.
+- **Non-`AudioRecord` hook managers** — AAudio, OpenSL ES, AudioFlinger, tinyalsa, and HAL-level
+  paths still need live device coverage.
+- **Live LSPosed shim injection** — the shim builds and its snapshot reader is implemented, but
+  LSPosed installation, scoping, injected-process execution, and SELinux access were not exercised.
+- **`magiskpolicy --live` SELinux relaxations** and the SELinux / audio-HAL interaction on a real
+  enforcing device.
+- **arm64 primary hardware and armeabi-v7a runtime behavior** — x86_64 has rooted-emulator coverage
+  for the `AudioRecord` slice; arm64 still needs physical-device proof, and armv7 intentionally
+  fails closed.
+- **Single-holder profile-sync socket** — a known limitation, not a bug: do **not** run the Zygisk
+  module and the LSPosed shim simultaneously on the same device, and with multiple hooked apps only
+  the last binder receives snapshot pushes (others stay fail-closed).
 
 ---
 
 ## 3. Reproduce on a real device (the device-gated procedure)
 
 Run this on a **rooted physical device with Magisk 24.0+ and Zygisk enabled** to exercise the
-live path that the emulator cannot:
+release path that the rooted-emulator probe did not cover:
 
 1. **Root + Magisk.** Unlock the bootloader and install Magisk (patched boot image /
    `fastboot`). Confirm the Magisk app shows *installed* and `su` works.
@@ -118,4 +126,5 @@ live path that the emulator cannot:
 
 *Sources: release-readiness gate (`t2-e20`), docker native → magisk container run (`t3-e1b`),
 emulator install/launch/nav + crash-free confirmation (`t3-e3`), instrumentation + crash
-discovery (`t2-e18`), crash fix + proof (`t2-e26`), native tests (`t2-e17`).*
+discovery (`t2-e18`), crash fix + proof (`t2-e26`), native tests (`t2-e17`), rooted Android
+13/14 app instrumentation, and rooted Android 13/14 `AudioRecord` interception probe.*

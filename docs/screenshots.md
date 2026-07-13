@@ -21,9 +21,10 @@ split in [spec section 20][spec-20].
     Installed** with empty telemetry, the Compatibility Wizard reports **Magisk
     not installed / Zygisk disabled / `su` permission denied**, the Quick Settings
     tile shows **Unavailable**, and the audio meters rest at **-120 dBFS**.
-    Live module telemetry requires a rooted device with Magisk + Zygisk. See
-    [Verification](verification.md) for the proven-vs-device-gated split and the
-    reproduce-on-hardware procedure.
+    Rooted-emulator runtime proof lives in [Verification](verification.md): native
+    `processBlock` and one `AudioRecord.read` interception slice pass there. These
+    screenshots remain UI/state captures, not evidence of Magisk flashing or LSPosed
+    injection.
 
 Sample state was seeded through in-app interaction only: the **Darth Vader**
 preset is activated, and the whitelist has Camera and Chrome enabled with a

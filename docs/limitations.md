@@ -9,10 +9,11 @@ Echidna operates in. Read them before flashing anything.
 
 !!! warning "Status context"
     Everything below reflects the design and the code as it stands. Where a limitation is
-    *device-gated* — only observable on rooted hardware — it is marked as such, because
-    live on-device hooking has **not** been validated in this project's environment (see
-    [Verification](verification.md)). Device-gated items are honest known risks, not
-    measured results.
+    *device-gated* — only observable on rooted hardware or release hardware — it is marked
+    as such. The project now has rooted-emulator proof for native `processBlock` and one
+    `AudioRecord.read` interception slice, but Magisk flashing, live LSPosed injection,
+    broader hook managers, and physical-device SELinux/HAL behavior remain open (see
+    [Verification](verification.md)).
 
 ---
 
@@ -108,7 +109,7 @@ Echidna's inline hooking is **ABI-specific**:
 | ABI | Hooking status |
 | --- | --- |
 | **arm64-v8a (aarch64)** | Primary, fully implemented. |
-| **x86_64** | Implemented (absolute-jump patch + relocating trampoline with a fail-closed length decoder); needs emulator/on-device confirmation. |
+| **x86_64** | Implemented (absolute-jump patch + relocating trampoline with a fail-closed length decoder); rooted-emulator `AudioRecord` slice verified, broader hook coverage still pending. |
 | **armeabi-v7a (32-bit ARM / Thumb-2)** | **Graceful degrade — hooking disabled.** The module builds and loads, but `install()` returns `false` and emits a `hook_unsupported_abi` log signal; **no audio hooks activate.** |
 
 Why armv7 degrades instead of shipping a trampoline: correct ARM/Thumb-2 relocation must
@@ -131,7 +132,8 @@ To keep expectations honest:
 | --- | --- |
 | Build (signed APK, 6 per-ABI `.so`, flashable Magisk zip) | **Verified** on a full toolchain |
 | Companion app: install, launch, screen navigation, in-app service bind | **Verified** on an unrooted emulator (crash-free) |
-| Live Zygisk/LSPosed injection, Magisk flash + reboot, real capture hooking | **Device-gated** — not validated here |
+| Native `processBlock` and `AudioRecord.read` interception slice | **Verified** on rooted Android 13/14 emulators |
+| Magisk flash + reboot, live LSPosed injection, broader hook coverage | **Device-gated** — not validated here |
 | SELinux policy interaction, per-vendor audio-HAL routing | **Device-gated** — per-device |
 | Multi-app simultaneous hooking | **Constrained** by the single-holder socket (item 5) |
 | armv7 voice transformation | **Not available** (item 6) |

@@ -5,11 +5,13 @@ release-signing model, and the known limitations you must design around. It refl
 the tree after the Phase 1–3 remediation (buildable debug APK → runnable-on-device layout → signed
 release scaffolding).
 
-> **Status honesty (read this first).** Everything below is **host-build-verified** on the
-> development host (full Android SDK, NDK r27, JDK 21, Gradle 8.5): the debug APK compiles from
-> clean, all six per-ABI native `.so` cross-compile and link, and the host DSP tests pass. On-device
-> behaviour — live Zygisk/LSPosed hooking, SELinux/HAL interaction, Magisk flashing, service
-> binding — is **not** verified here and still requires a rooted device or emulator. See
+> **Status honesty (read this first).** The host build is verified on the development host
+> (Android SDK, NDK r27, JDK 21, Gradle 8.5): the APK builds, all six per-ABI native `.so`
+> cross-compile, the Magisk zip is packaged, and host DSP tests pass. Rooted Android 13/14
+> emulators also prove the in-app control-service native `processBlock` path and one live
+> `AudioRecord.read` interception slice. Magisk flashing, live LSPosed injection,
+> physical-device SELinux/HAL behavior, and broader hook-manager coverage are still separate
+> release-device validation. See
 > [Status: verified vs. needs a device](#status-verified-vs-needs-a-device).
 
 ## Repository topology
@@ -375,15 +377,27 @@ signal). arm64 is the primary target.
   verify path.
 - The C/C++ format gate is clean tree-wide.
 
-**Still device-only (NOT verified here — needs a rooted device / emulator):**
+**Runtime-verified on emulators:**
 
-- Live Zygisk module load and real hook installation (arm64 primary).
-- LSPosed shim injection into target apps and snapshot read under SELinux.
-- On-device SELinux enforcement and audio HAL behaviour.
-- `x86_64` inline-hook trampoline under real injection (host-harness verified only).
+- App instrumentation passes **13/13** on rooted Android 13 and Android 14 x86_64 emulators,
+  including the in-APK service bind and `processBlockAppliesPresetWhenNativeEngineIsAvailable`.
+- The native `processBlock` instrumentation test applies a real preset and asserts the output is
+  finite and measurably changed when `libechidna.so` and `libech_dsp.so` are reachable.
+- `:interception-probe:connectedDebugAndroidTest` passes **1/1** on the same rooted emulators:
+  a real `AudioRecord.read` call emits current-process hook evidence with `processed=1`.
+- Earlier stock-emulator coverage still proves install, launch, navigation, fallback UI state, and
+  the in-app service/AIDL round-trip without root.
+
+**Still release-device-only / NOT verified here:**
+
+- Magisk Manager or `magisk --install-module` flashing, reboot, module-manager load, and
+  magic-mount namespace behavior. The emulator `magisk --install-module` attempt returned
+  `Incomplete Magisk install`.
+- Live LSPosed shim injection into target apps, LSPosed scoping, and snapshot reads under SELinux.
+- Physical-device Zygisk lifecycle and hook installation on the arm64 primary path.
+- AAudio, OpenSL ES, AudioFlinger, tinyalsa, and HAL-level hook managers in live app processes.
+- On-device SELinux enforcement and vendor audio-HAL behavior.
 - armeabi-v7a graceful-degrade at runtime.
-- Magisk zip flashing, module load, and the socket/SELinux bootstrap.
-- APK install → service bind → live AIDL round-trip.
 
 Echidna is a root/sideload application; on-device validation is a required, separate step before any
 release is considered functional.

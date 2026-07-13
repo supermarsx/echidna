@@ -10,9 +10,12 @@ flashable zip. This aligns with the deployment flow in
 > a Magisk version code below 24000 or an unsupported CPU architecture (only 32-bit x86 is
 > unsupported — the module ships arm64-v8a, armeabi-v7a, x86_64).
 
-> **Status.** The packaging is host-verified only (layout, `bash -n`, script correctness). Actual
-> flashing, module load, and the SELinux/socket bootstrap require a rooted device with Magisk +
-> Zygisk enabled — they are **not** verified on the build host.
+> **Status.** Packaging is host-verified (layout, `bash -n`, script correctness, and Android ELF
+> contents). Rooted Android 13/14 emulators prove the native `processBlock` path and one
+> `AudioRecord.read` interception slice once the module libraries are reachable. Actual Magisk
+> flashing remains unverified here: `magisk --install-module /sdcard/Download/echidna-magisk.zip`
+> returned `Incomplete Magisk install` on the emulator images. Treat Magisk Manager install,
+> reboot, LSPosed injection, and SELinux/socket bootstrap as release-device validation.
 
 ## What changed from the old packaging
 

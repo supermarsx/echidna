@@ -17,7 +17,9 @@ a rich companion app.
 
 <br />
 
-<img src="docs/assets/screenshots/01-dashboard.png" alt="Echidna dashboard — active preset, latency mode, and engine status" width="300" />
+<img src="docs/assets/screenshots/07-settings.png" alt="Echidna settings — profiles, engine mode, safety, diagnostics, and device actions" width="300" />
+<br />
+<sub>Latest generated Settings screenshot; live emulator captures are in the docs gallery.</sub>
 
 </div>
 
@@ -91,6 +93,11 @@ Then, **on a rooted device** (Magisk 24+ with Zygisk enabled, LSPosed installed)
 
 > Do not run the Zygisk module and the LSPosed shim simultaneously — the profile-sync socket is
 > single-holder. See [Limitations](docs/limitations.md).
+
+Current validation goes beyond a compile: Android instrumentation proves the in-app control service
+and native `processBlock` path on Android 13/14 emulators, and a rooted-emulator
+`AudioRecord.read` probe shows captured buffers routed through DSP (`processed=1`). Magisk module
+flashing and live LSPosed injection still need release-device validation.
 
 ## Architecture
 

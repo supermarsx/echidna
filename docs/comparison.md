@@ -13,11 +13,13 @@ Echidna. This page lays out the differences honestly so you can pick the right t
 !!! warning "Read the honest-status note first"
     Echidna **builds green**, ships a signed APK and a flashable per-ABI Magisk/Zygisk
     module, and is crash-free through install → launch → navigation on an unrooted
-    emulator. **Live on-device audio hooking is device-gated and has not been validated
-    in this environment** (see [Verification](verification.md)). The tools compared
-    below are, by contrast, mature and widely shipped. Weigh that maturity gap when
-    choosing. We describe each tool by what it does; we do not disparage any of them and
-    we avoid claims we cannot substantiate.
+    emulator. Rooted Android 13/14 emulators now prove native `processBlock` and one
+    `AudioRecord.read` interception slice. Magisk flashing, LSPosed live injection, and
+    broader device/HAL hook coverage are still release-device work (see
+    [Verification](verification.md)). The tools compared below are, by contrast, mature
+    and widely shipped. Weigh that maturity gap when choosing. We describe each tool by
+    what it does; we do not disparage any of them and we avoid claims we cannot
+    substantiate.
 
 ---
 
@@ -48,16 +50,16 @@ they are not substitutes for one another.
 | --- | --- | --- | --- | --- | --- |
 | **Audio path affected** | **Capture / mic** (what apps record & transmit) | Playback / output | Playback / output (system-wide) | Playback / output (system-wide) | Capture — but only on the **PC**, via a virtual mic device |
 | **Runs on the Android device** | ✅ | ✅ | ✅ | ✅ | ❌ (runs on a paired PC) |
-| **Changes what the far end hears in a call** | ✅ (design goal; device-gated) | ❌ | ❌ | ❌ | ✅ only if the call app runs on that PC |
+| **Changes what the far end hears in a call** | ✅ for verified `AudioRecord` slice; broader paths device-gated | ❌ | ❌ | ❌ | ✅ only if the call app runs on that PC |
 | **Real-time pitch / formant / Auto-Tune of your voice** | ✅ | ❌ (EQ/convolver/compressor for playback) | ❌ (playback DSP) | ❌ (playback effects) | ✅ (that is their purpose, on PC) |
 | **Per-app selection** | ✅ fail-closed whitelist + per-app preset | Global (per output) | Global (system-wide) | Global (system-wide) | Per-app on the PC (whichever app selects the virtual mic) |
 | **Requires root** | ✅ Magisk + Zygisk (+ optional LSPosed) | ❌ (rootless, uses playback capture) | ✅ (Magisk module) | ✅ (Magisk module) | ❌ on Android; N/A |
 | **Injection method** | Native inline hooks inside the target process (Zygisk), LSPosed Java shim as fallback | App using `AudioEffect` + AudioPlaybackCapture loopback | System audio effect module | System `AudioEffect` / `audio_effects` config | Virtual audio driver on the PC |
 | **Distribution** | Sideload APK + flash Magisk zip (no Play Store) | F-Droid / Play / GitHub | Magisk / GitHub | Magisk / XDA | PC installer |
-| **Maturity** | Early; device-gated E2E unproven here | Mature, widely used | Mature | Mature/legacy | Mature, commercial |
+| **Maturity** | Early; one rooted-emulator capture slice proven, release-device matrix pending | Mature, widely used | Mature | Mature/legacy | Mature, commercial |
 
 Legend: ✅ = supported / yes · ❌ = not a goal of that tool. "Device-gated" means designed and
-built but not yet validated on rooted hardware in this project — see [Verification](verification.md).
+built but not yet validated on release hardware in this project — see [Verification](verification.md).
 
 ---
 
@@ -128,8 +130,8 @@ Echidna is deliberately narrow. Prefer another tool when:
   rootless playback tool is your only on-device option, and it will not change your
   outgoing voice.
 - **You need a supported, app-store-distributed product.** Echidna is sideloaded and
-  flashed, is early-stage, and has device-gated behavior that is not yet hardware-verified
-  here.
+  flashed, is early-stage, and still has release-device behavior that is not yet
+  hardware-verified here.
 
 Choose **Echidna** specifically when you need to transform your **outgoing microphone
 audio, per app, in real time, on an Android device you control and have rooted** — the

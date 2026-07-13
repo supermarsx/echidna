@@ -8,19 +8,22 @@ apps.
 !!! warning "Current verification status"
     The repository builds the companion APK, per-ABI native libraries, and a
     flashable Magisk/Zygisk module. Emulator validation covers install, launch,
-    navigation, app/service binding, and fallback UI state. Live audio hooking,
-    Magisk flashing, SELinux policy interaction, and real HAL behavior still
-    require rooted physical hardware. Start with
+    navigation, app/service binding, fallback UI state, rooted-emulator native
+    `processBlock`, and one rooted-emulator `AudioRecord.read` interception
+    probe. Magisk flashing, live LSPosed injection, physical-device SELinux
+    policy interaction, and broader HAL behavior still require release hardware.
+    Start with
     [Verification](verification.md) before treating any device path as proven.
 
 The source requirements live in [spec.md][spec]. This index links the pages that
 explain the implemented architecture, user-facing app surface, and remaining
-device-gated work.
+release-device work.
 
 ## Start Here
 
 - [Verification](verification.md) - the proven host/emulator checks, the
-  device-gated items, and the rooted-device procedure for live hook validation.
+  remaining device-gated items, and the rooted-device procedure for live hook
+  validation.
 - [Build & Install](build-install.md) - local, Docker, Android, native, and
   Magisk packaging commands for building the current tree.
 - [Architecture](architecture.md) - component boundaries, hook order, profile
