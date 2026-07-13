@@ -85,9 +85,9 @@ Still not claimed as verified:
 - **arm64 primary hardware and armeabi-v7a runtime behavior** — x86_64 has rooted-emulator coverage
   for the `AudioRecord` slice; arm64 still needs physical-device proof, and armv7 intentionally
   fails closed.
-- **Single-holder profile-sync socket** — a known limitation, not a bug: do **not** run the Zygisk
-  module and the LSPosed shim simultaneously on the same device, and with multiple hooked apps only
-  the last binder receives snapshot pushes (others stay fail-closed).
+- **Live multi-reader profile-sync under SELinux** — the service-owned snapshot publisher and
+  native/LSPosed reader code paths build, but simultaneous hooked-app delivery still needs rooted
+  device validation under enforcing policy.
 
 ---
 
@@ -110,8 +110,8 @@ release path that the rooted-emulator probe did not cover:
    drives the `ProfileSyncBridge` snapshot path when the native hook is degraded or unavailable.
 5. **Grant the per-app whitelist.** In the companion app, enable the target package in the
    whitelist / app-binding. The system is **fail-closed** — unlisted processes are never hooked.
-   *(Known limitation: the profile-sync socket is single-holder — do not run the Zygisk module
-   and the LSPosed shim at the same time.)*
+   Avoid scoping the same target app into both Zygisk and LSPosed unless this test is explicitly
+   checking duplicate-hook behavior.
 6. **Open the target app** (e.g. a voice / call / recorder app) so its media process spawns and
    the Zygisk module hooks the audio path.
 7. **Verify pitch/effect live.** Select a pitch/formant preset (e.g. Darth Vader or Helium),

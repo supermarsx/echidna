@@ -29,8 +29,8 @@ release-device work.
 - [Architecture](architecture.md) - component boundaries, hook order, profile
   sync, and the native-first flow required by
   [spec sections 3-4][spec-3-4].
-- [Limitations](limitations.md) - root, SELinux, HAL, ABI, and single-holder
-  profile-sync constraints to read before flashing.
+- [Limitations](limitations.md) - root, SELinux, HAL, ABI, and duplicate hook-scope
+  constraints to read before flashing.
 
 ## App And User Docs
 
@@ -76,8 +76,8 @@ release-device work.
 Echidna is intended for consented, authorized voice transformation on devices you
 control. Root-level hooks can affect privacy, app policy compliance, and system
 stability. Keep the per-app whitelist fail-closed, avoid simultaneous Zygisk and
-LSPosed operation unless the single-holder socket design changes, and validate
-live behavior on hardware before using it in calls or production apps.
+LSPosed scope for the same target app unless you are testing both paths, and
+validate live behavior on hardware before using it in calls or production apps.
 
 [spec]: https://github.com/supermarsx/echidna/blob/main/spec.md
 [spec-3-4]: https://github.com/supermarsx/echidna/blob/main/spec.md#3-highlevel-native-architecture-detailed

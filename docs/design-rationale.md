@@ -70,15 +70,13 @@ lives in **`libandroid`**, but the Zygisk target links **only `liblog`** (adding
 `libandroid` is undesirable inside an injected module and caused an undefined-
 symbol link failure).
 
-**Decision:** back every shared region with an **anonymous `memfd`**
-(`memfd_create` via the raw `syscall(__NR_memfd_create, …)`, then `ftruncate` +
-`mmap`). `memfd_create` is a plain libc syscall — no extra library to link, works
-from the injected module — and yields exactly what the design needs: a real fd of
-fixed size, `mmap`'d locally, whose fd can be handed to another process over the
-`AF_UNIX` socket via `SCM_RIGHTS`. A header-only, name-keyed, refcounted registry
-preserves the old `shm_open("/name")` sharing semantic so writer and reader map
-the same region. The Kotlin-side `SharedMemory` fd hand-off contract was left
-untouched, so the wire protocol did not change.
+**Decision:** use the same header-only shared-region helper everywhere, backed by
+file mappings under `/data/local/tmp/echidna` when available and a private
+`memfd_create` fallback when they are not. `memfd_create` is a plain libc syscall
+— no extra library to link, works from the injected module — and keeps degraded
+processes from crashing when the shared runtime files are unavailable. The
+profile-sync policy path no longer depends on fd handoff; the companion service
+serves framed JSON snapshots over its abstract `AF_UNIX` socket.
 
 ## Why per-ABI NDK builds
 

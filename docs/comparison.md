@@ -143,7 +143,7 @@ one thing the alternatives above are not built to do.
 
 - [Architecture](architecture.md) — how the in-process capture hooks and DSP fit together.
 - [Design Rationale](design-rationale.md) — why Zygisk + LSPosed and native DSP.
-- [Limitations](limitations.md) — the real constraints (OEM/SELinux/HAL variance, the
-  single-holder socket, ABI coverage, root requirement).
+- [Limitations](limitations.md) — the real constraints (OEM/SELinux/HAL variance, duplicate
+  hook scopes, ABI coverage, root requirement).
 - [Why It's Hard](why-hard.md) — the engineering reasons on-device capture interception is difficult.
 - [Verification](verification.md) — exactly what is proven vs. device-gated.

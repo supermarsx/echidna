@@ -56,11 +56,13 @@ libech_dsp.so  (DSP engine)
 
 ProfileStore.buildSnapshotLocked() publishes a JSON snapshot
    {profiles, whitelist, appBindings, control}
-   over an Ashmem region + AF_UNIX socket (/data/local/tmp/echidna_profiles.sock)
+   over the service-owned abstract AF_UNIX socket "echidna_profiles"
    │
    ▼
-LSPosed shim reads that snapshot (it CANNOT bind the in-app service — it runs with the
-host app's identity) and resolves per-app hook policy fail-closed from whitelist + appBindings.
+Zygisk readers and the LSPosed shim connect and read the latest snapshot
+immediately, then stream later update frames. The shim CANNOT bind the in-app
+service — it runs with the host app's identity — so it resolves per-app hook
+policy fail-closed from whitelist + appBindings.
 ```
 
 Key consequences of the in-app topology:
@@ -78,7 +80,7 @@ Key consequences of the in-app topology:
   old divergent copy was deleted; the app compiles against the library's complete interface.
 - The LSPosed shim's per-app policy comes from the **published snapshot**, not a binder. The old
   phantom `ServiceManager` binder (`echidna_control` / `IControlService` / `getAppConfig`) has been
-  removed entirely. See [Known limitations](#known-limitations) for the single-holder socket caveat.
+  removed entirely.
 
 ## Building
 
@@ -253,9 +255,10 @@ entry points are:
 API v4 contract, and `native/zygisk/src/module.cpp` defines `class EchidnaModule : public
 zygisk::ModuleBase` with `REGISTER_ZYGISK_MODULE(EchidnaModule)`. The hook lifecycle is driven from
 `postAppSpecialize` (when `/proc/self/cmdline` reflects the target app), which calls
-`echidna_module_attach()` → creates the `ProfileSyncServer` + `AudioHookOrchestrator` → installs
-hooks in priority order (AAudio → OpenSL → AudioFlinger → AudioRecord → libc read → tinyalsa → audio
-HAL). Hooking stays gated on `hooksEnabled() && isProcessWhitelisted(process)`.
+`echidna_module_attach()` → connects to `ProfileSyncBridge`, reads the latest snapshot, creates the
+`AudioHookOrchestrator`, then installs hooks in priority order (AAudio → OpenSL → AudioFlinger →
+AudioRecord → libc read → tinyalsa → audio HAL). Hooking stays gated on
+`hooksEnabled() && isProcessWhitelisted(process)`.
 
 **ABI support.** `arm64-v8a` is the locked primary and fully implemented. `x86_64` has a complete
 inline-hook trampoline (host-harness verified; needs emulator confirmation). `armeabi-v7a` builds
@@ -341,24 +344,20 @@ processing chain immediately before the mix bus so they receive the fully condit
 
 ## Known limitations
 
-### Profile-sync socket is single-holder
+### Profile-sync is service-owned and multi-reader
 
-The profile/telemetry sync path uses a filesystem `AF_UNIX` socket at
-`/data/local/tmp/echidna_profiles.sock`. Both the native `ProfileSyncServer` (inside the Zygisk
-module) and the LSPosed shim's `ProfileSyncReceiver` bind that **same** path with an unlink-then-bind
-("last writer wins") sequence, and the server is started **per app process**. Consequences:
+The profile-sync path uses one service-owned abstract `AF_UNIX` socket named `echidna_profiles`.
+`ProfileSyncBridge` keeps the last JSON snapshot in memory. Each native or LSPosed reader connects,
+receives that latest snapshot immediately, and then keeps the connection open for later update
+frames.
 
-- **Do not run the Zygisk module and the LSPosed shim simultaneously** on the same device — they
-  contend for the one socket path.
-- **With multiple hooked apps, only the last binder receives pushes;** every other hooked process
-  stays fail-closed (no snapshot → hooking denied) until the next mutation-triggered push.
-- **Freshness:** the service pushes only on mutation and on startup `loadFromDisk`. A process that
-  binds after the last push has no snapshot until the next mutation, and stays fail-closed until then.
+This fixes the earlier filesystem-socket design where every hooked process tried to bind
+`/data/local/tmp/echidna_profiles.sock` and only the last binder received profile pushes. Current
+service builds publish on the abstract socket only.
 
-This is inherited from the native contract and is out of scope for the shim. The proper fix is a
-native/service redesign — e.g. a **serve-last-snapshot** model where the server replies with the
-current snapshot to each connecting reader, or a **world-readable published snapshot** file that any
-hooked process can read. Tracked as a future item in [todo.md](https://github.com/supermarsx/echidna/blob/main/todo.md).
+Operational caveat: do not scope the same target app into both Zygisk and LSPosed unless you are
+explicitly testing both paths. Socket contention is gone, but duplicate hook stacks can still cause
+double processing or confusing telemetry for a Java `AudioRecord` app.
 
 ### armeabi-v7a hooking degrades
 

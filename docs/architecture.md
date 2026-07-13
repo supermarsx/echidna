@@ -40,7 +40,7 @@ flowchart TB
     end
 
     JNI -.->|"dlopen /data/adb/modules/echidna/lib/libechidna.so"| ZY
-    SVC -->|"ProfileSyncBridge: memfd region + AF_UNIX socket"| SNAP[("Profile/whitelist/control snapshot<br/>{profiles, whitelist, appBindings, control}")]
+    SVC -->|"ProfileSyncBridge: abstract AF_UNIX socket"| SNAP[("Profile/whitelist/control snapshot<br/>{profiles, whitelist, appBindings, control}")]
     SNAP -->|"framed JSON [len][UTF-8]"| ZY
     SNAP -->|"framed JSON [len][UTF-8]"| SHIM
     ZY --> HOOKS
@@ -114,9 +114,10 @@ uses multiple audio paths.
 (`native/zygisk/include/zygisk.hpp`):
 
 ```mermaid
-sequenceDiagram
+    sequenceDiagram
     participant Z as Zygisk loader (Magisk)
     participant M as EchidnaModule
+    participant S as ProfileSyncBridge
     participant O as AudioHookOrchestrator
     participant D as libech_dsp.so
     Z->>M: onLoad(Api*, JNIEnv*)
@@ -125,7 +126,8 @@ sequenceDiagram
     Note over M: no-op (still zygote identity)
     Z->>M: postAppSpecialize(args)
     M->>M: echidna_module_attach()
-    M->>O: create ProfileSyncServer + orchestrator (once)
+    M->>S: connect ProfileSyncBridge + read latest snapshot
+    M->>O: create orchestrator (once)
     O->>O: installHooks() — gated on hooksEnabled() && whitelisted
     Note over O,D: on captured PCM → echidna_process_block → dsp.process()
 ```
@@ -156,39 +158,30 @@ trampoline support differs by ABI (t2-e11):
   IT-block relocation is unsafe and untested. armv7 hooking is intentionally
   non-functional rather than silently wrong.
 
-## Profile / telemetry sync: the shared region + socket
+## Profile / telemetry sync: service-owned snapshot socket
 
 The control service publishes profile, whitelist, and control state to the
-native side (and to the LSPosed shim) through **`ProfileSyncBridge`**: a
-memfd-backed shared region plus an `AF_UNIX` socket.
+native side (and to the LSPosed shim) through **`ProfileSyncBridge`**: one
+service-owned abstract `AF_UNIX` socket named `echidna_profiles`.
 
 - The snapshot JSON is `{profiles, whitelist, appBindings, control}`. `control`
   is additive (`masterEnabled`, `bypass`, `panicUntilEpochMs`, `sidetone`);
   readers that predate it still work.
-- Wire framing is `[4-byte big-endian length][UTF-8 JSON]`. The receiver can
-  also read the framed snapshot from a shared **fd handed over the socket via
-  `SCM_RIGHTS`** (ancillary data) as a fallback.
-- The socket path is `/data/local/tmp/echidna_profiles.sock`, bound
-  unlink-then-bind ("last writer wins").
+- Wire framing is `[4-byte big-endian length][UTF-8 JSON]`.
+- Every connecting reader receives the latest snapshot immediately and then
+  remains connected for later update frames. This lets multiple hooked app
+  processes observe the same policy without racing to own a filesystem socket.
+- The previous filesystem endpoint `/data/local/tmp/echidna_profiles.sock` is no
+  longer used by current builds.
 
-### Why memfd (not `shm_open` or `ASharedMemory`)
+### Shared-memory fallback and telemetry
 
-The shared regions are backed by an **anonymous `memfd`**
-(`memfd_create` via the raw `syscall(__NR_memfd_create, …)`) plus `ftruncate` +
-`mmap` (t2-e23). Two constraints forced this:
+The config and telemetry helper regions use file-backed mappings under
+`/data/local/tmp/echidna` via `android_shared_memory.h`. The profile-sync socket
+is now the primary policy transport, but these regions still provide:
 
-1. **bionic has no `shm_open` / `shm_unlink`** — the POSIX SysV/shm API the code
-   originally used simply does not exist on Android.
-2. **The Zygisk target links only `liblog`, not `libandroid`** — so
-   `ASharedMemory_create` (the usual Android replacement) fails at *link* time
-   with an undefined symbol. `memfd_create` is a plain libc syscall, needs no
-   extra link, and yields the same thing: a real fd + fixed size that is `mmap`'d
-   locally and whose fd can be passed over the socket.
-
-A header-only, process-global, **name-keyed refcounted registry**
-(`android_shared_memory.h`) preserves the old `shm_open("/name")` semantic so
-that the writer (`ProfileSyncServer::handlePayload`) and reader (`SharedState`)
-map the *same* region.
+- a fail-closed startup fallback when the service is not reachable yet; and
+- the live telemetry path that hooked apps update for diagnostics.
 
 ## LSPosed shim path (Java-API apps)
 
@@ -196,9 +189,9 @@ For apps that capture through Java `AudioRecord`, the LSPosed shim provides a
 fallback that does **not** depend on the Zygisk module being active. It resolves
 per-app policy by reading the **same ProfileSyncBridge snapshot** (t2-e8):
 
-- `ProfileSyncReceiver` binds the identical `AF_UNIX` socket and reads the
-  identical framing (and the `SCM_RIGHTS` fd fallback) — it mirrors the native
-  receiver rather than inventing a new wire format.
+- `ProfileSyncReceiver` connects to the same abstract `AF_UNIX` socket and reads
+  the identical framing — it mirrors the native receiver rather than inventing a
+  new wire format.
 - `ProfileSnapshot` parses `{profiles, whitelist, appBindings, control}` and
   exposes `isProcessAllowed(pkg, proc)`, `resolveProfile(pkg)`,
   `isGloballyEnabled()`, and `engineMode()`.
@@ -209,16 +202,13 @@ per-app policy by reading the **same ProfileSyncBridge snapshot** (t2-e8):
   buffer is not allowed, `AudioRecordHook` zeroes the returned buffer and forces
   `read()` to return 0.
 
-### Known limitation — single-holder socket
+### Multi-reader snapshot delivery
 
-The profile-sync socket is **single-holder** (inherited native contract:
-unlink-then-bind, started per app process). Consequently: (a) the Zygisk module
-and the LSPosed shim should **not** run on the same device simultaneously — they
-contend for the socket; and (b) with multiple hooked apps, only the *last* binder
-receives pushes, so others stay fail-closed until the next mutation. A proper fix
-(serve-last-snapshot to connecting readers, or a world-readable published
-snapshot) is a native/service redesign and is out of scope for the current
-implementation. See [Limitations](limitations.md).
+The previous profile-sync contract was single-holder: each hooked process bound
+the same filesystem socket, so only the last binder received pushes. The current
+contract inverts ownership. The companion service owns the publisher socket, and
+Zygisk/LSPosed readers connect to it. A reader that starts after the last profile
+mutation still receives the cached snapshot immediately.
 
 ## Threading and latency
 
@@ -228,9 +218,8 @@ implementation. See [Limitations](limitations.md).
   an overrun watchdog and xrun counting; this trades latency for quality. Latency
   modes are exposed per preset (Low-Latency / Balanced / High-Quality). See
   [DSP & Effects](dsp-effects.md).
-- The snapshot is pushed only on mutation and at service startup
-  (`loadFromDisk`), so a process that binds after the last push stays fail-closed
-  until the next mutation (freshness caveat).
+- The snapshot is pushed on mutation and at service startup (`loadFromDisk`);
+  late readers also receive the service's cached snapshot as soon as they connect.
 
 ## What is verified vs device-gated
 

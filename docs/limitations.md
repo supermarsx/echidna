@@ -46,13 +46,14 @@ update by re-flashing/re-installing. This is a direct consequence of item&nbsp;1
 ## 3. OEM and SELinux variance
 
 Modern Android runs SELinux in **enforcing** mode, and **every vendor ships different
-policy**. Echidna's native module and its profile-sync socket
-(`/data/local/tmp/echidna_profiles.sock`) touch operations that a vendor's policy may or
-may not allow to the contexts Zygisk-injected code runs in.
+policy**. Echidna's native module, abstract profile-sync socket, shared telemetry/config
+files, and DSP library placement touch operations that a vendor's policy may or may not
+allow to the contexts Zygisk-injected code runs in.
 
 - On many devices, the Magisk module's bootstrap (`post-fs-data.sh` / `service.sh`) needs
-  to apply **`magiskpolicy` relaxations** so the hooked processes may create/connect the
-  socket and place the DSP libraries. What is required differs per OEM.
+  to apply **`magiskpolicy` relaxations** so the hooked processes may connect to the
+  snapshot publisher, write telemetry, and load the DSP libraries. What is required
+  differs per OEM.
 - Some strict-policy devices may only allow the **weaker Java-only (LSPosed) fallback**,
   not the full native hook path. The Compatibility Wizard reports SELinux mode and flags
   this ("Java-only fallback") so you know which path is active.
@@ -76,31 +77,25 @@ Samsung/Exynos, and Google's own silicon all differ.
 - **Device-gated:** which combinations work is inherently a per-device matrix and is not
   characterized on hardware in this project.
 
-## 5. The profile-sync socket is single-holder
+## 5. Profile-sync is multi-reader, but duplicate hook scopes still matter
 
-This is the most important **known architectural limitation**, inherited from the native
-IPC contract.
+The old profile-sync channel was a filesystem AF_UNIX socket where each hooked process
+tried to bind `/data/local/tmp/echidna_profiles.sock`; only the last binder received
+profile pushes. That single-holder limitation is now removed.
 
-The profile-sync channel is a filesystem AF_UNIX socket at
-`/data/local/tmp/echidna_profiles.sock`. Both the native `ProfileSyncServer` and the
-LSPosed shim's `ProfileSyncReceiver` bind it with **unlink-then-bind** semantics ("last
-binder wins"), and it is bound **per hooked process**. The consequences:
+Current builds use a service-owned abstract AF_UNIX socket named `echidna_profiles`.
+`ProfileSyncBridge` caches the latest `{profiles, whitelist, appBindings, control}`
+snapshot and serves it immediately to every connecting Zygisk or LSPosed reader. Readers
+also stay connected for later update frames, so a process that starts after the last
+mutation no longer waits for another profile change before receiving policy.
 
-- **Do not run the Zygisk native module and the LSPosed shim simultaneously** on the same
-  device — they contend for the same socket path.
-- **With multiple hooked apps, only the *last* process to bind receives profile/whitelist
-  pushes.** Every other hooked process stays **fail-closed** (no snapshot ⇒ not hooked)
-  until the next mutation re-pushes. So multi-app simultaneous transformation is not
-  reliable under the current design.
-- There is also a **freshness** edge: the service pushes only on mutation and at startup,
-  so a process that binds *after* the last push has no snapshot (and stays fail-closed)
-  until something changes.
+Remaining caveats:
 
-**Proper fix (not yet implemented):** a native/service redesign so the server *serves the
-last snapshot* to each connecting reader (or publishes a world-readable snapshot), instead
-of one binder owning the socket. Until then, treat Echidna as effectively
-**single-hooked-app at a time**, and don't stack the Zygisk module and LSPosed shim
-together.
+- **Device-gated socket reachability:** SELinux/OEM policy can still block injected code
+  from connecting to the service-owned endpoint. Failure remains fail-closed.
+- **Do not scope the same target app into both hook stacks unless testing.** Socket
+  contention is gone, but duplicate native + Java hooks can double-process Java
+  `AudioRecord` captures or make telemetry ambiguous.
 
 ## 6. `armeabi-v7a` (32-bit ARM) hooking is disabled
 
@@ -135,7 +130,7 @@ To keep expectations honest:
 | Native `processBlock` and `AudioRecord.read` interception slice | **Verified** on rooted Android 13/14 emulators |
 | Magisk flash + reboot, live LSPosed injection, broader hook coverage | **Device-gated** — not validated here |
 | SELinux policy interaction, per-vendor audio-HAL routing | **Device-gated** — per-device |
-| Multi-app simultaneous hooking | **Constrained** by the single-holder socket (item 5) |
+| Multi-app simultaneous hooking | **Supported by profile sync; device/HAL validation still required** |
 | armv7 voice transformation | **Not available** (item 6) |
 
 See [Verification](verification.md) for the full proven-vs-device-gated matrix and a

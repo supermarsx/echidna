@@ -234,11 +234,11 @@ Use the app's **Diagnostics** screen and **Compatibility Wizard** to confirm the
 is Active and the audio stack was probed. For a live check, place a call in a whitelisted app
 with a lab counterpart and confirm the processed voice.
 
-!!! warning "Do not run the Zygisk module and the LSPosed shim at the same time"
-    Both bind the same profile-sync socket (`/data/local/tmp/echidna_profiles.sock`) with a
-    last-writer-wins sequence. Running both contends for that path; with multiple hooked apps
-    only the last binder receives profile pushes. This is a known limitation — see
-    [Limitations](limitations.md).
+!!! warning "Do not scope the same app into both hook stacks"
+    Profile sync is multi-reader now, so Zygisk and LSPosed no longer contend for the same
+    socket. Still avoid enabling both hook paths for the same target app unless you are
+    explicitly testing them, because Java `AudioRecord` captures can be processed twice or
+    produce ambiguous telemetry.
 
 ---
 

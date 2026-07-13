@@ -71,21 +71,19 @@ At install, `customize.sh` maps Magisk's `$ARCH` to the build ABI, copies the ma
 for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib`), removes the
 `libs/` staging, and sets permissions.
 
-## Runtime bootstrap (SELinux + socket)
+## Runtime bootstrap (SELinux + shared runtime files)
 
 - **`post-fs-data.sh`** creates `/data/adb/echidna/{lib,run}`, mirrors `libechidna.so` to the JNI
-  search path, and prepares `/data/local/tmp/echidna` (the profile-sync socket dir and plugin dir —
-  `/dev/shm` does not exist on stock Android, so these live under `/data`). It applies `chcon`
-  contexts to the runtime dirs.
+  search path, and prepares `/data/local/tmp/echidna` (plugin dir plus shared config/telemetry
+  region files — `/dev/shm` does not exist on stock Android, so these live under `/data`). It
+  applies `chcon` contexts to the runtime dirs.
 - **`service.sh`** installs the engine into `/data/adb/echidna/lib`, stages optional AudioFlinger
-  offsets, prepares the `/data/local/tmp/echidna_profiles.sock` endpoint permissions, and applies
-  SELinux relaxations via `magiskpolicy --live` (zygote dyntransition / binder). If enforcement
-  cannot be adjusted, the module logs and the app falls back to Java-only mode.
+  offsets and applies SELinux relaxations via `magiskpolicy --live` (zygote dyntransition / binder).
+  If enforcement cannot be adjusted, the module logs and the app falls back to Java-only mode.
 
-> **Known limitation.** The profile-sync socket is **single-holder** — do not run this Zygisk module
-> and the LSPosed shim simultaneously, and note that with multiple hooked apps only the last binder
-> receives snapshot pushes. See
-> [developer_readme.md](developer_readme.md#known-limitations).
+Profile-sync itself is owned by the companion service's abstract AF_UNIX socket
+`echidna_profiles`, so there is no filesystem socket endpoint for the module scripts to create.
+See [developer_readme.md](developer_readme.md#known-limitations).
 
 ## Script usage
 
@@ -130,4 +128,5 @@ Manual dispatch behavior:
 - **On a rooted device (Magisk 24.0+):** enable Zygisk, flash `out/echidna-magisk.zip`, reboot,
   install the companion app, and validate hooks + SELinux/HAL via the compatibility wizard and
   diagnostics view.
-- Confirm the LSPosed shim is **not** run alongside the Zygisk module (single-holder socket).
+- Avoid scoping the same target app into both Zygisk and LSPosed unless the release test is
+  explicitly validating duplicate-hook behavior.
