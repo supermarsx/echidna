@@ -95,7 +95,9 @@ namespace
             {
                 base_path.pop_back();
             }
-            struct stat path_info{};
+            struct stat path_info
+            {
+            };
             if (!base_path.empty() && stat(base_path.c_str(), &path_info) == 0 &&
                 S_ISDIR(path_info.st_mode))
             {

@@ -113,9 +113,13 @@ namespace
     {
         std::array<char, 4096> control{};
         std::array<char, 4> header{};
-        struct iovec iov{
-            .iov_base = header.data(), .iov_len = header.size()};
-        struct msghdr msg{};
+        struct iovec iov
+        {
+            .iov_base = header.data(), .iov_len = header.size()
+        };
+        struct msghdr msg
+        {
+        };
         msg.msg_iov = &iov;
         msg.msg_iovlen = 1;
         msg.msg_control = control.data();
@@ -158,7 +162,9 @@ namespace
 
     std::string ReadFromSharedFd(int fd)
     {
-        struct stat st{};
+        struct stat st
+        {
+        };
         if (fstat(fd, &st) != 0 || st.st_size < static_cast<off_t>(sizeof(uint32_t)))
         {
             return {};
