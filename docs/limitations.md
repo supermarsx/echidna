@@ -15,6 +15,12 @@ Echidna operates in. Read them before flashing anything.
     broader hook managers, and physical-device SELinux/HAL behavior remain open (see
     [Verification](verification.md)).
 
+!!! danger "User responsibility"
+    Echidna is provided as-is for rooted-device power users. If you flash it on the
+    wrong device, combine incompatible install paths, lose recovery access, or brick
+    the phone while experimenting, recovery is your responsibility. The project does
+    not warranty safe operation on any specific device.
+
 ---
 
 ## 1. Root is required — there is no rootless mode

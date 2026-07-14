@@ -15,6 +15,14 @@ apps.
     Start with
     [Verification](verification.md) before treating any device path as proven.
 
+!!! danger "Not for ordinary Android users"
+    Echidna is intended for rooted-device power users who understand Magisk,
+    Zygisk, LSPosed, SELinux, sideloading, boot recovery, and device-specific
+    rollback. Misuse can leave a phone boot-looping or otherwise soft-bricked,
+    and bad recovery choices can make the situation worse. You are responsible
+    for backups, recovery images, and every install decision. The software is
+    provided as-is, without warranties or guarantees of functioning.
+
 The source requirements live in [spec.md][spec]. This index links the pages that
 explain the implemented architecture, user-facing app surface, and remaining
 release-device work.

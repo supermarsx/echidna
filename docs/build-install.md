@@ -22,6 +22,12 @@ container-verified against. Pick whichever matches your setup — the outputs ar
     LSPosed injection, and broad device/HAL hook coverage are still marked below and
     covered in depth in [Verification](verification.md).
 
+!!! danger "Root and module install risk"
+    This guide is not for common Android users. Flashing root modules, changing hook
+    scope, or recovering incorrectly can soft-brick a phone and may contribute to
+    harder-to-recover failure modes on some devices. Keep backups and a known-good
+    recovery path. Echidna is provided as-is, without warranties or guarantees.
+
 ---
 
 ## Prerequisites
@@ -151,7 +157,8 @@ parameterized via `ECHIDNA_ABIS`, `ECHIDNA_VERSION`, `ECHIDNA_VERSION_CODE`,
 `ECHIDNA_BUILD_ROOT`, `ECHIDNA_OUT_DIR`, `ECHIDNA_ZIP_PATH`. See
 [the Magisk release guide](magisk_release.md) for the on-device layout details.
 
-GitHub Releases publish these parts separately:
+GitHub Releases publish these parts separately. For normal installs, use the companion APK and
+Magisk zip; add the LSPosed shim only when you need the Java fallback.
 
 - `echidna-companion-<tag>.apk`
 - `echidna-lsposed-shim-<tag>.apk`

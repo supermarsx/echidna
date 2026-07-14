@@ -19,10 +19,11 @@ theme:
     repo: fontawesome/brands/github
   features:
     - navigation.sections
+    - navigation.expand
+    - navigation.path
     - navigation.top
     - navigation.tracking
     - navigation.indexes
-    - toc.integrate
     - toc.follow
     - search.suggest
     - search.highlight
