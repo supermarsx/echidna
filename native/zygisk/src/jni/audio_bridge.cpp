@@ -7,9 +7,13 @@
  * paths for efficient interop.
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <mutex>
+#include <new>
 #include <time.h>
 #include <vector>
 
@@ -34,6 +38,8 @@ namespace
 {
 
     constexpr const char *kLogTag = "EchidnaAudioBridge";
+    constexpr size_t kMaxProcessBufferBytes = 8 * 1024 * 1024;
+    constexpr jint kMaxChannelCount = 8;
 
     constexpr int kEncodingPcmDefault = 1;
     constexpr int kEncodingPcm16Bit = 2;
@@ -67,16 +73,29 @@ namespace
                           jint channel_count)
         {
             std::scoped_lock lock(mutex_);
-            if (!ensure(samples))
+            try
             {
+                if (!ensure(samples))
+                {
+                    return false;
+                }
+                converter(data_, samples);
+                const auto result = echidna_process_block(
+                    data_, nullptr, static_cast<uint32_t>(frames),
+                    static_cast<uint32_t>(sample_rate),
+                    static_cast<uint32_t>(channel_count));
+                return result == ECHIDNA_RESULT_OK;
+            }
+            catch (const std::bad_alloc &)
+            {
+                __android_log_print(ANDROID_LOG_WARN, kLogTag, "scratch allocation failed");
                 return false;
             }
-            converter(data_, samples);
-            const auto result = echidna_process_block(
-                data_, nullptr, static_cast<uint32_t>(frames),
-                static_cast<uint32_t>(sample_rate),
-                static_cast<uint32_t>(channel_count));
-            return result == ECHIDNA_RESULT_OK;
+            catch (...)
+            {
+                __android_log_print(ANDROID_LOG_WARN, kLogTag, "scratch processing failed");
+                return false;
+            }
         }
 
         bool copyAndForward(const float *input,
@@ -98,7 +117,8 @@ namespace
     private:
         bool ensure(size_t samples)
         {
-            if (samples == 0)
+            if (samples == 0 ||
+                samples > std::numeric_limits<size_t>::max() / sizeof(float))
             {
                 return false;
             }
@@ -138,10 +158,20 @@ namespace
                 fd_ = -1;
             }
 #endif
-            storage_.resize(samples);
-            data_ = storage_.data();
-            capacity_samples_ = storage_.size();
-            return capacity_samples_ >= samples;
+            try
+            {
+                storage_.resize(samples);
+                data_ = storage_.data();
+                capacity_samples_ = storage_.size();
+                return capacity_samples_ >= samples;
+            }
+            catch (const std::bad_alloc &)
+            {
+                storage_.clear();
+                data_ = nullptr;
+                capacity_samples_ = 0;
+                return false;
+            }
         }
 
         void release()
@@ -186,6 +216,71 @@ namespace
         return samples / static_cast<size_t>(channel_count);
     }
 
+    bool IsValidAudioRequest(size_t byte_count, jint sample_rate, jint channel_count)
+    {
+        return byte_count > 0 && byte_count <= kMaxProcessBufferBytes && sample_rate > 0 &&
+               channel_count > 0 && channel_count <= kMaxChannelCount;
+    }
+
+    bool ByteCountForUnits(jint units, size_t bytes_per_unit, size_t *out)
+    {
+        if (units <= 0 || bytes_per_unit == 0 || out == nullptr)
+        {
+            return false;
+        }
+        const size_t unit_count = static_cast<size_t>(units);
+        if (unit_count > std::numeric_limits<size_t>::max() / bytes_per_unit)
+        {
+            return false;
+        }
+        *out = unit_count * bytes_per_unit;
+        return true;
+    }
+
+    bool IsValidRange(jsize container_length, jint offset, jint length)
+    {
+        return container_length >= 0 && offset >= 0 && length > 0 &&
+               static_cast<int64_t>(offset) + static_cast<int64_t>(length) <=
+                   static_cast<int64_t>(container_length);
+    }
+
+    bool ValidateArrayRequest(JNIEnv *env,
+                              jarray array,
+                              jint offset,
+                              jint length,
+                              size_t bytes_per_unit,
+                              jint sample_rate,
+                              jint channel_count)
+    {
+        if (env == nullptr || array == nullptr || !IsValidRange(env->GetArrayLength(array), offset, length))
+        {
+            return false;
+        }
+        size_t byte_count = 0;
+        return ByteCountForUnits(length, bytes_per_unit, &byte_count) &&
+               IsValidAudioRequest(byte_count, sample_rate, channel_count);
+    }
+
+    bool ValidateDirectBufferRequest(JNIEnv *env,
+                                     jobject buffer,
+                                     jint position,
+                                     jint length,
+                                     jint sample_rate,
+                                     jint channel_count)
+    {
+        if (env == nullptr || buffer == nullptr)
+        {
+            return false;
+        }
+        const jlong capacity = env->GetDirectBufferCapacity(buffer);
+        if (capacity < 0 || position < 0 || length <= 0 ||
+            static_cast<int64_t>(position) + static_cast<int64_t>(length) > capacity)
+        {
+            return false;
+        }
+        return IsValidAudioRequest(static_cast<size_t>(length), sample_rate, channel_count);
+    }
+
     bool ProcessFloatSamples(const float *data,
                              size_t frames,
                              jint sample_rate,
@@ -211,6 +306,37 @@ namespace
                 for (size_t i = 0; i < count; ++i)
                 {
                     dest[i] = static_cast<float>(data[i]) * kInt16Scale;
+                }
+            },
+            frames,
+            sample_rate,
+            channel_count);
+    }
+
+    bool ProcessPcm16Bytes(const uint8_t *data,
+                           size_t bytes,
+                           jint sample_rate,
+                           jint channel_count)
+    {
+        if (!data || bytes % sizeof(int16_t) != 0)
+        {
+            return false;
+        }
+        const size_t samples = bytes / sizeof(int16_t);
+        const size_t frames = FramesFromSamples(samples, channel_count);
+        if (frames == 0)
+        {
+            return false;
+        }
+        return gFloatScratch.withWritable(
+            samples,
+            [data](float *dest, size_t count)
+            {
+                for (size_t i = 0; i < count; ++i)
+                {
+                    int16_t value = 0;
+                    std::memcpy(&value, data + i * sizeof(value), sizeof(value));
+                    dest[i] = static_cast<float>(value) * kInt16Scale;
                 }
             },
             frames,
@@ -295,39 +421,96 @@ namespace
             channel_count);
     }
 
+    bool ProcessPcm32Bytes(const uint8_t *data,
+                           size_t bytes,
+                           jint sample_rate,
+                           jint channel_count)
+    {
+        if (!data || bytes % sizeof(int32_t) != 0)
+        {
+            return false;
+        }
+        const size_t samples = bytes / sizeof(int32_t);
+        const size_t frames = FramesFromSamples(samples, channel_count);
+        if (frames == 0)
+        {
+            return false;
+        }
+        return gFloatScratch.withWritable(
+            samples,
+            [data](float *dest, size_t count)
+            {
+                for (size_t i = 0; i < count; ++i)
+                {
+                    int32_t value = 0;
+                    std::memcpy(&value, data + i * sizeof(value), sizeof(value));
+                    dest[i] = static_cast<float>(value) * kInt32Scale;
+                }
+            },
+            frames,
+            sample_rate,
+            channel_count);
+    }
+
+    bool ProcessFloatBytes(const uint8_t *data,
+                           size_t bytes,
+                           jint sample_rate,
+                           jint channel_count)
+    {
+        if (!data || bytes % sizeof(float) != 0)
+        {
+            return false;
+        }
+        const size_t samples = bytes / sizeof(float);
+        const size_t frames = FramesFromSamples(samples, channel_count);
+        if (frames == 0)
+        {
+            return false;
+        }
+        return gFloatScratch.withWritable(
+            samples,
+            [data](float *dest, size_t count)
+            {
+                for (size_t i = 0; i < count; ++i)
+                {
+                    float value = 0.0f;
+                    std::memcpy(&value, data + i * sizeof(value), sizeof(value));
+                    dest[i] = value;
+                }
+            },
+            frames,
+            sample_rate,
+            channel_count);
+    }
+
     bool ProcessByteSpan(const uint8_t *data,
                          size_t length,
                          jint encoding,
                          jint sample_rate,
                          jint channel_count)
     {
+        if (!data || !IsValidAudioRequest(length, sample_rate, channel_count))
+        {
+            return false;
+        }
         switch (encoding)
         {
         case kEncodingPcmDefault:
         case kEncodingPcm16Bit:
-            return ProcessPcm16(reinterpret_cast<const int16_t *>(data),
-                                length / sizeof(int16_t),
-                                sample_rate,
-                                channel_count);
+            return ProcessPcm16Bytes(data, length, sample_rate, channel_count);
         case kEncodingPcm8Bit:
             return ProcessPcm8(data, length, sample_rate, channel_count);
         case kEncodingPcmFloat:
-        {
-            const size_t samples = length / sizeof(float);
-            const size_t frames = FramesFromSamples(samples, channel_count);
-            return ProcessFloatSamples(reinterpret_cast<const float *>(data),
-                                       frames,
-                                       sample_rate,
-                                       channel_count);
-        }
+            return ProcessFloatBytes(data, length, sample_rate, channel_count);
         case kEncodingPcm24BitPacked:
+            if (length % 3 != 0)
+            {
+                return false;
+            }
             return ProcessPcm24Packed(data, length, sample_rate, channel_count);
         case kEncodingPcm32Bit:
         case kEncodingPcm24Bit:
-            return ProcessPcm32(reinterpret_cast<const int32_t *>(data),
-                                length / sizeof(int32_t),
-                                sample_rate,
-                                channel_count);
+            return ProcessPcm32Bytes(data, length, sample_rate, channel_count);
         default:
             __android_log_print(ANDROID_LOG_WARN, kLogTag, "Unsupported encoding %d", encoding);
             return false;
@@ -423,27 +606,43 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessByteArray(JNIEnv *env,
                                                                   jint sample_rate,
                                                                   jint channel_count)
 {
-    if (!array || length <= 0)
+    if (!ValidateArrayRequest(env, array, offset, length, 1, sample_rate, channel_count))
     {
         return JNI_FALSE;
     }
-    jbyte *raw = static_cast<jbyte *>(env->GetPrimitiveArrayCritical(array, nullptr));
-    if (raw)
+    try
     {
-        const bool ok = ProcessByteSpan(
-            reinterpret_cast<const uint8_t *>(raw + offset),
-            static_cast<size_t>(length),
-            encoding,
-            sample_rate,
-            channel_count);
-        env->ReleasePrimitiveArrayCritical(array, raw, JNI_ABORT);
+        jbyte *raw = static_cast<jbyte *>(env->GetPrimitiveArrayCritical(array, nullptr));
+        if (raw)
+        {
+            const bool ok = ProcessByteSpan(
+                reinterpret_cast<const uint8_t *>(raw + offset),
+                static_cast<size_t>(length),
+                encoding,
+                sample_rate,
+                channel_count);
+            env->ReleasePrimitiveArrayCritical(array, raw, JNI_ABORT);
+            return ok ? JNI_TRUE : JNI_FALSE;
+        }
+        std::vector<uint8_t> buffer(static_cast<size_t>(length));
+        env->GetByteArrayRegion(array, offset, length,
+                                reinterpret_cast<jbyte *>(buffer.data()));
+        if (env->ExceptionCheck())
+        {
+            return JNI_FALSE;
+        }
+        const bool ok =
+            ProcessByteSpan(buffer.data(), buffer.size(), encoding, sample_rate, channel_count);
         return ok ? JNI_TRUE : JNI_FALSE;
     }
-    std::vector<uint8_t> buffer(static_cast<size_t>(length));
-    env->GetByteArrayRegion(array, offset, length,
-                            reinterpret_cast<jbyte *>(buffer.data()));
-    const bool ok = ProcessByteSpan(buffer.data(), buffer.size(), encoding, sample_rate, channel_count);
-    return ok ? JNI_TRUE : JNI_FALSE;
+    catch (const std::bad_alloc &)
+    {
+        return JNI_FALSE;
+    }
+    catch (...)
+    {
+        return JNI_FALSE;
+    }
 }
 
 /** Process a Java short[] interleaved PCM16 buffer. */
@@ -456,27 +655,42 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessShortArray(JNIEnv *env,
                                                                    jint sample_rate,
                                                                    jint channel_count)
 {
-    if (!array || length <= 0)
+    if (!ValidateArrayRequest(env, array, offset, length, sizeof(jshort), sample_rate, channel_count))
     {
         return JNI_FALSE;
     }
-    jshort *raw = static_cast<jshort *>(env->GetPrimitiveArrayCritical(array, nullptr));
-    if (raw)
+    try
     {
-        const bool ok = ProcessPcm16(reinterpret_cast<const int16_t *>(raw + offset),
-                                     static_cast<size_t>(length),
+        jshort *raw = static_cast<jshort *>(env->GetPrimitiveArrayCritical(array, nullptr));
+        if (raw)
+        {
+            const bool ok = ProcessPcm16(reinterpret_cast<const int16_t *>(raw + offset),
+                                         static_cast<size_t>(length),
+                                         sample_rate,
+                                         channel_count);
+            env->ReleasePrimitiveArrayCritical(array, raw, JNI_ABORT);
+            return ok ? JNI_TRUE : JNI_FALSE;
+        }
+        std::vector<jshort> buffer(static_cast<size_t>(length));
+        env->GetShortArrayRegion(array, offset, length, buffer.data());
+        if (env->ExceptionCheck())
+        {
+            return JNI_FALSE;
+        }
+        const bool ok = ProcessPcm16(reinterpret_cast<const int16_t *>(buffer.data()),
+                                     buffer.size(),
                                      sample_rate,
                                      channel_count);
-        env->ReleasePrimitiveArrayCritical(array, raw, JNI_ABORT);
         return ok ? JNI_TRUE : JNI_FALSE;
     }
-    std::vector<jshort> buffer(static_cast<size_t>(length));
-    env->GetShortArrayRegion(array, offset, length, buffer.data());
-    const bool ok = ProcessPcm16(reinterpret_cast<const int16_t *>(buffer.data()),
-                                 buffer.size(),
-                                 sample_rate,
-                                 channel_count);
-    return ok ? JNI_TRUE : JNI_FALSE;
+    catch (const std::bad_alloc &)
+    {
+        return JNI_FALSE;
+    }
+    catch (...)
+    {
+        return JNI_FALSE;
+    }
 }
 
 /** Process a Java float[] containing interleaved f32 samples. */
@@ -489,25 +703,40 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessFloatArray(JNIEnv *env,
                                                                    jint sample_rate,
                                                                    jint channel_count)
 {
-    if (!array || length <= 0)
+    if (!ValidateArrayRequest(env, array, offset, length, sizeof(jfloat), sample_rate, channel_count))
     {
         return JNI_FALSE;
     }
-    jfloat *raw = static_cast<jfloat *>(env->GetPrimitiveArrayCritical(array, nullptr));
-    const size_t frames = FramesFromSamples(static_cast<size_t>(length), channel_count);
-    if (raw)
+    try
     {
-        const bool ok = ProcessFloatSamples(raw + offset,
-                                            frames,
-                                            sample_rate,
-                                            channel_count);
-        env->ReleasePrimitiveArrayCritical(array, raw, JNI_ABORT);
+        jfloat *raw = static_cast<jfloat *>(env->GetPrimitiveArrayCritical(array, nullptr));
+        const size_t frames = FramesFromSamples(static_cast<size_t>(length), channel_count);
+        if (raw)
+        {
+            const bool ok = ProcessFloatSamples(raw + offset,
+                                                frames,
+                                                sample_rate,
+                                                channel_count);
+            env->ReleasePrimitiveArrayCritical(array, raw, JNI_ABORT);
+            return ok ? JNI_TRUE : JNI_FALSE;
+        }
+        std::vector<jfloat> buffer(static_cast<size_t>(length));
+        env->GetFloatArrayRegion(array, offset, length, buffer.data());
+        if (env->ExceptionCheck())
+        {
+            return JNI_FALSE;
+        }
+        const bool ok = ProcessFloatSamples(buffer.data(), frames, sample_rate, channel_count);
         return ok ? JNI_TRUE : JNI_FALSE;
     }
-    std::vector<jfloat> buffer(static_cast<size_t>(length));
-    env->GetFloatArrayRegion(array, offset, length, buffer.data());
-    const bool ok = ProcessFloatSamples(buffer.data(), frames, sample_rate, channel_count);
-    return ok ? JNI_TRUE : JNI_FALSE;
+    catch (const std::bad_alloc &)
+    {
+        return JNI_FALSE;
+    }
+    catch (...)
+    {
+        return JNI_FALSE;
+    }
 }
 
 /** Process a direct Java ByteBuffer pointer region. */
@@ -521,7 +750,7 @@ Java_com_echidna_lsposed_core_NativeBridge_nativeProcessByteBuffer(JNIEnv *env,
                                                                    jint sample_rate,
                                                                    jint channel_count)
 {
-    if (!buffer || length <= 0)
+    if (!ValidateDirectBufferRequest(env, buffer, position, length, sample_rate, channel_count))
     {
         return JNI_FALSE;
     }

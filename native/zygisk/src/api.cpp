@@ -15,9 +15,9 @@
 #ifdef __ANDROID__
 #include <android/log.h>
 #else
-#define __android_log_print(...) ((void)0)
 #define ANDROID_LOG_WARN 0
 #endif
+#include <limits>
 #include <mutex>
 #include <time.h>
 #include <string>
@@ -80,6 +80,16 @@ namespace
     {
         static std::mutex mutex;
         return mutex;
+    }
+
+    void LogWarn(const char *format, const char *detail)
+    {
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_WARN, "echidna", format, detail);
+#else
+        (void)format;
+        (void)detail;
+#endif
     }
 
     uint64_t MonotonicNowNs()
@@ -178,6 +188,22 @@ namespace
         }
         const float rms = static_cast<float>(std::sqrt(sum_squares / samples));
         return {LinearToDb(rms), LinearToDb(peak)};
+    }
+
+    bool ComputeSampleCount(uint32_t frames, uint32_t channels, size_t *out)
+    {
+        if (frames == 0 || channels == 0 || out == nullptr)
+        {
+            return false;
+        }
+        const size_t frame_count = static_cast<size_t>(frames);
+        const size_t channel_count = static_cast<size_t>(channels);
+        if (frame_count > std::numeric_limits<size_t>::max() / channel_count)
+        {
+            return false;
+        }
+        *out = frame_count * channel_count;
+        return true;
     }
 
     /** Quick pitch estimation using zero crossing counts for diagnostics. */
@@ -288,10 +314,7 @@ namespace
         }
         if (!dsp.handle)
         {
-            __android_log_print(ANDROID_LOG_WARN,
-                                "echidna",
-                                "Failed to load libech_dsp.so: %s",
-                                last_error ? last_error : "unknown");
+            LogWarn("Failed to load libech_dsp.so: %s", last_error ? last_error : "unknown");
             return false;
         }
         dsp.init = reinterpret_cast<DspBridge::InitFn>(dlsym(dsp.handle, "ech_dsp_initialize"));
@@ -327,11 +350,28 @@ namespace
         }
         if (dsp.initialised && dsp.shutdown)
         {
-            dsp.shutdown();
+            try
+            {
+                dsp.shutdown();
+            }
+            catch (...)
+            {
+                dsp.initialised = false;
+                return ECHIDNA_RESULT_ERROR;
+            }
         }
         dsp.sample_rate = sample_rate;
         dsp.channels = channels;
-        const ech_dsp_status_t init_status = dsp.init(sample_rate, channels, dsp.quality);
+        ech_dsp_status_t init_status = ECH_DSP_STATUS_ERROR;
+        try
+        {
+            init_status = dsp.init(sample_rate, channels, dsp.quality);
+        }
+        catch (...)
+        {
+            dsp.initialised = false;
+            return ECHIDNA_RESULT_ERROR;
+        }
         if (init_status != ECH_DSP_STATUS_OK)
         {
             dsp.initialised = false;
@@ -340,8 +380,16 @@ namespace
         dsp.initialised = true;
         if (!dsp.pending_preset.empty())
         {
-            const ech_dsp_status_t update_status =
-                dsp.update(dsp.pending_preset.data(), dsp.pending_preset.size());
+            ech_dsp_status_t update_status = ECH_DSP_STATUS_ERROR;
+            try
+            {
+                update_status =
+                    dsp.update(dsp.pending_preset.data(), dsp.pending_preset.size());
+            }
+            catch (...)
+            {
+                return ECHIDNA_RESULT_ERROR;
+            }
             if (update_status != ECH_DSP_STATUS_OK)
             {
                 return ToEchidnaResult(update_status);
@@ -359,10 +407,25 @@ namespace
         }
         if (!dsp.initialised)
         {
-            dsp.pending_preset.assign(json, length);
+            try
+            {
+                dsp.pending_preset.assign(json, length);
+            }
+            catch (...)
+            {
+                return ECHIDNA_RESULT_ERROR;
+            }
             return ECHIDNA_RESULT_OK;
         }
-        const ech_dsp_status_t status = dsp.update(json, length);
+        ech_dsp_status_t status = ECH_DSP_STATUS_ERROR;
+        try
+        {
+            status = dsp.update(json, length);
+        }
+        catch (...)
+        {
+            return ECHIDNA_RESULT_ERROR;
+        }
         return ToEchidnaResult(status);
     }
 
@@ -412,16 +475,24 @@ echidna_result_t echidna_set_profile(const char *profile_json, size_t length)
     auto &state = SharedState::instance();
     std::lock_guard<std::mutex> lock(DspMutex());
     auto &dsp = GetDspBridge();
-    dsp.pending_preset.assign(profile_json, length);
+    try
+    {
+        dsp.pending_preset.assign(profile_json, length);
 
-    const std::string label = ExtractPresetName(profile_json, length);
-    if (!label.empty())
-    {
-        state.setProfile(label);
+        const std::string label = ExtractPresetName(profile_json, length);
+        if (!label.empty())
+        {
+            state.setProfile(label);
+        }
+        else if (length < 96)
+        {
+            state.setProfile(std::string(profile_json, length));
+        }
     }
-    else if (length < 96)
+    catch (...)
     {
-        state.setProfile(std::string(profile_json, length));
+        state.setStatus(echidna::state::InternalStatus::kError);
+        return ECHIDNA_RESULT_ERROR;
     }
 
     const echidna_result_t result = ApplyPresetLocked(dsp, profile_json, length);
@@ -439,7 +510,8 @@ echidna_result_t echidna_process_block(const float *input,
                                        uint32_t channel_count)
 {
     auto &state = SharedState::instance();
-    if (!input || frames == 0 || channel_count == 0 || sample_rate == 0)
+    size_t sample_count = 0;
+    if (!input || sample_rate == 0 || !ComputeSampleCount(frames, channel_count, &sample_count))
     {
         state.setStatus(echidna::state::InternalStatus::kError);
         state.telemetry().recordCallback(0, 0, 0, echidna::utils::kTelemetryFlagError, 0);
@@ -455,8 +527,6 @@ echidna_result_t echidna_process_block(const float *input,
 
     echidna_result_t result = ECHIDNA_RESULT_OK;
     uint32_t flags = echidna::utils::kTelemetryFlagDsp;
-    const size_t sample_count =
-        static_cast<size_t>(frames) * static_cast<size_t>(channel_count);
     LevelStats input_levels = CalculateLevels(input, sample_count);
     LevelStats output_levels;
     float detected_pitch = 0.0f;
@@ -471,9 +541,7 @@ echidna_result_t echidna_process_block(const float *input,
         output_levels = input_levels;
         if (output && output != input)
         {
-            std::memcpy(output,
-                        input,
-                        sizeof(float) * static_cast<size_t>(frames) * channel_count);
+            std::memcpy(output, input, sizeof(float) * sample_count);
         }
     }
     else
@@ -491,41 +559,62 @@ echidna_result_t echidna_process_block(const float *input,
             float *process_output = output;
             if (!output || output == input)
             {
-                dsp.scratch_output.resize(samples);
-                process_output = dsp.scratch_output.data();
-            }
-            const ech_dsp_status_t dsp_status =
-                dsp.process(input, process_output, static_cast<size_t>(frames));
-            result = ToEchidnaResult(dsp_status);
-            if (result != ECHIDNA_RESULT_OK)
-            {
-                flags |= echidna::utils::kTelemetryFlagError;
-                if (output && output != input)
+                try
                 {
-                    std::memcpy(output,
-                                input,
-                                sizeof(float) * static_cast<size_t>(frames) * channel_count);
+                    dsp.scratch_output.resize(samples);
+                    process_output = dsp.scratch_output.data();
+                }
+                catch (...)
+                {
+                    process_output = nullptr;
+                    result = ECHIDNA_RESULT_ERROR;
+                    flags |= echidna::utils::kTelemetryFlagError;
                 }
             }
-            else
+            if (process_output)
             {
-                if (output && process_output != output)
+                ech_dsp_status_t dsp_status = ECH_DSP_STATUS_ERROR;
+                try
                 {
-                    std::memcpy(output,
-                                process_output,
-                                sizeof(float) * static_cast<size_t>(frames) * channel_count);
+                    dsp_status = dsp.process(input, process_output, static_cast<size_t>(frames));
                 }
-                output_levels = CalculateLevels(process_output, sample_count);
-                detected_pitch =
-                    EstimatePitchHz(process_output, frames, channel_count, sample_rate);
-                if (detected_pitch > 0.0f)
+                catch (...)
                 {
-                    const float midi = 69.0f + 12.0f * std::log2(detected_pitch / 440.0f);
-                    const float rounded_midi = std::round(midi);
-                    target_pitch = FrequencyForMidi(rounded_midi);
-                    formant_shift_cents = (midi - rounded_midi) * 100.0f;
-                    formant_width = std::clamp(std::fabs(formant_shift_cents), 0.0f, 600.0f);
+                    dsp_status = ECH_DSP_STATUS_ERROR;
                 }
+                result = ToEchidnaResult(dsp_status);
+                if (result != ECHIDNA_RESULT_OK)
+                {
+                    flags |= echidna::utils::kTelemetryFlagError;
+                    if (output && output != input)
+                    {
+                        std::memcpy(output, input, sizeof(float) * sample_count);
+                    }
+                }
+                else
+                {
+                    if (output && process_output != output)
+                    {
+                        std::memcpy(output, process_output, sizeof(float) * sample_count);
+                    }
+                    output_levels = CalculateLevels(process_output, sample_count);
+                    detected_pitch =
+                        EstimatePitchHz(process_output, frames, channel_count, sample_rate);
+                    if (detected_pitch > 0.0f)
+                    {
+                        const float midi =
+                            69.0f + 12.0f * std::log2(detected_pitch / 440.0f);
+                        const float rounded_midi = std::round(midi);
+                        target_pitch = FrequencyForMidi(rounded_midi);
+                        formant_shift_cents = (midi - rounded_midi) * 100.0f;
+                        formant_width =
+                            std::clamp(std::fabs(formant_shift_cents), 0.0f, 600.0f);
+                    }
+                }
+            }
+            else if (output && output != input)
+            {
+                std::memcpy(output, input, sizeof(float) * sample_count);
             }
         }
     }

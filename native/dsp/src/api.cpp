@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 
 #include "config/preset_loader.h"
@@ -16,6 +17,14 @@ namespace
 {
     std::mutex g_engine_mutex;
     std::shared_ptr<echidna::dsp::DspEngine> g_engine;
+    constexpr uint32_t kMaxChannels = 8;
+
+    bool IsValidQualityMode(ech_dsp_quality_mode_t quality_mode)
+    {
+        return quality_mode == ECH_DSP_QUALITY_LOW_LATENCY ||
+               quality_mode == ECH_DSP_QUALITY_BALANCED ||
+               quality_mode == ECH_DSP_QUALITY_HIGH;
+    }
 } // namespace
 
 namespace echidna::dsp
@@ -50,14 +59,27 @@ extern "C"
                                         uint32_t channels,
                                         ech_dsp_quality_mode_t quality_mode)
     {
-        if (sample_rate == 0 || channels == 0)
+        if (sample_rate == 0 || channels == 0 || channels > kMaxChannels)
         {
             return ECH_DSP_STATUS_INVALID_ARGUMENT;
         }
-        std::lock_guard<std::mutex> lock(g_engine_mutex);
-        g_engine = std::make_shared<echidna::dsp::DspEngine>(sample_rate, channels,
-                                                             quality_mode);
-        return ECH_DSP_STATUS_OK;
+        const ech_dsp_quality_mode_t safe_quality =
+            IsValidQualityMode(quality_mode) ? quality_mode : ECH_DSP_QUALITY_BALANCED;
+        try
+        {
+            std::lock_guard<std::mutex> lock(g_engine_mutex);
+            g_engine = std::make_shared<echidna::dsp::DspEngine>(sample_rate, channels,
+                                                                 safe_quality);
+            return ECH_DSP_STATUS_OK;
+        }
+        catch (const std::bad_alloc &)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
+        catch (...)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
     }
 
     /**
@@ -82,13 +104,24 @@ extern "C"
         {
             return ECH_DSP_STATUS_NOT_INITIALISED;
         }
-        std::string json(json_config, json_length);
-        auto result = echidna::dsp::config::LoadPresetFromJson(json);
-        if (!result.ok)
+        try
         {
-            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+            std::string json(json_config, json_length);
+            auto result = echidna::dsp::config::LoadPresetFromJson(json);
+            if (!result.ok)
+            {
+                return ECH_DSP_STATUS_INVALID_ARGUMENT;
+            }
+            return engine->UpdatePreset(result.preset);
         }
-        return engine->UpdatePreset(result.preset);
+        catch (const std::bad_alloc &)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
+        catch (...)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
     }
 
     /**
@@ -111,7 +144,18 @@ extern "C"
         {
             return ECH_DSP_STATUS_NOT_INITIALISED;
         }
-        return engine->ProcessBlock(input, output, frames);
+        try
+        {
+            return engine->ProcessBlock(input, output, frames);
+        }
+        catch (const std::bad_alloc &)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
+        catch (...)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
     }
 
     /**
@@ -119,8 +163,14 @@ extern "C"
      */
     void ech_dsp_shutdown(void)
     {
-        std::lock_guard<std::mutex> lock(g_engine_mutex);
-        g_engine.reset();
+        try
+        {
+            std::lock_guard<std::mutex> lock(g_engine_mutex);
+            g_engine.reset();
+        }
+        catch (...)
+        {
+        }
     }
 
 } // extern "C"

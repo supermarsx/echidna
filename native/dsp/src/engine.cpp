@@ -11,12 +11,29 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <thread>
 
 #include "runtime/simd.h"
 
 namespace echidna::dsp
 {
+    namespace
+    {
+        bool ComputeSampleCount(size_t frames, uint32_t channels, size_t *out)
+        {
+            if (frames == 0 || channels == 0 || out == nullptr)
+            {
+                return false;
+            }
+            if (frames > std::numeric_limits<size_t>::max() / static_cast<size_t>(channels))
+            {
+                return false;
+            }
+            *out = frames * static_cast<size_t>(channels);
+            return true;
+        }
+    } // namespace
 
     /**
      * @brief Construct a DspEngine.
@@ -125,7 +142,8 @@ namespace echidna::dsp
                                              float *output,
                                              size_t frames)
     {
-        if (frames == 0 || channels_ == 0)
+        size_t samples = 0;
+        if (!input || !output || !ComputeSampleCount(frames, channels_, &samples))
         {
             return ECH_DSP_STATUS_INVALID_ARGUMENT;
         }
@@ -143,9 +161,17 @@ namespace echidna::dsp
             return ProcessInternal(input, output, frames);
         }
 
-        auto block = std::make_shared<runtime::AudioBlock>(sample_rate_, channels_, frames);
+        std::shared_ptr<runtime::AudioBlock> block;
+        try
+        {
+            block = std::make_shared<runtime::AudioBlock>(sample_rate_, channels_, frames);
+        }
+        catch (...)
+        {
+            return ProcessInternal(input, output, frames);
+        }
         block->cancelled.store(false, std::memory_order_relaxed);
-        std::memcpy(block->data.data(), input, sizeof(float) * frames * channels_);
+        std::memcpy(block->data.data(), input, sizeof(float) * samples);
         if (!input_queue_.push(block))
         {
             return ProcessInternal(input, output, frames);
@@ -161,11 +187,11 @@ namespace echidna::dsp
             }
             return ProcessInternal(input, output, frames);
         }
-        if (processed->data.size() < frames * channels_)
+        if (processed->data.size() < samples)
         {
             return ECH_DSP_STATUS_ERROR;
         }
-        std::memcpy(output, processed->data.data(), sizeof(float) * frames * channels_);
+        std::memcpy(output, processed->data.data(), sizeof(float) * samples);
         return ECH_DSP_STATUS_OK;
     }
 
@@ -179,9 +205,20 @@ namespace echidna::dsp
                                                 float *output,
                                                 size_t frames)
     {
+        size_t samples = 0;
+        if (!input || !output || !ComputeSampleCount(frames, channels_, &samples))
+        {
+            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+        }
         std::lock_guard<std::mutex> lock(process_mutex_);
-        EnsureBuffers(frames);
-        const size_t samples = frames * channels_;
+        try
+        {
+            EnsureBuffers(frames);
+        }
+        catch (...)
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
         std::memcpy(dry_buffer_.data(), input, sizeof(float) * samples);
         std::memcpy(wet_buffer_.data(), input, sizeof(float) * samples);
 
@@ -317,9 +354,22 @@ namespace echidna::dsp
 
             auto wall_start = std::chrono::steady_clock::now();
 
-            std::vector<float> output(block->frames * block->channels);
-            ech_dsp_status_t status =
-                ProcessInternal(block->data.data(), output.data(), block->frames);
+            size_t samples = 0;
+            if (!ComputeSampleCount(block->frames, block->channels, &samples))
+            {
+                continue;
+            }
+            std::vector<float> output;
+            ech_dsp_status_t status = ECH_DSP_STATUS_ERROR;
+            try
+            {
+                output.resize(samples);
+                status = ProcessInternal(block->data.data(), output.data(), block->frames);
+            }
+            catch (...)
+            {
+                status = ECH_DSP_STATUS_ERROR;
+            }
 
             auto wall_end = std::chrono::steady_clock::now();
             const auto wall_us = std::chrono::duration_cast<std::chrono::microseconds>(

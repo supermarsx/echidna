@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -164,6 +165,28 @@ namespace
         return LoadSymbols();
     }
 
+    bool ComputeRequiredSamples(jint frames, jint channel_count, size_t *out)
+    {
+        if (frames <= 0 || channel_count <= 0 || out == nullptr)
+        {
+            return false;
+        }
+        const size_t frame_count = static_cast<size_t>(frames);
+        const size_t channels = static_cast<size_t>(channel_count);
+        if (frame_count > std::numeric_limits<size_t>::max() / channels)
+        {
+            return false;
+        }
+        *out = frame_count * channels;
+        return true;
+    }
+
+    bool HasFloatArrayCapacity(JNIEnv *env, jfloatArray array, size_t required_samples)
+    {
+        return env != nullptr && array != nullptr &&
+               static_cast<size_t>(env->GetArrayLength(array)) >= required_samples;
+    }
+
 } // namespace
 
 extern "C" JNIEXPORT jint JNICALL
@@ -181,7 +204,15 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeSetProfile(JNIEnv *env,
         return ECHIDNA_RESULT_ERROR;
     }
     const size_t length = static_cast<size_t>(env->GetStringUTFLength(profile));
-    const echidna_result_t result = Symbols().set_profile(chars, length);
+    echidna_result_t result = ECHIDNA_RESULT_ERROR;
+    try
+    {
+        result = Symbols().set_profile(chars, length);
+    }
+    catch (...)
+    {
+        result = ECHIDNA_RESULT_ERROR;
+    }
     env->ReleaseStringUTFChars(profile, chars);
     return static_cast<jint>(result);
 }
@@ -199,7 +230,13 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeProcessBlock(JNIEnv *env,
     {
         return Symbols().last_error;
     }
-    if (frames <= 0 || sample_rate <= 0 || channel_count <= 0)
+    size_t required_samples = 0;
+    if (sample_rate <= 0 || !ComputeRequiredSamples(frames, channel_count, &required_samples) ||
+        !HasFloatArrayCapacity(env, input, required_samples))
+    {
+        return ECHIDNA_RESULT_INVALID_ARGUMENT;
+    }
+    if (output && !HasFloatArrayCapacity(env, output, required_samples))
     {
         return ECHIDNA_RESULT_INVALID_ARGUMENT;
     }
@@ -214,12 +251,25 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeProcessBlock(JNIEnv *env,
     if (output)
     {
         output_ptr = env->GetFloatArrayElements(output, &output_is_copy);
+        if (!output_ptr)
+        {
+            env->ReleaseFloatArrayElements(input, input_ptr, JNI_ABORT);
+            return ECHIDNA_RESULT_ERROR;
+        }
     }
-    const echidna_result_t result = Symbols().process_block(input_ptr,
-                                                            output_ptr,
-                                                            static_cast<uint32_t>(frames),
-                                                            static_cast<uint32_t>(sample_rate),
-                                                            static_cast<uint32_t>(channel_count));
+    echidna_result_t result = ECHIDNA_RESULT_ERROR;
+    try
+    {
+        result = Symbols().process_block(input_ptr,
+                                         output_ptr,
+                                         static_cast<uint32_t>(frames),
+                                         static_cast<uint32_t>(sample_rate),
+                                         static_cast<uint32_t>(channel_count));
+    }
+    catch (...)
+    {
+        result = ECHIDNA_RESULT_ERROR;
+    }
     if (output && output_ptr)
     {
         env->ReleaseFloatArrayElements(output, output_ptr, 0);
@@ -235,7 +285,14 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeGetStatus(JNIEnv *, jclass)
     {
         return static_cast<jint>(ECHIDNA_STATUS_ERROR);
     }
-    return static_cast<jint>(Symbols().get_status());
+    try
+    {
+        return static_cast<jint>(Symbols().get_status());
+    }
+    catch (...)
+    {
+        return static_cast<jint>(ECHIDNA_STATUS_ERROR);
+    }
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -245,5 +302,12 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeGetApiVersion(JNIEnv *, jcla
     {
         return static_cast<jlong>(ECHIDNA_API_VERSION);
     }
-    return static_cast<jlong>(Symbols().get_version());
+    try
+    {
+        return static_cast<jlong>(Symbols().get_version());
+    }
+    catch (...)
+    {
+        return static_cast<jlong>(ECHIDNA_API_VERSION);
+    }
 }
