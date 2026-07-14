@@ -35,6 +35,12 @@ class DashboardScreenRenderInstrumentedTest {
                 DashboardScreen(viewModel = DashboardViewModel())
             }
         }
+        composeRule.onNodeWithText("Root module / install risk").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Echidna's Android capture-path interception and Magisk/Zygisk module " +
+                "install path are very hard and will likely not work on many phones. " +
+                "Do not flash or rely on the module unless you can recover the device."
+        ).assertIsDisplayed()
         composeRule.onNodeWithText("Voice processing").assertIsDisplayed()
         composeRule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("Preset"))
         composeRule.onNodeWithText("Preset").assertIsDisplayed()

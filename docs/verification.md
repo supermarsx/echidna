@@ -1,9 +1,12 @@
 # End-to-End Verification
 
-This page is the honest answer to *"does Echidna actually work end to end?"* It separates
-what was **really built, run, and measured on this build host, stock emulator, and rooted
-emulators** from what still needs release-device validation: full Magisk/LSPosed install,
-physical-device SELinux/HAL behavior, and broader hook coverage.
+This page is the honest answer to *"does Echidna actually work end to end?"* Android
+capture-path interception is a very hard, device-specific problem, and Echidna is likely
+not to work on many phones even when every artifact builds, installs, and launches
+correctly. The matrix below separates what was **really built, run, and measured on this
+build host, stock emulator, and rooted emulators** from what still needs release-device
+validation: full Magisk/LSPosed install, physical-device SELinux/HAL behavior, and
+broader hook coverage.
 
 > **Reading guide.** Every row in the "Verified" table below corresponds to a real build,
 > test run, or on-device action with recorded output. The "Still not verified" section
@@ -92,6 +95,17 @@ interception in the current process, plus service-side native `processBlock` rou
 DSP. It does **not** prove the whole release install path. Attempts to install the refreshed zip
 with `magisk --install-module /sdcard/Download/echidna-magisk.zip` on the rooted emulator images
 returned `Incomplete Magisk install`, so Magisk flashing remains unverified here.
+
+Requested coverage, explicitly:
+
+| Requested item | Current status | What is covered / missing |
+| --- | --- | --- |
+| Live Zygisk module load + real hook install on **arm64 primary** | **Release-device-only / NOT verified here** | `arm64-v8a` native artifacts build and package, but no physical arm64 Magisk/Zygisk load, app-specialize, or hook-install run has been recorded. |
+| LSPosed shim injection + snapshot read under SELinux | **Release-device-only / NOT verified here** | The shim APK builds and the snapshot-reader code exists, but LSPosed install, scoping, injected-process execution, and SELinux-gated snapshot access were not run. |
+| SELinux enforcement + audio HAL behavior on real hardware | **Release-device-only / NOT verified here** | The app reports SELinux/audio-stack signals, but no enforcing physical device has proven vendor-HAL capture processing. |
+| x86_64 trampoline under real injection | **Rooted-emulator slice verified; broader release path NOT verified** | Rooted Android 13/14 x86_64 emulators prove one live `AudioRecord.read` hook path with `processed=1`; Magisk manager flash/reboot and arbitrary target-app injection are not claimed. |
+| armv7 degrade behavior | **Build/code-path covered; runtime device behavior NOT verified** | `armeabi-v7a` artifacts build, and the hook path is intended to fail closed with `hook_unsupported_abi`; no real armv7 device run has proved the runtime telemetry. |
+| APK install -> service bind -> live AIDL round-trip | **Verified on emulator/rooted emulator** | App instrumentation covers installable APK execution, in-app `EchidnaControlService` bind, and live AIDL round-trips; this does not prove Magisk/LSPosed hardware paths. |
 
 Still not claimed as verified:
 

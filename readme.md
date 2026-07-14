@@ -8,6 +8,10 @@ Hook the audio path directly inside target apps — transform your voice in call
 recordings, and games with a low-latency native DSP engine, per-app profiles, and
 a rich companion app.
 
+⚠️ Root-module warning: Android capture-path interception is very hard and device-specific.
+Echidna is likely not to work on many phones; do not install or flash it unless you can recover
+the device if a Magisk/Zygisk module breaks boot.
+
 [![CI](https://img.shields.io/github/actions/workflow/status/supermarsx/echidna/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/supermarsx/echidna/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/github/actions/workflow/status/supermarsx/echidna/docs.yml?branch=main&label=docs&style=flat-square)](https://github.com/supermarsx/echidna/actions/workflows/docs.yml)
 [![License](https://img.shields.io/badge/license-MIT--derived%20noncommercial-orange.svg?style=flat-square)](license.md)
@@ -31,6 +35,10 @@ a rich companion app.
 > Magisk/Zygisk module manually from recovery, adb, safe mode, or another
 > out-of-band rescue path if the phone bootloops. If you cannot recover from a
 > bad module without the normal Android UI, do not flash this.
+> The companion APK's service/AIDL round-trip is instrumented, but the live
+> root-module paths above are not proven on release hardware yet.
+> Even correct builds may fail on strict SELinux policies, unusual vendor HALs,
+> unsupported ABIs, or Magisk/LSPosed combinations this project has not tested.
 
 ## Table of Contents
 

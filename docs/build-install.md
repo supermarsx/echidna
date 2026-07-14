@@ -2,13 +2,17 @@
 
 !!! danger "⚠️ Manual recovery knowledge required"
     Echidna is experimental root software and may be incompatible with the
-    device you are using. Do not install it unless you already know how to
-    disable a Magisk/Zygisk module manually from recovery, adb, safe mode, or
-    another out-of-band rescue path if the phone bootloops. If you cannot
-    recover from a bad module without the normal Android UI, do not flash this.
+    device you are using. Android capture-path interception is a very hard,
+    device-specific problem, and Echidna is likely not to work on many phones
+    even when built and installed correctly. Do not install it unless you
+    already know how to disable a Magisk/Zygisk module manually from recovery,
+    adb, safe mode, or another out-of-band rescue path if the phone bootloops.
+    If you cannot recover from a bad module without the normal Android UI, do
+    not flash this.
 
 This page is the reproducible, end-to-end guide to building Echidna's shippable artifacts and
-installing them on a device:
+installing them on a device. A successful build, APK install, or Magisk zip install is not a
+guarantee that capture hooks will work on the target phone.
 
 | Artifact | Produced by | What it is |
 | -------- | ----------- | ---------- |
@@ -258,6 +262,11 @@ coverage are still **device-gated**.
 
 ### 1. Install the companion app
 
+!!! warning "⚠️ Install is not compatibility proof"
+    Installing the companion APK only proves that Android accepted the app package. It does
+    not prove Zygisk loading, LSPosed injection, SELinux access, or vendor audio-HAL capture
+    interception on this phone. Expect many devices to remain unsupported.
+
 ```sh
 adb install -r android/app/app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -315,7 +324,12 @@ with a lab counterpart and confirm the processed voice.
 | APK install + launch + screen nav | Emulator-verified (unrooted) |
 | Native `processBlock` via in-app service | Rooted-emulator verified (Android 13/14) |
 | `AudioRecord.read` interception + DSP routing | Rooted-emulator verified (Android 13/14) |
-| Magisk flash, Zygisk/LSPosed activation, broad hook coverage, SELinux/HAL | **Device-gated** |
+| APK install -> service bind -> live AIDL round-trip | Emulator/rooted-emulator verified |
+| Live Zygisk module load + real hook install on arm64 primary | **Device-gated / NOT verified here** |
+| LSPosed shim injection + snapshot read under SELinux | **Device-gated / NOT verified here** |
+| SELinux enforcement + audio HAL behavior on real hardware | **Device-gated / NOT verified here** |
+| x86_64 trampoline under real injection | Rooted-emulator `AudioRecord` slice verified; full release injection NOT verified |
+| armv7 degrade behavior | Build/code-path covered; real armv7 runtime NOT verified |
 
 The full matrix and a step-by-step reproduce-on-real-device procedure are in
 [Verification](verification.md).

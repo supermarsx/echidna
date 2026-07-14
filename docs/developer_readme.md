@@ -1,9 +1,11 @@
 # Echidna Developer Guide
 
 This guide covers how the Echidna sources build, how the pieces fit together on a device, the
-release-signing model, and the known limitations you must design around. It reflects the state of
-the tree after the Phase 1–3 remediation (buildable debug APK → runnable-on-device layout → signed
-release scaffolding).
+release-signing model, and the known limitations you must design around. Android capture-path
+interception is a very hard, device-specific problem; Echidna is likely not to work on many phones
+even when every artifact builds and installs correctly. This guide reflects the state of the tree
+after the Phase 1–3 remediation (buildable debug APK → runnable-on-device layout → signed release
+scaffolding).
 
 > **Status honesty (read this first).** The host build is verified on the development host
 > (Android SDK, NDK r27, JDK 21, Gradle 8.5): the companion and shim APKs build, all six per-ABI
@@ -11,7 +13,8 @@ release scaffolding).
 > emulators also prove the in-app control-service native `processBlock` path and one live
 > `AudioRecord.read` interception slice. Magisk flashing, live LSPosed injection,
 > physical-device SELinux/HAL behavior, and broader hook-manager coverage are still separate
-> release-device validation. See
+> release-device validation. Treat a successful build/install as artifact proof only, not as a
+> guarantee that the target phone can run Echidna safely or effectively. See
 > [Status: verified vs. needs a device](#status-verified-vs-needs-a-device).
 
 ## Repository topology
@@ -264,10 +267,12 @@ zygisk::ModuleBase` with `REGISTER_ZYGISK_MODULE(EchidnaModule)`. The hook lifec
 AudioRecord → libc read → tinyalsa → audio HAL). Hooking stays gated on
 `hooksEnabled() && isProcessWhitelisted(process)`.
 
-**ABI support.** `arm64-v8a` is the locked primary and fully implemented. `x86_64` has a complete
-inline-hook trampoline (host-harness verified; needs emulator confirmation). `armeabi-v7a` builds
-and loads but **gracefully degrades** — `install()` returns false and emits a `hook_unsupported_abi`
-log signal (Thumb-2/IT-block relocation is not implemented). Plan accordingly for armv7 devices.
+**ABI support.** `arm64-v8a` is the locked primary implementation, but live arm64 Zygisk loading
+and hook installation still need physical-device proof. `x86_64` has a complete inline-hook
+trampoline and a rooted-emulator `AudioRecord.read` slice with `processed=1`; broader target-app
+injection and HAL paths are not claimed. `armeabi-v7a` builds but **gracefully degrades** —
+`install()` returns false and emits a `hook_unsupported_abi` log signal (Thumb-2/IT-block
+relocation is not implemented). Real armv7 runtime telemetry still needs device proof.
 
 ## Safety Watchdog
 
@@ -403,6 +408,17 @@ signal). arm64 is the primary target.
   a real `AudioRecord.read` call emits current-process hook evidence with `processed=1`.
 - Earlier stock-emulator coverage still proves install, launch, navigation, fallback UI state, and
   the in-app service/AIDL round-trip without root.
+
+**Requested coverage calls, explicitly:**
+
+| Requested item | Status |
+| --- | --- |
+| Live Zygisk module load + real hook install on arm64 primary | **Release-device-only / NOT verified here** |
+| LSPosed shim injection + snapshot read under SELinux | **Release-device-only / NOT verified here** |
+| SELinux enforcement + audio HAL behavior on real hardware | **Release-device-only / NOT verified here** |
+| x86_64 trampoline under real injection | **Rooted-emulator `AudioRecord` slice verified; full release injection NOT verified** |
+| armv7 degrade behavior | **Build/code-path covered; real armv7 runtime NOT verified** |
+| APK install -> service bind -> live AIDL round-trip | **Emulator/rooted-emulator verified** |
 
 **Still release-device-only / NOT verified here:**
 
