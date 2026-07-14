@@ -116,8 +116,15 @@ class ControlServiceBindingInstrumentedTest {
         // even on an unrooted device where no Magisk module is installed.
         val json = JSONObject(service.moduleStatus)
         assertTrue(json.has("selinuxState"))
+        assertTrue(json.has("cpu"))
         assertTrue(json.has("audioStack"))
-        assertTrue(json.getJSONObject("audioStack").has("hal"))
+        assertTrue(json.getJSONObject("cpu").has("primaryAbi"))
+        assertTrue(json.getJSONObject("cpu").has("nativeHooksSupported"))
+        val audioStack = json.getJSONObject("audioStack")
+        assertTrue(audioStack.has("hal"))
+        assertTrue(audioStack.has("vendorFamily"))
+        assertTrue(audioStack.has("openSlEsAvailable"))
+        assertTrue(audioStack.has("audioFlingerClientAvailable"))
     }
 
     @Test

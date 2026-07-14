@@ -2,6 +2,7 @@ package com.echidna.app.data
 
 import com.echidna.app.model.AudioStackInfo
 import com.echidna.app.model.ControlState
+import com.echidna.app.model.CpuArchInfo
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.HookTelemetry
 import com.echidna.app.model.ModuleStatus
@@ -61,10 +62,31 @@ internal object TelemetryParser {
     fun parseModuleStatus(json: String): ModuleStatus? {
         if (json.isBlank()) return null
         val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        val cpuObj = root.optJSONObject("cpu")
+        val cpu = CpuArchInfo(
+            primaryAbi = cpuObj?.optString("primaryAbi").orEmpty(),
+            supportedAbis = cpuObj?.optJSONArray("supportedAbis").toStringList(),
+            cpuFamily = cpuObj?.optString("cpuFamily").orEmpty().ifBlank { "Unknown" },
+            is64Bit = cpuObj?.optBoolean("is64Bit", false) ?: false,
+            zygiskAbi = cpuObj?.optString("zygiskAbi").orEmpty(),
+            moduleSupported = cpuObj?.optBoolean("moduleSupported", false) ?: false,
+            nativeHooksSupported = cpuObj?.optBoolean("nativeHooksSupported", false) ?: false,
+            supportLevel = cpuObj?.optString("supportLevel").orEmpty().ifBlank { "unknown" },
+            message = cpuObj?.optString("message").orEmpty()
+        )
         val stackObj = root.optJSONObject("audioStack")
         val audioStack = AudioStackInfo(
             hal = stackObj?.optString("hal").orEmpty(),
+            manufacturer = stackObj?.optString("manufacturer").orEmpty(),
+            boardPlatform = stackObj?.optString("boardPlatform").orEmpty(),
+            vendorFamily = stackObj?.optString("vendorFamily").orEmpty().ifBlank { "Unknown" },
             aaudioSupported = stackObj?.optBoolean("aaudioSupported", false) ?: false,
+            openSlEsAvailable = stackObj?.optBoolean("openSlEsAvailable", false) ?: false,
+            audioFlingerClientAvailable = stackObj?.optBoolean(
+                "audioFlingerClientAvailable",
+                false
+            ) ?: false,
+            tinyAlsaAvailable = stackObj?.optBoolean("tinyAlsaAvailable", false) ?: false,
             lowLatency = stackObj?.optBoolean("lowLatency", false) ?: false,
             proAudio = stackObj?.optBoolean("proAudio", false) ?: false,
             sampleRate = stackObj?.optInt("sampleRate", 0) ?: 0,
@@ -76,10 +98,21 @@ internal object TelemetryParser {
             selinuxState = root.optString("selinuxState").ifBlank { "UNKNOWN" },
             selinuxStatus = root.optString("selinuxStatus").ifBlank { "Unknown" },
             javaFallbackActive = root.optBoolean("javaFallbackActive", false),
+            cpu = cpu,
             audioStack = audioStack,
             notes = root.optString("notes").ifBlank { null },
             lastError = root.optString("lastError").ifBlank { null }
         )
+    }
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        val values = ArrayList<String>(length())
+        for (i in 0 until length()) {
+            val value = optString(i).takeIf { it.isNotBlank() } ?: continue
+            values += value
+        }
+        return values
     }
 
     /** Parses the global control-state JSON (t2-e6 signatures §4) into a [ControlState]. */

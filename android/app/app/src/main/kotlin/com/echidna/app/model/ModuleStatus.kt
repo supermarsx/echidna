@@ -11,14 +11,33 @@ data class ModuleStatus(
     val selinuxState: String,
     val selinuxStatus: String,
     val javaFallbackActive: Boolean,
+    val cpu: CpuArchInfo,
     val audioStack: AudioStackInfo,
     val notes: String?,
     val lastError: String?
 )
 
+data class CpuArchInfo(
+    val primaryAbi: String,
+    val supportedAbis: List<String>,
+    val cpuFamily: String,
+    val is64Bit: Boolean,
+    val zygiskAbi: String,
+    val moduleSupported: Boolean,
+    val nativeHooksSupported: Boolean,
+    val supportLevel: String,
+    val message: String
+)
+
 data class AudioStackInfo(
     val hal: String,
+    val manufacturer: String,
+    val boardPlatform: String,
+    val vendorFamily: String,
     val aaudioSupported: Boolean,
+    val openSlEsAvailable: Boolean,
+    val audioFlingerClientAvailable: Boolean,
+    val tinyAlsaAvailable: Boolean,
     val lowLatency: Boolean,
     val proAudio: Boolean,
     val sampleRate: Int,

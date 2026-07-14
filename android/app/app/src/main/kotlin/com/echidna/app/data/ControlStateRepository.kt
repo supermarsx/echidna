@@ -821,13 +821,55 @@ object ControlStateRepository {
     /** Builds the wizard result from the real module/SELinux/HAL probe (schema §3). */
     private fun buildCompatibilityFromStatus(status: ModuleStatus): CompatibilityResult {
         val stack = status.audioStack
+        val cpu = status.cpu
         val probes = listOf(
+            AudioStackProbe(
+                name = "CPU architecture / Zygisk ABI",
+                supported = cpu.nativeHooksSupported,
+                latencyEstimateMs = null,
+                message = buildString {
+                    append(cpu.message.ifBlank { "CPU architecture probe unavailable." })
+                    if (cpu.supportedAbis.isNotEmpty()) {
+                        append(" Supported ABIs: ${cpu.supportedAbis.joinToString()}.")
+                    }
+                }
+            ),
             AudioStackProbe(
                 name = "AAudio (native low-latency)",
                 supported = stack.aaudioSupported,
                 latencyEstimateMs = null,
                 message = if (stack.aaudioSupported) "Native low-latency path available"
                           else "Not reported by this device"
+            ),
+            AudioStackProbe(
+                name = "OpenSL ES library",
+                supported = stack.openSlEsAvailable,
+                latencyEstimateMs = null,
+                message = if (stack.openSlEsAvailable) {
+                    "libOpenSLES.so is present; live hook coverage still requires a scoped app."
+                } else {
+                    "libOpenSLES.so was not found in common system/vendor library paths."
+                }
+            ),
+            AudioStackProbe(
+                name = "AudioFlinger client library",
+                supported = stack.audioFlingerClientAvailable,
+                latencyEstimateMs = null,
+                message = if (stack.audioFlingerClientAvailable) {
+                    "libaudioclient.so is present for AudioFlinger client-path probing."
+                } else {
+                    "libaudioclient.so was not found in common system/vendor library paths."
+                }
+            ),
+            AudioStackProbe(
+                name = "tinyalsa library",
+                supported = stack.tinyAlsaAvailable,
+                latencyEstimateMs = null,
+                message = if (stack.tinyAlsaAvailable) {
+                    "libtinyalsa.so is present; HAL/tinyalsa hooks remain device-gated."
+                } else {
+                    "libtinyalsa.so was not found in common system/vendor library paths."
+                }
             ),
             AudioStackProbe(
                 name = "Low-latency audio",
@@ -845,7 +887,13 @@ object ControlStateRepository {
             )
         )
         val notes = buildList {
+            add(
+                "CPU ABI: ${cpu.primaryAbi.ifBlank { "Unknown" }}; Zygisk ABI: " +
+                    cpu.zygiskAbi.ifBlank { "Unknown" }
+            )
+            add("CPU hook support: ${cpu.supportLevel.ifBlank { "unknown" }}")
             add("Vendor HAL: ${stack.hal.ifBlank { "Unknown" }}")
+            add("Vendor family: ${stack.vendorFamily.ifBlank { "Unknown" }}")
             if (stack.sampleRate > 0) add("Output sample rate: ${stack.sampleRate} Hz")
             if (stack.framesPerBuffer > 0) add("Frames per buffer: ${stack.framesPerBuffer}")
             add("Magisk module: ${if (status.magiskModuleInstalled) "installed" else "not installed"}")

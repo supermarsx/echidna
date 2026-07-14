@@ -40,6 +40,29 @@ x86_64 AVDs `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) for the 
 | **In-app control service bind** | `dumpsys activity services com.echidna.app` | **PASS** — live `ServiceRecord` for `EchidnaControlService` with an active `ConnectionRecord` (BIND_AUTO_CREATE); the app binds its in-app control service at runtime |
 | **Format gate** | `clang-format --dry-run -Werror` over all tracked native/android C/C++ | **PASS** — 0 non-conformant of 82 files |
 
+### Latest rooted-emulator recheck
+
+On 2026-07-14, the rooted checks were rerun after adding explicit CPU/ABI and native audio-library
+probes to `getModuleStatus()`:
+
+- `emulator-5560` / `echidna_m26` (Android 14, x86_64, Magisk 26.4): **PASS** for
+  `:app:connectedDebugAndroidTest` and `:interception-probe:connectedDebugAndroidTest`.
+- `emulator-5556` / `echidna_e2e33` (Android 13, x86_64, Magisk 25.2): **PASS** for
+  `:interception-probe:connectedDebugAndroidTest`.
+- `emulator-5562` / `echidna_e2e` (Android 14, x86_64, Magisk 25.2): **FAIL** for the
+  interception probe because no current-process hook evidence was emitted. The AVD has
+  `/data/adb/modules/echidna/zygisk/unloaded`, so Magisk is not loading the module there even
+  though module files are present.
+- Reinstalling `out/echidna-magisk.zip` with
+  `magisk --install-module /sdcard/Download/echidna-magisk.zip` still returned
+  `Incomplete Magisk install` on the rooted emulator, so module-manager flashing is still not
+  claimed as verified.
+
+The compatibility checker now reports CPU family, primary ABI, Zygisk ABI, active-hook support,
+vendor family, and the presence of `libOpenSLES.so`, `libaudioclient.so`, and `libtinyalsa.so`.
+Those are device signals, not live proof that OpenSL ES, AudioFlinger, tinyalsa, or vendor-HAL hooks
+successfully processed audio in a target app.
+
 ### Highlight — why end-to-end testing mattered: the startup crash
 
 The most valuable finding of this pass came *only* from running the app on a real emulator,

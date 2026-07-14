@@ -46,12 +46,23 @@ cd ../lsposed-shim
 
 ## Minification
 
-Minification and resource-shrinking are **disabled** for the first release. The app is heavy on
-reflection-sensitive entry points — AIDL stubs (`IEchidnaControlService`), JNI
-(`libechidna_control_jni`), and Compose — while the shim is loaded reflectively by LSPosed through
-`assets/xposed_init`. Shipping R8/resource-shrinking without proven keep rules risks silently
-stripping live code. Enabling `isMinifyEnabled` + keep rules is a deliberate follow-up (tracked in
-[todo.md](https://github.com/supermarsx/echidna/blob/main/todo.md)).
+Minification and resource-shrinking are **disabled** for the first release.
+
+**R8** is Android's release optimizer/shrinker. It rewrites bytecode, removes code it thinks is
+unused, and can rename classes and methods. That is useful for ordinary apps, but Echidna has
+reflection-sensitive entry points: AIDL stubs (`IEchidnaControlService`), JNI
+(`libechidna_control_jni`), Compose-generated code, and the LSPosed shim entry named from
+`assets/xposed_init`. If R8 is enabled without a proven keep-rule file, it can silently strip or
+rename code that is only reached from Binder, native code, or LSPosed.
+
+**Resource shrinking** is the matching Android resource pass. It removes layouts, drawables, and
+other resources that look unused after R8 analysis. That also needs proof because LSPosed,
+notifications, widgets, and Compose preview/runtime paths can reference resources indirectly.
+
+For now, release builds are larger but safer: `isMinifyEnabled = false` and
+`isShrinkResources = false`. Enabling R8/resource shrinking later means adding a
+`proguard-rules.pro` keep-rule set for AIDL, JNI, Compose, LSPosed, widgets, and notifications,
+then proving install, launch, service bind, shim load, and diagnostics on the minified APK.
 
 ## Generating a keystore
 

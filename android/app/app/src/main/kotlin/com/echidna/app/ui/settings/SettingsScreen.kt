@@ -981,13 +981,80 @@ private fun buildAdvisoryAlerts(
     }
 
     if (settings.showHardwareAlerts) {
+        moduleStatus?.cpu?.let { cpu ->
+            if (!cpu.moduleSupported) {
+                add(
+                    AdvisoryAlert(
+                        title = "CPU ABI is not packaged by Echidna",
+                        detail = cpu.message.ifBlank {
+                            "Primary ABI ${cpu.primaryAbi.ifBlank { "unknown" }} is not supported."
+                        },
+                        category = "Hardware compatibility"
+                    )
+                )
+            } else if (!cpu.nativeHooksSupported) {
+                add(
+                    AdvisoryAlert(
+                        title = "CPU ABI has limited native hook support",
+                        detail = cpu.message.ifBlank {
+                            "The module may load, but active audio hooks are not enabled for " +
+                                cpu.zygiskAbi.ifBlank { "this ABI" } + "."
+                        },
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            Unit
+        }
         moduleStatus?.audioStack?.let { stack ->
+            if (stack.vendorFamily.equals("Unknown", ignoreCase = true) ||
+                stack.vendorFamily.contains("unclassified", ignoreCase = true)
+            ) {
+                add(
+                    AdvisoryAlert(
+                        title = "Vendor audio family is not classified",
+                        detail = "HAL label ${stack.hal.ifBlank { "unknown" }} did not match " +
+                            "known emulator, Qualcomm, MediaTek, Exynos, or Tensor patterns.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
             if (!stack.aaudioSupported) {
                 add(
                     AdvisoryAlert(
                         title = "AAudio low-latency path unavailable",
                         detail = "This device did not report native AAudio support. Echidna can still try " +
                             "fallback hooks, but latency and app coverage may vary.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (!stack.openSlEsAvailable) {
+                add(
+                    AdvisoryAlert(
+                        title = "OpenSL ES library not found",
+                        detail = "The compatibility probe could not find libOpenSLES.so in common " +
+                            "system or vendor paths. OpenSL hook coverage is unlikely on this image.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (!stack.audioFlingerClientAvailable) {
+                add(
+                    AdvisoryAlert(
+                        title = "AudioFlinger client library not found",
+                        detail = "The compatibility probe could not find libaudioclient.so in common " +
+                            "system or vendor paths. AudioFlinger client hook coverage is unlikely.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (!stack.tinyAlsaAvailable) {
+                add(
+                    AdvisoryAlert(
+                        title = "tinyalsa library not found",
+                        detail = "The compatibility probe could not find libtinyalsa.so in common " +
+                            "system or vendor paths. tinyalsa/HAL fallback coverage is unlikely.",
                         category = "Hardware compatibility"
                     )
                 )

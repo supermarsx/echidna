@@ -28,6 +28,7 @@ class EchidnaControlService : Service() {
     private lateinit var privilegedController: PrivilegedController
     private lateinit var telemetryExporter: TelemetryExporter
     private lateinit var audioStackProbe: AudioStackProbe
+    private lateinit var cpuArchProbe: CpuArchProbe
     private val telemetryCallbacks = object : RemoteCallbackList<IEchidnaTelemetryListener>() {
         override fun onCallbackDied(callback: IEchidnaTelemetryListener?) {
             telemetryListenerCount = (telemetryListenerCount - 1).coerceAtLeast(0)
@@ -48,6 +49,7 @@ class EchidnaControlService : Service() {
         privilegedController = PrivilegedController(rootExecutor, selinuxChecker)
         telemetryExporter = TelemetryExporter(filesDir)
         audioStackProbe = AudioStackProbe(this)
+        cpuArchProbe = CpuArchProbe()
         executor.execute {
             val selinuxState = privilegedController.applySelinuxTweaks()
             if (selinuxState == SelinuxState.ENFORCING_JAVA_ONLY) {
@@ -243,6 +245,7 @@ class EchidnaControlService : Service() {
     private fun buildStatusJson(status: ModuleStatus): String {
         val json = JSONObject(status.toJson())
         json.put("selinuxStatus", humanReadableSelinux(status.selinuxState))
+        json.put("cpu", cpuArchProbe.probe())
         json.put("audioStack", audioStackProbe.probe())
         val notes = statusNotes(status)
         if (notes.isNotEmpty()) {

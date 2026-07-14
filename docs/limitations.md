@@ -80,6 +80,11 @@ Samsung/Exynos, and Google's own silicon all differ.
   transformed (and, being fail-closed, is left untouched rather than corrupted).
 - Hook offsets and symbol/pattern matches can require **per-device tuning**. A layout that
   works on one HAL build is not guaranteed on another.
+- The Compatibility Wizard reports CPU family, primary ABI, Zygisk ABI, vendor family, and
+  whether common native audio libraries (`libOpenSLES.so`, `libaudioclient.so`,
+  `libtinyalsa.so`) are present. These checks help identify obvious install and hardware
+  mismatches, but they do **not** prove live OpenSL ES, AudioFlinger, tinyalsa, or vendor-HAL
+  hook success on their own.
 - **Device-gated:** which combinations work is inherently a per-device matrix and is not
   characterized on hardware in this project.
 
@@ -124,6 +129,11 @@ validated trampoline is added.
 
 The 64-bit path (arm64-v8a) covers essentially all current mainstream devices, so in
 practice this affects only older/32-bit hardware.
+
+The app now reports CPU/ABI support directly in Compatibility and Diagnostics. A supported
+module ABI does not always mean active hooks are enabled: `arm64-v8a` and `x86_64` report native
+hook support, while `armeabi-v7a` reports that the module can load but audio hooks are disabled
+fail-closed.
 
 ## 7. What runs today vs. what needs hardware
 

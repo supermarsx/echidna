@@ -264,11 +264,34 @@ private fun EnvironmentGroup(moduleStatus: ModuleStatus?) {
         return
     }
     val stack = moduleStatus.audioStack
+    val cpu = moduleStatus.cpu
     MetricRow(
         label = "SELinux",
         value = "${moduleStatus.selinuxStatus} (${moduleStatus.selinuxState})",
         description = "Kernel enforcement state and Echidna policy posture."
     )
+    MetricRow(
+        label = "CPU architecture",
+        value = "${cpu.cpuFamily} (${cpu.primaryAbi.ifBlank { "unknown ABI" }})",
+        description = "Primary process ABI reported by Android."
+    )
+    MetricRow(
+        label = "Zygisk ABI",
+        value = cpu.zygiskAbi.ifBlank { "unknown" },
+        description = "Per-process payload name Magisk/Zygisk should select."
+    )
+    MetricRow(
+        label = "Native hook ABI support",
+        value = if (cpu.nativeHooksSupported) "supported" else "limited",
+        description = cpu.message.ifBlank { "CPU/ABI compatibility probe unavailable." }
+    )
+    if (cpu.supportedAbis.isNotEmpty()) {
+        MetricRow(
+            label = "Android supported ABIs",
+            value = cpu.supportedAbis.joinToString(),
+            description = "ABI order reported by Build.SUPPORTED_ABIS."
+        )
+    }
     MetricRow(
         label = "Magisk module",
         value = if (moduleStatus.magiskModuleInstalled) "installed" else "not installed",
@@ -290,9 +313,29 @@ private fun EnvironmentGroup(moduleStatus: ModuleStatus?) {
         description = "Vendor hardware-abstraction-layer / audio board."
     )
     MetricRow(
+        label = "Vendor family",
+        value = stack.vendorFamily.ifBlank { null },
+        description = "Best-effort SoC/HAL family classification from build properties."
+    )
+    MetricRow(
         label = "AAudio (low-latency)",
         value = if (stack.aaudioSupported) "supported" else "not reported",
         description = "Native low-latency capture/playback API availability."
+    )
+    MetricRow(
+        label = "OpenSL ES library",
+        value = if (stack.openSlEsAvailable) "present" else "not found",
+        description = "Whether libOpenSLES.so exists in common system/vendor library paths."
+    )
+    MetricRow(
+        label = "AudioFlinger client library",
+        value = if (stack.audioFlingerClientAvailable) "present" else "not found",
+        description = "Whether libaudioclient.so exists for client-path hook probing."
+    )
+    MetricRow(
+        label = "tinyalsa library",
+        value = if (stack.tinyAlsaAvailable) "present" else "not found",
+        description = "Whether libtinyalsa.so exists for lower-level PCM hook probing."
     )
     MetricRow(
         label = "Low-latency feature",
@@ -505,13 +548,32 @@ private fun buildRawStatusJson(
                 .put("selinuxState", moduleStatus.selinuxState)
                 .put("selinuxStatus", moduleStatus.selinuxStatus)
                 .put("javaFallbackActive", moduleStatus.javaFallbackActive)
+                .put(
+                    "cpu",
+                    JSONObject()
+                        .put("primaryAbi", moduleStatus.cpu.primaryAbi)
+                        .put("supportedAbis", JSONArray(moduleStatus.cpu.supportedAbis))
+                        .put("cpuFamily", moduleStatus.cpu.cpuFamily)
+                        .put("is64Bit", moduleStatus.cpu.is64Bit)
+                        .put("zygiskAbi", moduleStatus.cpu.zygiskAbi)
+                        .put("moduleSupported", moduleStatus.cpu.moduleSupported)
+                        .put("nativeHooksSupported", moduleStatus.cpu.nativeHooksSupported)
+                        .put("supportLevel", moduleStatus.cpu.supportLevel)
+                        .put("message", moduleStatus.cpu.message)
+                )
                 .put("notes", moduleStatus.notes ?: JSONObject.NULL)
                 .put("lastError", moduleStatus.lastError ?: JSONObject.NULL)
                 .put(
                     "audioStack",
                     JSONObject()
                         .put("hal", stack.hal)
+                        .put("manufacturer", stack.manufacturer)
+                        .put("boardPlatform", stack.boardPlatform)
+                        .put("vendorFamily", stack.vendorFamily)
                         .put("aaudioSupported", stack.aaudioSupported)
+                        .put("openSlEsAvailable", stack.openSlEsAvailable)
+                        .put("audioFlingerClientAvailable", stack.audioFlingerClientAvailable)
+                        .put("tinyAlsaAvailable", stack.tinyAlsaAvailable)
                         .put("lowLatency", stack.lowLatency)
                         .put("proAudio", stack.proAudio)
                         .put("sampleRate", stack.sampleRate)

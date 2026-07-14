@@ -29,9 +29,26 @@ class StatusJsonParsingTest {
               "selinuxState": "ENFORCING_WITH_POLICY",
               "selinuxStatus": "Enforcing (policy patched)",
               "javaFallbackActive": false,
+              "cpu": {
+                "primaryAbi": "arm64-v8a",
+                "supportedAbis": ["arm64-v8a", "armeabi-v7a"],
+                "cpuFamily": "AArch64",
+                "is64Bit": true,
+                "zygiskAbi": "arm64-v8a",
+                "moduleSupported": true,
+                "nativeHooksSupported": true,
+                "supportLevel": "native_hooks_supported",
+                "message": "Native inline hooks are implemented for this process ABI."
+              },
               "audioStack": {
                 "hal": "Qualcomm (kona)",
+                "manufacturer": "Qualcomm",
+                "boardPlatform": "kona",
+                "vendorFamily": "Qualcomm",
                 "aaudioSupported": true,
+                "openSlEsAvailable": true,
+                "audioFlingerClientAvailable": true,
+                "tinyAlsaAvailable": false,
                 "lowLatency": true,
                 "proAudio": false,
                 "sampleRate": 48000,
@@ -49,8 +66,22 @@ class StatusJsonParsingTest {
         assertEquals("ENFORCING_WITH_POLICY", status.selinuxState)
         assertEquals("Enforcing (policy patched)", status.selinuxStatus)
         assertFalse(status.javaFallbackActive)
+        assertEquals("arm64-v8a", status.cpu.primaryAbi)
+        assertEquals(listOf("arm64-v8a", "armeabi-v7a"), status.cpu.supportedAbis)
+        assertEquals("AArch64", status.cpu.cpuFamily)
+        assertTrue(status.cpu.is64Bit)
+        assertEquals("arm64-v8a", status.cpu.zygiskAbi)
+        assertTrue(status.cpu.moduleSupported)
+        assertTrue(status.cpu.nativeHooksSupported)
+        assertEquals("native_hooks_supported", status.cpu.supportLevel)
         assertEquals("Qualcomm (kona)", status.audioStack.hal)
+        assertEquals("Qualcomm", status.audioStack.manufacturer)
+        assertEquals("kona", status.audioStack.boardPlatform)
+        assertEquals("Qualcomm", status.audioStack.vendorFamily)
         assertTrue(status.audioStack.aaudioSupported)
+        assertTrue(status.audioStack.openSlEsAvailable)
+        assertTrue(status.audioStack.audioFlingerClientAvailable)
+        assertFalse(status.audioStack.tinyAlsaAvailable)
         assertEquals(48000, status.audioStack.sampleRate)
         assertEquals(240, status.audioStack.framesPerBuffer)
         assertEquals("all good", status.notes)
@@ -65,8 +96,14 @@ class StatusJsonParsingTest {
         assertFalse(status.zygiskEnabled)
         assertEquals("UNKNOWN", status.selinuxState)
         assertEquals("Unknown", status.selinuxStatus)
+        assertEquals("Unknown", status.cpu.cpuFamily)
+        assertEquals("unknown", status.cpu.supportLevel)
+        assertTrue(status.cpu.supportedAbis.isEmpty())
+        assertFalse(status.cpu.nativeHooksSupported)
         assertEquals(0, status.audioStack.sampleRate)
         assertEquals("", status.audioStack.hal)
+        assertEquals("Unknown", status.audioStack.vendorFamily)
+        assertFalse(status.audioStack.openSlEsAvailable)
         assertNull(status.notes)
         assertNull(status.lastError)
     }
