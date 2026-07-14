@@ -1,10 +1,12 @@
 # Magisk Module Packaging & Release
 
-!!! danger "Manual recovery knowledge required"
-    Do not flash the Echidna Magisk/Zygisk module unless you already know how to
-    disable a module manually from recovery, adb, safe mode, or another
-    out-of-band rescue path if the phone bootloops. If you cannot recover from a
-    bad module without the normal Android UI, do not install this module.
+!!! danger "⚠️ Manual recovery knowledge required"
+    Echidna is experimental root software and may be incompatible with the
+    device you are using. Do not flash the Echidna Magisk/Zygisk module unless
+    you already know how to disable a module manually from recovery, adb, safe
+    mode, or another out-of-band rescue path if the phone bootloops. If you
+    cannot recover from a bad module without the normal Android UI, do not
+    install this module.
 
 Echidna ships its on-device engine as a **single flashable Magisk/Zygisk module** (module id
 `echidna`). `tools/build_magisk_module.sh` consumes the per-ABI NDK output and produces a real,
@@ -22,6 +24,46 @@ flashable zip. This aligns with the deployment flow in
 > flashing remains unverified here: `magisk --install-module /sdcard/Download/echidna-magisk.zip`
 > returned `Incomplete Magisk install` on the emulator images. Treat Magisk Manager install,
 > reboot, LSPosed injection, and SELinux/socket bootstrap as release-device validation.
+
+## Failsafe and recovery contract
+
+⚠️ Echidna's module must be treated as boot-sensitive. A release should never assume the normal
+Android UI will remain available after flashing. Users and release testers must know how to
+disable the module before installing it.
+
+Intended disable paths:
+
+- **Magisk module disable file:** create Magisk's disable marker for the `echidna` module,
+  normally `/data/adb/modules/echidna/disable`, from recovery or adb when `/data` is mounted.
+- **Echidna runtime disable marker:** create `/data/adb/echidna/disable` to keep Echidna inactive
+  even if the module files remain installed.
+- **Safe-mode path:** use the project's safe-mode path when available so Echidna starts disabled
+  and the companion app can report the reason instead of activating hooks.
+- **Early recovery markers:** create `/cache/echidna-disable` or `/metadata/echidna-disable` when
+  `/data` is unavailable, encrypted, or unsafe to modify from recovery.
+- **Automatic boot watchdog:** the watchdog is intended to disable Echidna after repeated boots
+  that do not reach the late-start service. It is a last-resort guard, not a replacement for
+  manual recovery knowledge.
+
+The install path should be loud about compatibility before reboot. Hard requirements should abort
+the install where they are known locally, while device-compatibility signals should alert without
+pretending to prove success. The checks to surface include:
+
+- Android API and Magisk version.
+- Zygisk availability and whether the user has enabled it.
+- Primary CPU ABI, supported ABI list, unsupported `x86`, and native-hook support for the
+  selected ABI.
+- Presence of the matching Zygisk payload and `libech_dsp.so` for the selected ABI.
+- Incomplete install or bridge state, including missing `/data/adb/echidna` runtime directories,
+  missing JNI search-path libraries, or stale shared telemetry/config files.
+- SELinux enforcing state and whether policy/bootstrap steps succeeded.
+- Vendor audio family and common native audio libraries (`libOpenSLES.so`, `libaudioclient.so`,
+  `libtinyalsa.so`) used as signals for AAudio/OpenSL/AudioFlinger/tinyalsa/HAL coverage.
+- Existing audio/root modules that are known or suspected to conflict.
+- Duplicate Zygisk plus LSPosed scope for the same target app.
+
+These checks are alerts and guards. They do not make Echidna safe for ordinary Android users, and
+they do not remove the user's responsibility for having a bootloop recovery path.
 
 ## What changed from the old packaging
 

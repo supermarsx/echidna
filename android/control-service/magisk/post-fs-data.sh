@@ -4,11 +4,18 @@ set -eu
 MODDIR="${0%/*}"
 RUNTIME_DIR="/data/adb/echidna"
 LIB_DST="$RUNTIME_DIR/lib/libechidna.so"
+FAILSAFE_DIR="$RUNTIME_DIR/failsafe"
+FAILSAFE_REASON="$FAILSAFE_DIR/reason.txt"
+BOOT_MARKER="$FAILSAFE_DIR/boot-in-progress"
+BOOT_FAIL_COUNT="$FAILSAFE_DIR/boot-fail-count"
+LAST_BOOT_OK="$FAILSAFE_DIR/last-boot-ok"
+BOOT_FAIL_LIMIT="${ECHIDNA_BOOT_FAIL_LIMIT:-2}"
 # DSP engine plugin dir (native/dsp/src/engine.cpp default) and shared runtime
 # region dir. /dev/shm does not exist on stock Android, so the shared regions
 # live under /data.
 TMP_DIR="/data/local/tmp/echidna"
 PLUGIN_DIR="$TMP_DIR/plugins"
+OFFSETS_DST="/data/local/tmp/echidna_af_offsets.txt"
 # Shared config/telemetry regions read by hooked app processes. They must exist,
 # be pre-sized (a hooked app maps them read-only and cannot create/grow them),
 # and carry SELinux types that app domains can reach (see magisk/sepolicy.rule).
@@ -19,6 +26,95 @@ REGION_BYTES=65536
 
 log() {
     echo "[echidna][post-fs] $1"
+}
+
+ensure_failsafe_dir() {
+    mkdir -p "$RUNTIME_DIR" "$FAILSAFE_DIR"
+    chmod 0755 "$RUNTIME_DIR" "$FAILSAFE_DIR" 2>/dev/null || true
+}
+
+write_failsafe_reason() {
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    {
+        echo "time=$timestamp"
+        echo "reason=$1"
+    } > "$FAILSAFE_REASON" 2>/dev/null || true
+}
+
+engage_failsafe() {
+    reason="$1"
+    ensure_failsafe_dir
+    log "Failsafe engaged: $reason"
+    write_failsafe_reason "$reason"
+    touch "$MODDIR/disable" 2>/dev/null || true
+    if [ -d "$MODDIR/zygisk" ]; then
+        touch "$MODDIR/zygisk/unloaded" 2>/dev/null || true
+    fi
+    rm -f "$LIB_DST" "$CONFIG_BIN" "$TELEMETRY_BIN" "$OFFSETS_DST" 2>/dev/null || true
+    exit 0
+}
+
+manual_disable_marker() {
+    for marker in \
+        "$MODDIR/disable" \
+        "$MODDIR/remove" \
+        "$RUNTIME_DIR/disable" \
+        "$RUNTIME_DIR/safe-mode" \
+        /cache/echidna-disable \
+        /metadata/echidna-disable; do
+        if [ -e "$marker" ]; then
+            echo "$marker"
+            return 0
+        fi
+    done
+    return 1
+}
+
+read_boot_fail_count() {
+    if [ ! -f "$BOOT_FAIL_COUNT" ]; then
+        echo 0
+        return
+    fi
+    count="$(cat "$BOOT_FAIL_COUNT" 2>/dev/null || echo 0)"
+    case "$count" in
+        ''|*[!0-9]*) echo 0 ;;
+        *) echo "$count" ;;
+    esac
+}
+
+region_size() {
+    if [ ! -f "$1" ]; then
+        echo 0
+        return
+    fi
+    bytes="$(wc -c < "$1" 2>/dev/null | tr -d ' ' || echo 0)"
+    case "$bytes" in
+        ''|*[!0-9]*) echo 0 ;;
+        *) echo "$bytes" ;;
+    esac
+}
+
+arm_boot_watchdog() {
+    ensure_failsafe_dir
+    case "$BOOT_FAIL_LIMIT" in
+        ''|*[!0-9]*) BOOT_FAIL_LIMIT=2 ;;
+    esac
+    if [ "$BOOT_FAIL_LIMIT" -lt 2 ]; then
+        BOOT_FAIL_LIMIT=2
+    fi
+    if [ -f "$BOOT_MARKER" ]; then
+        current="$(read_boot_fail_count)"
+        failures=$((current + 1))
+        echo "$failures" > "$BOOT_FAIL_COUNT" 2>/dev/null || true
+        log "Previous boot did not reach late-start service ($failures/$BOOT_FAIL_LIMIT)"
+        if [ "$failures" -ge "$BOOT_FAIL_LIMIT" ]; then
+            engage_failsafe "boot watchdog tripped after $failures unfinished boots"
+        fi
+    else
+        echo 0 > "$BOOT_FAIL_COUNT" 2>/dev/null || true
+    fi
+    touch "$BOOT_MARKER" 2>/dev/null || true
+    rm -f "$LAST_BOOT_OK" 2>/dev/null || true
 }
 
 bootstrap() {
@@ -70,7 +166,7 @@ prepare_shared_regions() {
     # Create + pre-size the config/telemetry regions if absent (idempotent: never
     # truncate an existing region the controller may already have populated).
     for region in "$CONFIG_BIN" "$TELEMETRY_BIN"; do
-        if [ ! -f "$region" ] || [ "$(stat -c %s "$region" 2>/dev/null || echo 0)" -lt "$REGION_BYTES" ]; then
+        if [ ! -f "$region" ] || [ "$(region_size "$region")" -lt "$REGION_BYTES" ]; then
             dd if=/dev/zero of="$region" bs=1 count=0 seek="$REGION_BYTES" 2>/dev/null || \
                 dd if=/dev/zero of="$region" bs=1024 count=64 2>/dev/null
         fi
@@ -102,6 +198,11 @@ report_status() {
     fi
 }
 
+marker="$(manual_disable_marker 2>/dev/null || true)"
+if [ -n "$marker" ]; then
+    engage_failsafe "manual disable marker present at $marker"
+fi
+arm_boot_watchdog
 bootstrap
 prepare_tmp
 apply_sepolicy

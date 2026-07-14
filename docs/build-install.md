@@ -1,10 +1,11 @@
 # Build & Install
 
-!!! danger "Manual recovery knowledge required"
-    Do not install Echidna unless you already know how to disable a Magisk/Zygisk
-    module manually from recovery, adb, safe mode, or another out-of-band rescue
-    path if the phone bootloops. If you cannot recover from a bad module without
-    the normal Android UI, do not flash this.
+!!! danger "⚠️ Manual recovery knowledge required"
+    Echidna is experimental root software and may be incompatible with the
+    device you are using. Do not install it unless you already know how to
+    disable a Magisk/Zygisk module manually from recovery, adb, safe mode, or
+    another out-of-band rescue path if the phone bootloops. If you cannot
+    recover from a bad module without the normal Android UI, do not flash this.
 
 This page is the reproducible, end-to-end guide to building Echidna's shippable artifacts and
 installing them on a device:
@@ -28,12 +29,18 @@ container-verified against. Pick whichever matches your setup — the outputs ar
     LSPosed injection, and broad device/HAL hook coverage are still marked below and
     covered in depth in [Verification](verification.md).
 
-!!! danger "Root and module install risk"
+!!! danger "⚠️ Root and module install risk"
     This guide is not for common Android users. Flashing root modules, changing hook
     scope, or recovering incorrectly can soft-brick a phone and may contribute to
     harder-to-recover failure modes on some devices. Keep backups and a known-good
     recovery path. If you cannot manually disable a bad module outside normal boot,
     stop here. Echidna is provided as-is, without warranties or guarantees.
+
+!!! warning "⚠️ Experimental compatibility"
+    Echidna may not work on your Android version, CPU ABI, kernel/vendor audio
+    stack, Magisk build, SELinux policy, or existing module mix. A successful
+    build only proves the artifact was produced; it does not prove the target
+    phone can boot or run every hook path safely.
 
 ---
 
@@ -231,6 +238,23 @@ Steps 1 and 2 (APK install, launch, screen navigation) are verified on an unroot
 The app/service native `processBlock` path and one `AudioRecord.read` hook probe are verified on
 rooted Android 13/14 emulators. Magisk flashing, LSPosed activation, and broader device/HAL hook
 coverage are still **device-gated**.
+
+!!! danger "⚠️ Know the boot failsafes before flashing"
+    Do not proceed unless you can disable the module without a normal Android
+    boot. The intended rescue markers are Magisk's module disable file for
+    `echidna`, `/data/adb/echidna/disable`, the project's safe-mode path,
+    `/cache/echidna-disable`, and `/metadata/echidna-disable`. The automatic
+    boot watchdog is intended to disable Echidna after repeated boots that do
+    not reach the late-start service, but it must not be your only recovery plan.
+
+!!! warning "⚠️ Install guard expectations"
+    Before a release is treated as safe to flash on hardware, the install path
+    should alert on Android API, Magisk/Zygisk state, CPU ABI, primary/secondary
+    ABI mismatch, missing native libraries, unknown vendor audio family, SELinux
+    constraints, duplicate Zygisk/LSPosed scope, incomplete bridges, stale
+    runtime files, and known incompatible module mixes. These checks should warn
+    loudly and fail closed where required, but they do not transfer responsibility
+    away from the user.
 
 ### 1. Install the companion app
 

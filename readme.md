@@ -26,10 +26,11 @@ a rich companion app.
 ---
 
 > [!DANGER]
-> Do not install Echidna unless you already know how to disable a Magisk/Zygisk
-> module manually from recovery, adb, safe mode, or another out-of-band rescue
-> path if the phone bootloops. If you cannot recover from a bad module without
-> the normal Android UI, do not flash this.
+> ⚠️ Echidna is experimental root software and may be incompatible with the phone
+> you are using. Do not install it unless you already know how to disable a
+> Magisk/Zygisk module manually from recovery, adb, safe mode, or another
+> out-of-band rescue path if the phone bootloops. If you cannot recover from a
+> bad module without the normal Android UI, do not flash this.
 
 ## Table of Contents
 
@@ -61,14 +62,25 @@ controls. It targets power users and researchers on rooted devices; it is not a 
 
 ## High-Risk Notice
 
-Echidna is for a narrow subset of Android users who already understand bootloader unlocks, Magisk,
-Zygisk, LSPosed, SELinux, sideloaded APKs, and recovery. It can affect system audio processes and
-root-level boot behavior. If you misconfigure it, flash it on the wrong device, combine hook stacks
-badly, or recover incorrectly, you can soft-brick a phone and, in extreme cases, contribute to a
-hard-brick scenario. If you do not already know how to disable a Magisk/Zygisk module without
-booting normally, you should not install Echidna. You are responsible for backups, recovery images,
-device-specific research, and every install decision. The software is provided as-is, without
-warranties or guarantees of functioning.
+⚠️ Echidna is an **experimental project** for a narrow subset of Android users who already understand
+bootloader unlocks, Magisk, Zygisk, LSPosed, SELinux, sideloaded APKs, and recovery. It may be
+incompatible with your device, vendor audio stack, CPU ABI, Magisk build, or other installed root
+modules. It can affect system audio processes and root-level boot behavior. If you misconfigure it,
+flash it on the wrong device, combine hook stacks badly, or recover incorrectly, you can soft-brick a
+phone and, in extreme cases, contribute to a hard-brick scenario. If you do not already know how to
+disable a Magisk/Zygisk module without booting normally, you should not install Echidna. You are
+responsible for backups, recovery images, device-specific research, and every install decision. The
+software is provided as-is, without warranties or guarantees of functioning.
+
+Intended module failsafes are documented for users and release testers:
+
+- Create Magisk's module disable marker for `echidna` before rebooting if the module looks wrong.
+- Create `/data/adb/echidna/disable` or boot via the project's safe-mode path to keep Echidna
+  inactive.
+- Create `/cache/echidna-disable` or `/metadata/echidna-disable` from recovery when `/data` is not
+  writable or not mounted yet.
+- Treat the automatic boot watchdog as a last-resort guard, not as a substitute for knowing how to
+  disable the module yourself.
 
 ## Features
 

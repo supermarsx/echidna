@@ -15,16 +15,25 @@ apps.
     Start with
     [Verification](verification.md) before treating any device path as proven.
 
-!!! danger "Not for ordinary Android users"
-    Echidna is intended for rooted-device power users who understand Magisk,
-    Zygisk, LSPosed, SELinux, sideloading, boot recovery, and device-specific
-    rollback. Misuse can leave a phone boot-looping or otherwise soft-bricked,
-    and bad recovery choices can make the situation worse. You are responsible
-    for backups, recovery images, and every install decision. The software is
+!!! danger "⚠️ Not for ordinary Android users"
+    Echidna is experimental root software intended for rooted-device power users
+    who understand Magisk, Zygisk, LSPosed, SELinux, sideloading, boot recovery,
+    and device-specific rollback. It may be incompatible with your device,
+    vendor audio stack, CPU ABI, Magisk build, SELinux policy, or other modules.
+    Misuse can leave a phone boot-looping or otherwise soft-bricked, and bad
+    recovery choices can make the situation worse. You are responsible for
+    backups, recovery images, and every install decision. The software is
     provided as-is, without warranties or guarantees of functioning.
     If you do not already know how to disable a Magisk/Zygisk module manually
     from recovery, adb, safe mode, or another out-of-band rescue path, do not
     install Echidna.
+
+!!! warning "⚠️ Failsafe markers are not a substitute for recovery knowledge"
+    Echidna's intended rescue paths include Magisk's module disable marker,
+    `/data/adb/echidna/disable` or the project's safe-mode path,
+    `/cache/echidna-disable`, `/metadata/echidna-disable`, and an automatic boot
+    watchdog. Know how to use recovery, adb, or another out-of-band path before
+    flashing anything.
 
 The source requirements live in [spec.md][spec]. This index links the pages that
 explain the implemented architecture, user-facing app surface, and remaining

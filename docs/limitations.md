@@ -15,13 +15,39 @@ Echidna operates in. Read them before flashing anything.
     broader hook managers, and physical-device SELinux/HAL behavior remain open (see
     [Verification](verification.md)).
 
-!!! danger "User responsibility"
-    Echidna is provided as-is for rooted-device power users. If you flash it on the
-    wrong device, combine incompatible install paths, lose recovery access, or brick
-    the phone while experimenting, recovery is your responsibility. The project does
-    not warranty safe operation on any specific device.
+!!! danger "⚠️ User responsibility"
+    Echidna is experimental and provided as-is for rooted-device power users. It
+    may be incompatible with the phone you are using. If you flash it on the
+    wrong device, combine incompatible install paths, lose recovery access, or
+    brick the phone while experimenting, recovery is your responsibility. The
+    project does not warranty safe operation on any specific device.
+
+!!! warning "⚠️ Recovery knowledge is a prerequisite"
+    If you do not already know how to disable a Magisk/Zygisk module from
+    recovery, adb, safe mode, or another out-of-band path after a bootloop, do
+    not install Echidna. The existence of failsafe markers does not guarantee
+    that your recovery environment can mount or edit the needed partitions.
 
 ---
+
+## Install-risk failsafes are guardrails, not guarantees
+
+Echidna's intended failsafes are designed to help a prepared user boot again if the module causes
+trouble. They are not a promise that every device can be recovered through the same path.
+
+The documented disable markers are:
+
+- Magisk's module disable file for `echidna`, normally `/data/adb/modules/echidna/disable`.
+- Echidna's own runtime disable marker at `/data/adb/echidna/disable`.
+- The project's safe-mode path, when available.
+- Early recovery markers at `/cache/echidna-disable` and `/metadata/echidna-disable`.
+- An automatic boot watchdog intended to disable Echidna after repeated boots that do not reach
+  the late-start service.
+
+These paths can fail to help if recovery cannot decrypt `/data`, the bootloader is locked, adb is
+unavailable, `/cache` or `/metadata` is absent or inaccessible, another module breaks earlier in
+boot, or the device has vendor-specific recovery behavior. Treat every install as experimental and
+device-specific.
 
 ## 1. Root is required — there is no rootless mode
 
