@@ -1,5 +1,11 @@
 # Magisk Module Packaging & Release
 
+!!! danger "Manual recovery knowledge required"
+    Do not flash the Echidna Magisk/Zygisk module unless you already know how to
+    disable a module manually from recovery, adb, safe mode, or another
+    out-of-band rescue path if the phone bootloops. If you cannot recover from a
+    bad module without the normal Android UI, do not install this module.
+
 Echidna ships its on-device engine as a **single flashable Magisk/Zygisk module** (module id
 `echidna`). `tools/build_magisk_module.sh` consumes the per-ABI NDK output and produces a real,
 flashable zip. This aligns with the deployment flow in

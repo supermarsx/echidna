@@ -22,6 +22,9 @@ apps.
     and bad recovery choices can make the situation worse. You are responsible
     for backups, recovery images, and every install decision. The software is
     provided as-is, without warranties or guarantees of functioning.
+    If you do not already know how to disable a Magisk/Zygisk module manually
+    from recovery, adb, safe mode, or another out-of-band rescue path, do not
+    install Echidna.
 
 The source requirements live in [spec.md][spec]. This index links the pages that
 explain the implemented architecture, user-facing app surface, and remaining

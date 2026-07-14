@@ -1,5 +1,11 @@
 # Build & Install
 
+!!! danger "Manual recovery knowledge required"
+    Do not install Echidna unless you already know how to disable a Magisk/Zygisk
+    module manually from recovery, adb, safe mode, or another out-of-band rescue
+    path if the phone bootloops. If you cannot recover from a bad module without
+    the normal Android UI, do not flash this.
+
 This page is the reproducible, end-to-end guide to building Echidna's shippable artifacts and
 installing them on a device:
 
@@ -26,7 +32,8 @@ container-verified against. Pick whichever matches your setup — the outputs ar
     This guide is not for common Android users. Flashing root modules, changing hook
     scope, or recovering incorrectly can soft-brick a phone and may contribute to
     harder-to-recover failure modes on some devices. Keep backups and a known-good
-    recovery path. Echidna is provided as-is, without warranties or guarantees.
+    recovery path. If you cannot manually disable a bad module outside normal boot,
+    stop here. Echidna is provided as-is, without warranties or guarantees.
 
 ---
 
