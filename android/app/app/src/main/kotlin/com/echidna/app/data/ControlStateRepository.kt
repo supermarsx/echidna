@@ -165,6 +165,27 @@ object ControlStateRepository {
     private val _widgetControlsEnabled = MutableStateFlow(true)
     val widgetControlsEnabled: StateFlow<Boolean> = _widgetControlsEnabled.asStateFlow()
 
+    private val _showInstallAlerts = MutableStateFlow(true)
+    val showInstallAlerts: StateFlow<Boolean> = _showInstallAlerts.asStateFlow()
+
+    private val _showBridgeAlerts = MutableStateFlow(true)
+    val showBridgeAlerts: StateFlow<Boolean> = _showBridgeAlerts.asStateFlow()
+
+    private val _showHardwareAlerts = MutableStateFlow(true)
+    val showHardwareAlerts: StateFlow<Boolean> = _showHardwareAlerts.asStateFlow()
+
+    private val _showInstallMixupAlerts = MutableStateFlow(true)
+    val showInstallMixupAlerts: StateFlow<Boolean> = _showInstallMixupAlerts.asStateFlow()
+
+    private val _alertLatencyThresholdMs = MutableStateFlow(40)
+    val alertLatencyThresholdMs: StateFlow<Int> = _alertLatencyThresholdMs.asStateFlow()
+
+    private val _alertXrunThreshold = MutableStateFlow(3)
+    val alertXrunThreshold: StateFlow<Int> = _alertXrunThreshold.asStateFlow()
+
+    private val _remindCompatibilityProbe = MutableStateFlow(true)
+    val remindCompatibilityProbe: StateFlow<Boolean> = _remindCompatibilityProbe.asStateFlow()
+
     private val _settingsProfiles = MutableStateFlow<List<SettingsProfile>>(emptyList())
     val settingsProfiles: StateFlow<List<SettingsProfile>> = _settingsProfiles.asStateFlow()
 
@@ -462,6 +483,41 @@ object ControlStateRepository {
         }
     }
 
+    fun setShowInstallAlerts(enabled: Boolean) {
+        _showInstallAlerts.value = enabled
+        commitSettingsChange()
+    }
+
+    fun setShowBridgeAlerts(enabled: Boolean) {
+        _showBridgeAlerts.value = enabled
+        commitSettingsChange()
+    }
+
+    fun setShowHardwareAlerts(enabled: Boolean) {
+        _showHardwareAlerts.value = enabled
+        commitSettingsChange()
+    }
+
+    fun setShowInstallMixupAlerts(enabled: Boolean) {
+        _showInstallMixupAlerts.value = enabled
+        commitSettingsChange()
+    }
+
+    fun setAlertLatencyThresholdMs(thresholdMs: Int) {
+        _alertLatencyThresholdMs.value = thresholdMs.coerceIn(5, 250)
+        commitSettingsChange()
+    }
+
+    fun setAlertXrunThreshold(threshold: Int) {
+        _alertXrunThreshold.value = threshold.coerceIn(1, 100)
+        commitSettingsChange()
+    }
+
+    fun setRemindCompatibilityProbe(enabled: Boolean) {
+        _remindCompatibilityProbe.value = enabled
+        commitSettingsChange()
+    }
+
     fun runCompatibilityProbe() {
         scope.launch {
             _compatibilityState.value = null
@@ -692,6 +748,13 @@ object ControlStateRepository {
             persistentNotification = _notificationEnabled.value,
             quickControlsEnabled = _quickControlsEnabled.value,
             widgetControlsEnabled = _widgetControlsEnabled.value,
+            showInstallAlerts = _showInstallAlerts.value,
+            showBridgeAlerts = _showBridgeAlerts.value,
+            showHardwareAlerts = _showHardwareAlerts.value,
+            showInstallMixupAlerts = _showInstallMixupAlerts.value,
+            alertLatencyThresholdMs = _alertLatencyThresholdMs.value,
+            alertXrunThreshold = _alertXrunThreshold.value,
+            remindCompatibilityProbe = _remindCompatibilityProbe.value,
             masterEnabled = _masterEnabled.value,
             bypass = _bypass.value,
             defaultPresetId = _defaultPresetId.value
@@ -714,6 +777,13 @@ object ControlStateRepository {
         _notificationEnabled.value = settings.persistentNotification
         _quickControlsEnabled.value = settings.quickControlsEnabled
         _widgetControlsEnabled.value = settings.widgetControlsEnabled
+        _showInstallAlerts.value = settings.showInstallAlerts
+        _showBridgeAlerts.value = settings.showBridgeAlerts
+        _showHardwareAlerts.value = settings.showHardwareAlerts
+        _showInstallMixupAlerts.value = settings.showInstallMixupAlerts
+        _alertLatencyThresholdMs.value = settings.alertLatencyThresholdMs.coerceIn(5, 250)
+        _alertXrunThreshold.value = settings.alertXrunThreshold.coerceIn(1, 100)
+        _remindCompatibilityProbe.value = settings.remindCompatibilityProbe
         _masterEnabled.value = settings.masterEnabled
         _bypass.value = settings.bypass
         settings.defaultPresetId

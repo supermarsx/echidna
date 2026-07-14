@@ -116,6 +116,15 @@ object SettingsProfileSerializer {
                 put("quickControlsEnabled", settings.quickControlsEnabled)
                 put("widgetControlsEnabled", settings.widgetControlsEnabled)
             })
+            put("alerts", JSONObject().apply {
+                put("showInstallAlerts", settings.showInstallAlerts)
+                put("showBridgeAlerts", settings.showBridgeAlerts)
+                put("showHardwareAlerts", settings.showHardwareAlerts)
+                put("showInstallMixupAlerts", settings.showInstallMixupAlerts)
+                put("alertLatencyThresholdMs", settings.alertLatencyThresholdMs)
+                put("alertXrunThreshold", settings.alertXrunThreshold)
+                put("remindCompatibilityProbe", settings.remindCompatibilityProbe)
+            })
         }
 
     private fun settingsFromJsonObject(root: JSONObject): SettingsState {
@@ -124,6 +133,7 @@ object SettingsProfileSerializer {
         val diagnostics = root.optJSONObject("diagnostics")
         val safety = root.optJSONObject("safety")
         val control = root.optJSONObject("control")
+        val alerts = root.optJSONObject("alerts")
         return SettingsState(
             startWithSystem = startup.optBooleanCompat("startWithSystem", false),
             autoStartEngine = startup.optBooleanCompat("autoStartEngine", false),
@@ -143,6 +153,15 @@ object SettingsProfileSerializer {
             persistentNotification = control.optBooleanCompat("persistentNotification", true),
             quickControlsEnabled = control.optBooleanCompat("quickControlsEnabled", true),
             widgetControlsEnabled = control.optBooleanCompat("widgetControlsEnabled", true),
+            showInstallAlerts = alerts.optBooleanCompat("showInstallAlerts", true),
+            showBridgeAlerts = alerts.optBooleanCompat("showBridgeAlerts", true),
+            showHardwareAlerts = alerts.optBooleanCompat("showHardwareAlerts", true),
+            showInstallMixupAlerts = alerts.optBooleanCompat("showInstallMixupAlerts", true),
+            alertLatencyThresholdMs = alerts.optIntCompat("alertLatencyThresholdMs", 40)
+                .coerceIn(5, 250),
+            alertXrunThreshold = alerts.optIntCompat("alertXrunThreshold", 3)
+                .coerceIn(1, 100),
+            remindCompatibilityProbe = alerts.optBooleanCompat("remindCompatibilityProbe", true),
             masterEnabled = engine.optBooleanCompat("masterEnabled", true),
             bypass = engine.optBooleanCompat("bypass", false),
             defaultPresetId = engine?.optString("defaultPresetId")?.ifBlank { null }

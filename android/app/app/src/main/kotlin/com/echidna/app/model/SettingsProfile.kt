@@ -44,6 +44,13 @@ data class SettingsState(
     val persistentNotification: Boolean = true,
     val quickControlsEnabled: Boolean = true,
     val widgetControlsEnabled: Boolean = true,
+    val showInstallAlerts: Boolean = true,
+    val showBridgeAlerts: Boolean = true,
+    val showHardwareAlerts: Boolean = true,
+    val showInstallMixupAlerts: Boolean = true,
+    val alertLatencyThresholdMs: Int = 40,
+    val alertXrunThreshold: Int = 3,
+    val remindCompatibilityProbe: Boolean = true,
     val masterEnabled: Boolean = true,
     val bypass: Boolean = false,
     val defaultPresetId: String? = null

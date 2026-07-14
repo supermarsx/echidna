@@ -15,6 +15,9 @@ class SettingsViewModel : ViewModel() {
     val settingsState = repo.settingsState
     val settingsProfiles = repo.settingsProfiles
     val activeSettingsProfileId = repo.activeSettingsProfileId
+    val moduleStatus = repo.moduleStatus
+    val compatibility = repo.compatibilityState
+    val telemetry = repo.telemetry
     val persistentNotification: StateFlow<Boolean> = repo.notificationEnabled
 
     fun setStartWithSystem(enabled: Boolean) = repo.setStartWithSystem(enabled)
@@ -56,6 +59,22 @@ class SettingsViewModel : ViewModel() {
     fun setQuickControlsEnabled(enabled: Boolean) = repo.setQuickControlsEnabled(enabled)
 
     fun setWidgetControlsEnabled(enabled: Boolean) = repo.setWidgetControlsEnabled(enabled)
+
+    fun setShowInstallAlerts(enabled: Boolean) = repo.setShowInstallAlerts(enabled)
+
+    fun setShowBridgeAlerts(enabled: Boolean) = repo.setShowBridgeAlerts(enabled)
+
+    fun setShowHardwareAlerts(enabled: Boolean) = repo.setShowHardwareAlerts(enabled)
+
+    fun setShowInstallMixupAlerts(enabled: Boolean) = repo.setShowInstallMixupAlerts(enabled)
+
+    fun setAlertLatencyThresholdMs(thresholdMs: Int) =
+        repo.setAlertLatencyThresholdMs(thresholdMs)
+
+    fun setAlertXrunThreshold(threshold: Int) = repo.setAlertXrunThreshold(threshold)
+
+    fun setRemindCompatibilityProbe(enabled: Boolean) =
+        repo.setRemindCompatibilityProbe(enabled)
 
     fun createSettingsProfile(name: String): String? = repo.createSettingsProfile(name)
 

@@ -36,6 +36,13 @@ class SettingsProfileSerializerTest {
             persistentNotification = false,
             quickControlsEnabled = false,
             widgetControlsEnabled = false,
+            showInstallAlerts = false,
+            showBridgeAlerts = false,
+            showHardwareAlerts = false,
+            showInstallMixupAlerts = false,
+            alertLatencyThresholdMs = 75,
+            alertXrunThreshold = 9,
+            remindCompatibilityProbe = false,
             masterEnabled = false,
             bypass = true,
             defaultPresetId = "preset-a"
@@ -59,6 +66,7 @@ class SettingsProfileSerializerTest {
         assertTrue(root.getJSONObject("settings").has("diagnostics"))
         assertTrue(root.getJSONObject("settings").has("safety"))
         assertTrue(root.getJSONObject("settings").has("control"))
+        assertTrue(root.getJSONObject("settings").has("alerts"))
 
         val restored = SettingsProfileSerializer.profileFromJson(json)
         assertNotNull(restored)
@@ -84,7 +92,8 @@ class SettingsProfileSerializerTest {
             """
             {
               "engine": {"sidetoneLevelDb": 20},
-              "safety": {"panicHoldMinutes": 500}
+              "safety": {"panicHoldMinutes": 500},
+              "alerts": {"alertLatencyThresholdMs": 999, "alertXrunThreshold": 0}
             }
             """.trimIndent()
         )
@@ -92,6 +101,8 @@ class SettingsProfileSerializerTest {
         assertNotNull(settings)
         assertEquals(-6f, settings!!.sidetoneLevelDb, 1e-3f)
         assertEquals(60, settings.panicHoldMinutes)
+        assertEquals(250, settings.alertLatencyThresholdMs)
+        assertEquals(1, settings.alertXrunThreshold)
     }
 
     @Test

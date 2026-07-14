@@ -28,13 +28,16 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,10 +53,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.DspEngineMode
+import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.LatencyMode
+import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
+import com.echidna.app.model.TelemetrySnapshot
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -68,12 +76,16 @@ fun SettingsScreen(
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val profiles by viewModel.settingsProfiles.collectAsStateWithLifecycle()
     val activeProfileId by viewModel.activeSettingsProfileId.collectAsStateWithLifecycle()
+    val moduleStatus by viewModel.moduleStatus.collectAsStateWithLifecycle()
+    val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
+    val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
 
     var newProfileName by remember { mutableStateOf("") }
     var selectedProfileId by remember { mutableStateOf<String?>(null) }
     var importJson by remember { mutableStateOf("") }
     var exportJson by remember { mutableStateOf("") }
     var profileMessage by remember { mutableStateOf<String?>(null) }
+    var selectedTab by rememberSaveable { mutableStateOf(SettingsTab.ALERTS) }
 
     LaunchedEffect(profiles, activeProfileId) {
         if (selectedProfileId == null || profiles.none { it.id == selectedProfileId }) {
@@ -83,6 +95,13 @@ fun SettingsScreen(
 
     val defaultPresetName = presets.firstOrNull { it.id == defaultId }?.name ?: "Unknown"
     val selectedProfile = profiles.firstOrNull { it.id == selectedProfileId }
+    val alerts = buildAdvisoryAlerts(
+        settings = settings,
+        engineStatus = engineStatus,
+        moduleStatus = moduleStatus,
+        compatibility = compatibility,
+        telemetry = telemetry
+    )
 
     Column(
         modifier = Modifier
@@ -97,110 +116,158 @@ fun SettingsScreen(
             activeProfile = profiles.firstOrNull { it.id == activeProfileId }
         )
 
-        StartupSection(
-            settings = settings,
-            onStartWithSystem = viewModel::setStartWithSystem,
-            onAutoStartEngine = viewModel::setAutoStartEngine,
-            onRestoreLastProfile = viewModel::setRestoreLastProfile,
-            onLaunchCompatibility = onLaunchCompatibility,
-            onLaunchWhitelist = onLaunchWhitelist
-        )
+        SettingsTabs(selectedTab = selectedTab, onSelect = { selectedTab = it })
 
-        EngineSection(
-            settings = settings,
-            onEngineMode = viewModel::setDspEngineMode,
-            onLatencyMode = viewModel::setLatencyMode,
-            onSidetoneEnabled = viewModel::setSidetoneEnabled,
-            onSidetoneLevel = viewModel::setSidetoneLevel
-        )
-
-        DiagnosticsSection(
-            settings = settings,
-            onDebugMode = viewModel::setDebugMode,
-            onTelemetryOptIn = viewModel::setTelemetryOptIn,
-            onVerboseLogging = viewModel::setVerboseLogging
-        )
-
-        SafetySection(
-            settings = settings,
-            onFailClosed = viewModel::setFailClosed,
-            onAutoBypassOnError = viewModel::setAutoBypassOnError,
-            onPanicHoldMinutes = viewModel::setPanicHoldMinutes,
-            onMasterEnabled = viewModel::setMasterEnabled,
-            onBypass = viewModel::setBypass,
-            onPanic = viewModel::triggerPanic
-        )
-
-        NotificationSection(
-            settings = settings,
-            onPersistentNotification = viewModel::setPersistentNotification,
-            onQuickControls = viewModel::setQuickControlsEnabled,
-            onWidgetControls = viewModel::setWidgetControlsEnabled
-        )
-
-        ProfileSection(
-            profiles = profiles,
-            activeProfileId = activeProfileId,
-            selectedProfile = selectedProfile,
-            selectedProfileId = selectedProfileId,
-            newProfileName = newProfileName,
-            importJson = importJson,
-            exportJson = exportJson,
-            message = profileMessage,
-            onSelectProfile = { selectedProfileId = it },
-            onNewProfileName = { newProfileName = it },
-            onCreateProfile = {
-                val id = viewModel.createSettingsProfile(newProfileName)
-                if (id == null) {
-                    profileMessage = "Profile name is required."
-                } else {
-                    selectedProfileId = id
-                    newProfileName = ""
-                    profileMessage = "Settings profile saved."
-                }
-            },
-            onApplyProfile = {
-                val id = selectedProfile?.id
-                profileMessage = if (id != null && viewModel.applySettingsProfile(id)) {
-                    "Settings profile applied."
-                } else {
-                    "Choose a settings profile first."
-                }
-            },
-            onDeleteProfile = {
-                val id = selectedProfile?.id
-                profileMessage = if (id != null && viewModel.deleteSettingsProfile(id)) {
-                    selectedProfileId = profiles.firstOrNull { it.id != id }?.id
-                    "Settings profile deleted."
-                } else {
-                    "Choose a settings profile first."
-                }
-            },
-            onExportProfile = {
-                val id = selectedProfile?.id
-                exportJson = id?.let(viewModel::exportSettingsProfile).orEmpty()
-                profileMessage = if (exportJson.isBlank()) {
-                    "Choose a settings profile first."
-                } else {
-                    "Settings profile JSON ready."
-                }
-            },
-            onExportCurrent = {
-                exportJson = viewModel.exportCurrentSettings()
-                profileMessage = "Current settings JSON ready."
-            },
-            onImportJson = { importJson = it },
-            onImportProfile = {
-                val id = viewModel.importSettingsProfile(importJson)
-                if (id == null) {
-                    profileMessage = "Import failed. Check the JSON and try again."
-                } else {
-                    selectedProfileId = id
-                    importJson = ""
-                    profileMessage = "Settings profile imported."
-                }
+        when (selectedTab) {
+            SettingsTab.ALERTS -> {
+                AdvisoryAlertsSection(
+                    alerts = alerts,
+                    onLaunchCompatibility = onLaunchCompatibility
+                )
+                AlertPreferencesSection(
+                    settings = settings,
+                    onShowInstallAlerts = viewModel::setShowInstallAlerts,
+                    onShowBridgeAlerts = viewModel::setShowBridgeAlerts,
+                    onShowHardwareAlerts = viewModel::setShowHardwareAlerts,
+                    onShowInstallMixupAlerts = viewModel::setShowInstallMixupAlerts,
+                    onLatencyThreshold = viewModel::setAlertLatencyThresholdMs,
+                    onXrunThreshold = viewModel::setAlertXrunThreshold,
+                    onCompatibilityReminder = viewModel::setRemindCompatibilityProbe
+                )
             }
-        )
+
+            SettingsTab.STARTUP -> {
+                StartupSection(
+                    settings = settings,
+                    onStartWithSystem = viewModel::setStartWithSystem,
+                    onAutoStartEngine = viewModel::setAutoStartEngine,
+                    onRestoreLastProfile = viewModel::setRestoreLastProfile,
+                    onLaunchCompatibility = onLaunchCompatibility,
+                    onLaunchWhitelist = onLaunchWhitelist
+                )
+                NotificationSection(
+                    settings = settings,
+                    onPersistentNotification = viewModel::setPersistentNotification,
+                    onQuickControls = viewModel::setQuickControlsEnabled,
+                    onWidgetControls = viewModel::setWidgetControlsEnabled
+                )
+            }
+
+            SettingsTab.ENGINE -> EngineSection(
+                settings = settings,
+                onEngineMode = viewModel::setDspEngineMode,
+                onLatencyMode = viewModel::setLatencyMode,
+                onSidetoneEnabled = viewModel::setSidetoneEnabled,
+                onSidetoneLevel = viewModel::setSidetoneLevel
+            )
+
+            SettingsTab.SAFETY -> SafetySection(
+                settings = settings,
+                onFailClosed = viewModel::setFailClosed,
+                onAutoBypassOnError = viewModel::setAutoBypassOnError,
+                onPanicHoldMinutes = viewModel::setPanicHoldMinutes,
+                onMasterEnabled = viewModel::setMasterEnabled,
+                onBypass = viewModel::setBypass,
+                onPanic = viewModel::triggerPanic
+            )
+
+            SettingsTab.DIAGNOSTICS -> DiagnosticsSection(
+                settings = settings,
+                onDebugMode = viewModel::setDebugMode,
+                onTelemetryOptIn = viewModel::setTelemetryOptIn,
+                onVerboseLogging = viewModel::setVerboseLogging
+            )
+
+            SettingsTab.PROFILES -> ProfileSection(
+                profiles = profiles,
+                activeProfileId = activeProfileId,
+                selectedProfile = selectedProfile,
+                selectedProfileId = selectedProfileId,
+                newProfileName = newProfileName,
+                importJson = importJson,
+                exportJson = exportJson,
+                message = profileMessage,
+                onSelectProfile = { selectedProfileId = it },
+                onNewProfileName = { newProfileName = it },
+                onCreateProfile = {
+                    val id = viewModel.createSettingsProfile(newProfileName)
+                    if (id == null) {
+                        profileMessage = "Profile name is required."
+                    } else {
+                        selectedProfileId = id
+                        newProfileName = ""
+                        profileMessage = "Settings profile saved."
+                    }
+                },
+                onApplyProfile = {
+                    val id = selectedProfile?.id
+                    profileMessage = if (id != null && viewModel.applySettingsProfile(id)) {
+                        "Settings profile applied."
+                    } else {
+                        "Choose a settings profile first."
+                    }
+                },
+                onDeleteProfile = {
+                    val id = selectedProfile?.id
+                    profileMessage = if (id != null && viewModel.deleteSettingsProfile(id)) {
+                        selectedProfileId = profiles.firstOrNull { it.id != id }?.id
+                        "Settings profile deleted."
+                    } else {
+                        "Choose a settings profile first."
+                    }
+                },
+                onExportProfile = {
+                    val id = selectedProfile?.id
+                    exportJson = id?.let(viewModel::exportSettingsProfile).orEmpty()
+                    profileMessage = if (exportJson.isBlank()) {
+                        "Choose a settings profile first."
+                    } else {
+                        "Settings profile JSON ready."
+                    }
+                },
+                onExportCurrent = {
+                    exportJson = viewModel.exportCurrentSettings()
+                    profileMessage = "Current settings JSON ready."
+                },
+                onImportJson = { importJson = it },
+                onImportProfile = {
+                    val id = viewModel.importSettingsProfile(importJson)
+                    if (id == null) {
+                        profileMessage = "Import failed. Check the JSON and try again."
+                    } else {
+                        selectedProfileId = id
+                        importJson = ""
+                        profileMessage = "Settings profile imported."
+                    }
+                }
+            )
+        }
+    }
+}
+
+private enum class SettingsTab(val title: String) {
+    ALERTS("Alerts"),
+    STARTUP("Startup"),
+    ENGINE("Engine"),
+    SAFETY("Safety"),
+    DIAGNOSTICS("Diagnostics"),
+    PROFILES("Profiles")
+}
+
+@Composable
+private fun SettingsTabs(selectedTab: SettingsTab, onSelect: (SettingsTab) -> Unit) {
+    ScrollableTabRow(
+        selectedTabIndex = selectedTab.ordinal,
+        edgePadding = 0.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        SettingsTab.values().forEach { tab ->
+            Tab(
+                selected = selectedTab == tab,
+                onClick = { onSelect(tab) },
+                text = { Text(tab.title) }
+            )
+        }
     }
 }
 
@@ -219,6 +286,129 @@ private fun HeaderSection(
         )
         activeProfile?.let {
             StatusPill(text = "Profile: ${it.name}")
+        }
+    }
+}
+
+@Composable
+private fun AdvisoryAlertsSection(
+    alerts: List<AdvisoryAlert>,
+    onLaunchCompatibility: () -> Unit
+) {
+    SettingsSection(title = "Advisory Alerts") {
+        Text(
+            text = "Alerts never block controls. They call out install, bridge, hardware, and " +
+                "hook-scope conditions that can interfere with Echidna.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (alerts.isEmpty()) {
+            StatusPill(text = "No active advisories")
+        } else {
+            alerts.forEachIndexed { index, alert ->
+                if (index > 0) HorizontalDivider()
+                AlertRow(alert)
+            }
+        }
+        OutlinedButton(onClick = onLaunchCompatibility, modifier = Modifier.fillMaxWidth()) {
+            Text("Open Compatibility Wizard")
+        }
+    }
+}
+
+@Composable
+private fun AlertPreferencesSection(
+    settings: SettingsState,
+    onShowInstallAlerts: (Boolean) -> Unit,
+    onShowBridgeAlerts: (Boolean) -> Unit,
+    onShowHardwareAlerts: (Boolean) -> Unit,
+    onShowInstallMixupAlerts: (Boolean) -> Unit,
+    onLatencyThreshold: (Int) -> Unit,
+    onXrunThreshold: (Int) -> Unit,
+    onCompatibilityReminder: (Boolean) -> Unit
+) {
+    SettingsSection(title = "Alert Preferences") {
+        ToggleRow(
+            title = "Incomplete install alerts",
+            description = "Warn when the Magisk module or native engine is not detected.",
+            checked = settings.showInstallAlerts,
+            onCheckedChange = onShowInstallAlerts
+        )
+        ToggleRow(
+            title = "Bridge and service alerts",
+            description = "Warn about missing service status, SELinux errors, or Zygisk disablement.",
+            checked = settings.showBridgeAlerts,
+            onCheckedChange = onShowBridgeAlerts
+        )
+        ToggleRow(
+            title = "Hardware and HAL alerts",
+            description = "Warn about missing low-latency features, unknown HAL data, XRuns, and high latency.",
+            checked = settings.showHardwareAlerts,
+            onCheckedChange = onShowHardwareAlerts
+        )
+        ToggleRow(
+            title = "Install mix-up alerts",
+            description = "Warn when native and Java fallback paths may both be active for scoped apps.",
+            checked = settings.showInstallMixupAlerts,
+            onCheckedChange = onShowInstallMixupAlerts
+        )
+        ToggleRow(
+            title = "Compatibility probe reminder",
+            description = "Warn until a compatibility result has been collected in this app session.",
+            checked = settings.remindCompatibilityProbe,
+            onCheckedChange = onCompatibilityReminder
+        )
+        Text(
+            text = "Latency alert threshold ${settings.alertLatencyThresholdMs} ms",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Slider(
+            value = settings.alertLatencyThresholdMs.toFloat(),
+            onValueChange = { onLatencyThreshold(it.roundToInt()) },
+            valueRange = 5f..250f
+        )
+        Text(
+            text = "XRun alert threshold ${settings.alertXrunThreshold}",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Slider(
+            value = settings.alertXrunThreshold.toFloat(),
+            onValueChange = { onXrunThreshold(it.roundToInt()) },
+            valueRange = 1f..100f,
+            steps = 98
+        )
+    }
+}
+
+@Composable
+private fun AlertRow(alert: AdvisoryAlert) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            Icons.Filled.Warning,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(22.dp)
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                text = alert.title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = alert.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = alert.category,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
@@ -665,3 +855,307 @@ private fun profileSummary(profile: SettingsProfile): String {
     val notification = if (settings.persistentNotification) "notification on" else "notification off"
     return "$engine - $latency - $notification"
 }
+
+private data class AdvisoryAlert(
+    val title: String,
+    val detail: String,
+    val category: String
+)
+
+private fun buildAdvisoryAlerts(
+    settings: SettingsState,
+    engineStatus: EngineStatus,
+    moduleStatus: ModuleStatus?,
+    compatibility: CompatibilityResult?,
+    telemetry: TelemetrySnapshot
+): List<AdvisoryAlert> = buildList {
+    if (settings.showInstallAlerts) {
+        if (moduleStatus == null) {
+            add(
+                AdvisoryAlert(
+                    title = "Control service status unavailable",
+                    detail = "The companion has not received module status yet. The UI remains usable, " +
+                        "but native install checks may be stale or incomplete.",
+                    category = "Incomplete install"
+                )
+            )
+        } else if (!moduleStatus.magiskModuleInstalled) {
+            add(
+                AdvisoryAlert(
+                    title = "Magisk module not detected",
+                    detail = "Install or re-flash echidna-magisk.zip, reboot, then rerun the " +
+                        "compatibility probe before relying on native hooks.",
+                    category = "Incomplete install"
+                )
+            )
+        }
+        if (!engineStatus.nativeInstalled && settings.masterEnabled && !settings.bypass) {
+            add(
+                AdvisoryAlert(
+                    title = "Native engine is not installed",
+                    detail = "Master processing is enabled, but the native engine is not reported as " +
+                        "installed. Audio should pass through until the module is present.",
+                    category = "Incomplete install"
+                )
+            )
+        }
+    }
+
+    if (settings.showBridgeAlerts) {
+        engineStatus.lastError?.let { error ->
+            add(
+                AdvisoryAlert(
+                    title = "Engine status reports an error",
+                    detail = error.compactForAlert(),
+                    category = "Incomplete bridge"
+                )
+            )
+        }
+        moduleStatus?.let { status ->
+            if (!status.zygiskEnabled) {
+                add(
+                    AdvisoryAlert(
+                        title = "Zygisk is disabled or not visible",
+                        detail = "The native hook path depends on Zygisk. Enable it in Magisk and reboot " +
+                            "if you expect native injection.",
+                        category = "Incomplete bridge"
+                    )
+                )
+            }
+            if (status.selinuxState.containsAdvisoryWord() ||
+                status.selinuxStatus.containsAdvisoryWord()
+            ) {
+                add(
+                    AdvisoryAlert(
+                        title = "SELinux or policy probe needs attention",
+                        detail = "Reported SELinux state ${status.selinuxState}; status " +
+                            "${status.selinuxStatus}. Native readers may fail closed if policy " +
+                            "blocks the profile or telemetry bridge.",
+                        category = "Bridge risk"
+                    )
+                )
+            }
+            status.notes?.takeIf { it.containsAdvisoryWord() }?.let { note ->
+                add(
+                    AdvisoryAlert(
+                        title = "Module status includes a warning note",
+                        detail = note.compactForAlert(),
+                        category = "Bridge note"
+                    )
+                )
+            }
+            status.lastError?.let { error ->
+                if (error != engineStatus.lastError) {
+                    add(
+                        AdvisoryAlert(
+                            title = "Control bridge reported an error",
+                            detail = error.compactForAlert(),
+                            category = "Incomplete bridge"
+                        )
+                    )
+                }
+            }
+        }
+        if (settings.remindCompatibilityProbe && compatibility == null) {
+            add(
+                AdvisoryAlert(
+                    title = "Compatibility probe has not run",
+                    detail = "Run the wizard after installing or updating modules so hardware, SELinux, " +
+                        "and bridge status are based on a fresh probe.",
+                    category = "Bridge status"
+                )
+            )
+        }
+        compatibility?.notes
+            ?.filter { it.containsAdvisoryWord() }
+            ?.take(3)
+            ?.forEach { note ->
+                add(
+                    AdvisoryAlert(
+                        title = "Compatibility probe note needs review",
+                        detail = note.compactForAlert(),
+                        category = "Bridge status"
+                    )
+                )
+            }
+    }
+
+    if (settings.showHardwareAlerts) {
+        moduleStatus?.audioStack?.let { stack ->
+            if (!stack.aaudioSupported) {
+                add(
+                    AdvisoryAlert(
+                        title = "AAudio low-latency path unavailable",
+                        detail = "This device did not report native AAudio support. Echidna can still try " +
+                            "fallback hooks, but latency and app coverage may vary.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (!stack.lowLatency) {
+                add(
+                    AdvisoryAlert(
+                        title = "Low-latency audio feature absent",
+                        detail = "Android does not report FEATURE_AUDIO_LOW_LATENCY. Calls and live " +
+                            "monitoring may need balanced or compatibility mode.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (!stack.proAudio) {
+                add(
+                    AdvisoryAlert(
+                        title = "Pro audio feature absent",
+                        detail = "Android does not report FEATURE_AUDIO_PRO. Echidna remains usable, " +
+                            "but device routing may not be tuned for stable low-latency capture.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (stack.hal.isBlank() || stack.hal.equals("unknown", ignoreCase = true)) {
+                add(
+                    AdvisoryAlert(
+                        title = "Audio HAL could not be identified",
+                        detail = "Vendor audio routing is unknown. Validate the target apps manually " +
+                            "before using the native hook path.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+            if (stack.sampleRate <= 0 || stack.framesPerBuffer <= 0) {
+                add(
+                    AdvisoryAlert(
+                        title = "Incomplete audio stack probe",
+                        detail = "Sample rate or buffer size was not reported. This can indicate an " +
+                            "incomplete bridge or a vendor HAL that hides useful diagnostics.",
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+        }
+        if (telemetry.averageLatencyMs > settings.alertLatencyThresholdMs) {
+            add(
+                AdvisoryAlert(
+                    title = "High processing latency",
+                    detail = "Telemetry average is ${telemetry.averageLatencyMs.roundToInt()} ms, above " +
+                        "the configured ${settings.alertLatencyThresholdMs} ms alert threshold.",
+                    category = "Runtime performance"
+                )
+            )
+        }
+        if (telemetry.xruns >= settings.alertXrunThreshold) {
+            add(
+                AdvisoryAlert(
+                    title = "Audio XRuns detected",
+                    detail = "Telemetry reports ${telemetry.xruns} XRuns. Reduce DSP load, use bypass, " +
+                        "or switch latency mode if audio glitches.",
+                    category = "Runtime performance"
+                )
+            )
+        }
+        compatibility?.audioStack
+            ?.filter { !it.supported }
+            ?.filterNot { probe ->
+                moduleStatus != null &&
+                    (probe.name.contains("AAudio", ignoreCase = true) ||
+                        probe.name.contains("Low-latency", ignoreCase = true) ||
+                        probe.name.contains("Pro audio", ignoreCase = true))
+            }
+            ?.take(3)
+            ?.forEach { probe ->
+                add(
+                    AdvisoryAlert(
+                        title = "${probe.name} probe is unsupported",
+                        detail = probe.message.compactForAlert(),
+                        category = "Hardware compatibility"
+                    )
+                )
+            }
+        if (telemetry.warnings.isNotEmpty()) {
+            add(
+                AdvisoryAlert(
+                    title = "Runtime telemetry has warnings",
+                    detail = telemetry.warnings.joinToString("; ").compactForAlert(),
+                    category = "Runtime performance"
+                )
+            )
+        }
+    }
+
+    if (settings.showInstallMixupAlerts) {
+        moduleStatus?.let { status ->
+            if (status.magiskModuleInstalled && !status.zygiskEnabled) {
+                add(
+                    AdvisoryAlert(
+                        title = "Magisk module present but Zygisk is not active",
+                        detail = "The module package appears installed, but the expected Zygisk " +
+                            "bridge is disabled or not visible after boot.",
+                        category = "Install mix-up"
+                    )
+                )
+            }
+            if (status.zygiskEnabled && status.javaFallbackActive) {
+                add(
+                    AdvisoryAlert(
+                        title = "Native and Java fallback paths both appear active",
+                        detail = "Avoid scoping the same target app into both Zygisk and LSPosed unless " +
+                            "you are explicitly testing duplicate-hook behavior.",
+                        category = "Install mix-up"
+                    )
+                )
+            }
+            if (!status.zygiskEnabled && status.javaFallbackActive) {
+                add(
+                    AdvisoryAlert(
+                        title = "LSPosed fallback active without Zygisk",
+                        detail = "The Java fallback may catch some AudioRecord paths, but native " +
+                            "coverage is incomplete without the Zygisk module path.",
+                        category = "Install mix-up"
+                    )
+                )
+            }
+            if (!status.magiskModuleInstalled && status.javaFallbackActive) {
+                add(
+                    AdvisoryAlert(
+                        title = "Java fallback without native module",
+                        detail = "The LSPosed shim can cover some AudioRecord apps, but the native DSP " +
+                            "module is missing. Expect partial coverage only.",
+                        category = "Install mix-up"
+                    )
+                )
+            }
+        }
+        if (settings.engineMode == DspEngineMode.COMPATIBILITY && engineStatus.nativeInstalled) {
+            add(
+                AdvisoryAlert(
+                    title = "Compatibility mode selected with native module present",
+                    detail = "This is allowed, but native hooks may be intentionally de-emphasized. " +
+                        "Switch modes if you expected the native-first path.",
+                    category = "Install mix-up"
+                )
+            )
+        }
+    }
+}
+
+private fun String.containsAdvisoryWord(): Boolean {
+    val lower = lowercase()
+    return listOf(
+        "absent",
+        "denied",
+        "disabled",
+        "error",
+        "fail",
+        "missing",
+        "not installed",
+        "partial",
+        "unavailable",
+        "unbound",
+        "unknown",
+        "unsupported",
+        "warning"
+    ).any(lower::contains)
+}
+
+private fun String.compactForAlert(maxLength: Int = 220): String =
+    if (length <= maxLength) this else take(maxLength - 3).trimEnd() + "..."
