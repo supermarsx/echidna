@@ -122,7 +122,7 @@ uses multiple audio paths.
     participant O as AudioHookOrchestrator
     participant D as libech_dsp.so
     Z->>M: onLoad(Api*, JNIEnv*)
-    Note over M: stash handles; do NOT set<br/>DLCLOSE_MODULE_LIBRARY (stay mapped)
+    Note over M: stash handles and stay mapped without DLCLOSE_MODULE_LIBRARY
     Z->>M: preAppSpecialize(args)
     Note over M: no-op (still zygote identity)
     Z->>M: postAppSpecialize(args)

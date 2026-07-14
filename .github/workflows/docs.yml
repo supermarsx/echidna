@@ -41,8 +41,16 @@ jobs:
           cache: pip
           cache-dependency-path: docs-requirements.txt
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
       - name: Install docs toolchain
         run: pip install -r docs-requirements.txt
+
+      - name: Validate Mermaid diagrams
+        run: python tools/check_mermaid.py
 
       - name: Build site (strict)
         run: mkdocs build --strict --site-dir site
