@@ -32,6 +32,7 @@ native/
 tools/
   build_native_ndk.sh    # Per-ABI NDK cross-compile driver.
   build_magisk_module.sh # Flashable Magisk zip packager.
+  analyze_audio_hal_dump.py # Read-only firmware/device dump analyzer for HAL profiles.
 docker/              # Reproducible build/packaging helper images (see Docker helpers).
 docs/                # This guide, the Magisk release guide, and the signing model.
 ```
@@ -314,6 +315,17 @@ Control/status methods added during the topology unification:
 The service loads `libechidna.so` lazily via JNI (`echidna_control_jni`). If the shared library is
 missing the binder methods return `ECHIDNA_RESULT_NOT_AVAILABLE` and the status is forced to
 `ECHIDNA_STATUS_ERROR` to fail closed.
+
+For broader Samsung, Qualcomm, MediaTek, and Tensor HAL work, run the read-only static analyzer:
+
+```sh
+python tools/analyze_audio_hal_dump.py /path/to/extracted-root \
+  --output out/audio-hal-analysis.json
+```
+
+It classifies vendor profiles, scans audio libraries and policy/kernel hints, and ranks possible
+hook surfaces. Treat its output as planning evidence only; [Vendor HAL Analysis](vendor-hal-analysis.md)
+defines the live-device proof required before claiming a vendor path is supported.
 
 ## DSP Plugin Schema
 

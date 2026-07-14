@@ -21,6 +21,8 @@
 .gradle/
 **/.cxx/
 local.properties
+__pycache__/
+*.pyc
 
 # Release signing material — NEVER commit real keystores or their passwords.
 # (keystore.properties.example is the committed placeholder template.)

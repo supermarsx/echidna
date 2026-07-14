@@ -96,6 +96,7 @@ nav:
       - Comparison: comparison.md
       - Limitations: limitations.md
       - Verification: verification.md
+      - Vendor HAL Analysis: vendor-hal-analysis.md
   - Developer:
       - Developer Guide: developer_readme.md
       - Signing: signing.md

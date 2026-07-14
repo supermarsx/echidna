@@ -16,6 +16,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Run Python tool tests
+        run: python3 -m unittest discover -s tools/tests -v
+
       - name: Install clang-format
         run: |
           sudo apt-get update

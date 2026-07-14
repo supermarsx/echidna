@@ -199,6 +199,7 @@ The full documentation site is built with MkDocs Material and published to
 | Comparison vs alternatives | [comparison.md](docs/comparison.md) |
 | Limitations | [limitations.md](docs/limitations.md) |
 | E2E verification report | [verification.md](docs/verification.md) |
+| Vendor HAL analysis | [vendor-hal-analysis.md](docs/vendor-hal-analysis.md) |
 | Developer guide · Signing · Magisk release | [developer_readme.md](docs/developer_readme.md) · [signing.md](docs/signing.md) · [magisk_release.md](docs/magisk_release.md) |
 
 ## Comparison & Limitations
