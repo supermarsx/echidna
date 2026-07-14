@@ -82,8 +82,18 @@ def resolve_tag(
 ) -> Resolution:
     if event_name == "push":
         prefix = "refs/tags/"
+        if ref == AUTO_RELEASE_BRANCH_REF:
+            tag = compute_next_tag(existing_tags, today)
+            return Resolution(
+                tag=tag,
+                source="ci",
+                should_create_tag=tag not in existing_tags,
+            )
         if not ref.startswith(prefix):
-            raise ValueError(f"push release workflow expected a tag ref, got {ref!r}")
+            raise ValueError(
+                "push release workflow expected a YY.N tag ref or "
+                f"{AUTO_RELEASE_BRANCH_REF}, got {ref!r}"
+            )
         tag = validate_release_tag(ref.removeprefix(prefix), label="pushed tag")
         return Resolution(tag=tag, source="push", should_create_tag=False)
 

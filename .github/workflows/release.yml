@@ -55,7 +55,8 @@ jobs:
           fetch-depth: 0
 
       # Resolve the release tag:
-      #   - workflow_call from CI -> auto-compute next YY.N, create the ref
+      #   - CI workflow_call from a main push still reports GITHUB_EVENT_NAME=push
+      #     with GITHUB_REF=refs/heads/main -> auto-compute next YY.N, create the ref
       #   - tag push       -> use the pushed YY.N tag (never create)
       #   - workflow_dispatch with an input -> validate YY.N, create the ref if new
       #   - workflow_dispatch without input -> auto-compute next YY.N, create the ref
