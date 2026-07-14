@@ -1,16 +1,21 @@
 package com.echidna.lsposed.core;
 
 import android.text.TextUtils;
+import android.util.Log;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
+import de.robv.android.xposed.XposedBridge;
 
 /**
  * Tracks per-process configuration resolved via the control service and exposes
  * helper methods consumed by hook implementations.
  */
 public final class ModuleState {
+
+    private static final String TAG = "EchidnaModuleState";
 
     private static final ModuleState INSTANCE = new ModuleState();
 
@@ -23,15 +28,28 @@ public final class ModuleState {
     private final AtomicInteger lastFramesProcessed = new AtomicInteger(0);
 
     private ModuleState() {
-        NativeBridge.initialize();
+        safeNativeInitialise();
         // Begin receiving the control service's policy snapshot over the
         // ProfileSyncBridge socket. Until a snapshot arrives, resolution below
         // reads ProfileSnapshot.empty() and stays fail-closed.
-        snapshotStore.ensureStarted();
+        try {
+            snapshotStore.ensureStarted();
+        } catch (Throwable throwable) {
+            XposedBridge.log(
+                    TAG + ": profile snapshot receiver unavailable; failing closed: "
+                            + Log.getStackTraceString(throwable));
+        }
     }
 
     private AppConfig resolveConfig(String packageName, String processName) {
-        return AppConfig.fromSnapshot(snapshotStore.getSnapshot(), packageName, processName);
+        try {
+            return AppConfig.fromSnapshot(snapshotStore.getSnapshot(), packageName, processName);
+        } catch (Throwable throwable) {
+            XposedBridge.log(
+                    TAG + ": policy resolution failed; failing closed: "
+                            + Log.getStackTraceString(throwable));
+            return AppConfig.disabled();
+        }
     }
 
     public static ModuleState getInstance() {
@@ -44,8 +62,8 @@ public final class ModuleState {
      */
     public boolean shouldInitializeFor(String packageName, String processName) {
         AppConfig config = resolveConfig(packageName, processName);
-        currentPackage.set(packageName);
-        currentProcess.set(processName);
+        currentPackage.set(packageName != null ? packageName : "");
+        currentProcess.set(processName != null ? processName : "");
         currentConfig.set(config);
         hooksActivated.set(config.shouldHook(packageName, processName));
         applyProfile(config.profile());
@@ -125,6 +143,16 @@ public final class ModuleState {
     private void applyProfile(String profile) {
         if (!TextUtils.isEmpty(profile)) {
             NativeBridge.setProfile(profile);
+        }
+    }
+
+    private void safeNativeInitialise() {
+        try {
+            NativeBridge.initialize();
+        } catch (Throwable throwable) {
+            XposedBridge.log(
+                    TAG + ": native initialization failed; failing closed: "
+                            + Log.getStackTraceString(throwable));
         }
     }
 }

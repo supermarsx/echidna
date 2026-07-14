@@ -15,6 +15,7 @@ import org.json.JSONObject
 
 private const val STORE_TAG = "EchidnaProfileStore"
 private const val MAX_PROCESS_NAME_LENGTH = 128
+private const val MAX_PROFILE_STORE_BYTES = 10L * 1024L * 1024L
 private const val ENGINE_MODE_NATIVE_FIRST = "native_first"
 private const val ENGINE_MODE_LOW_LATENCY = "low_latency"
 private const val ENGINE_MODE_COMPATIBILITY = "compatibility"
@@ -232,9 +233,13 @@ class ProfileStore(
         if (executor.isShutdown) {
             return
         }
-        executor.execute {
-            writeToDisk(snapshot)
-            syncBridge.pushProfiles(snapshot)
+        try {
+            executor.execute {
+                writeToDisk(snapshot)
+                syncBridge.pushProfiles(snapshot)
+            }
+        } catch (e: RuntimeException) {
+            Log.w(STORE_TAG, "Profile flush rejected; service is shutting down", e)
         }
     }
 
@@ -250,6 +255,10 @@ class ProfileStore(
 
     private fun loadFromDisk() {
         if (!storageFile.exists()) {
+            return
+        }
+        if (storageFile.length() > MAX_PROFILE_STORE_BYTES) {
+            Log.w(STORE_TAG, "Persisted profile store is too large; ignoring it")
             return
         }
         try {

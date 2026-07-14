@@ -60,6 +60,12 @@ final class ProfileSyncReceiver {
                                     + "fail-closed: " + Log.getStackTraceString(e));
                 }
                 sleepBeforeReconnect();
+            } catch (Throwable throwable) {
+                XposedBridge.log(
+                        TAG + ": profile-sync reader failed; policy stays fail-closed: "
+                                + Log.getStackTraceString(throwable));
+                store.update(ProfileSnapshot.empty());
+                sleepBeforeReconnect();
             }
         }
     }
@@ -90,7 +96,14 @@ final class ProfileSyncReceiver {
             if (isBlank(payload)) {
                 return;
             }
-            store.update(ProfileSnapshot.parse(payload));
+            try {
+                store.update(ProfileSnapshot.parse(payload));
+            } catch (Throwable throwable) {
+                XposedBridge.log(
+                        TAG + ": rejected unsafe profile snapshot: "
+                                + Log.getStackTraceString(throwable));
+                store.update(ProfileSnapshot.empty());
+            }
         }
     }
 

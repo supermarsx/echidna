@@ -64,8 +64,12 @@ class EchidnaControlService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        profileStore.close()
-        syncBridge.close()
+        if (::profileStore.isInitialized) {
+            profileStore.close()
+        }
+        if (::syncBridge.isInitialized) {
+            syncBridge.close()
+        }
         executor.shutdownNow()
         telemetryTask?.cancel(true)
         telemetryExecutor.shutdownNow()
@@ -86,11 +90,15 @@ class EchidnaControlService : Service() {
 
         override fun refreshStatus(): String {
             // Synchronous refresh so the caller reads a fresh combined status.
-            return buildStatusJson(privilegedController.refreshStatus())
+            return safeBinder("refresh status", fallbackStatusJson("status refresh failed")) {
+                buildStatusJson(privilegedController.refreshStatus())
+            }
         }
 
         override fun getModuleStatus(): String {
-            return buildStatusJson(privilegedController.lastKnownStatus())
+            return safeBinder("get module status", fallbackStatusJson("status unavailable")) {
+                buildStatusJson(privilegedController.lastKnownStatus())
+            }
         }
 
         override fun updateWhitelist(processName: String?, enabled: Boolean) {
@@ -106,15 +114,21 @@ class EchidnaControlService : Service() {
         }
 
         override fun listProfiles(): Array<String> {
-            return profileStore.listProfiles().toTypedArray()
+            return safeBinder("list profiles", emptyArray()) {
+                profileStore.listProfiles().toTypedArray()
+            }
         }
 
         override fun getTelemetrySnapshot(): String {
-            return telemetryExporter.snapshotJson()
+            return safeBinder("get telemetry snapshot", "{}") {
+                telemetryExporter.snapshotJson()
+            }
         }
 
         override fun isTelemetryOptedIn(): Boolean {
-            return telemetryExporter.isOptedIn()
+            return safeBinder("read telemetry opt-in", false) {
+                telemetryExporter.isOptedIn()
+            }
         }
 
         override fun registerTelemetryListener(listener: IEchidnaTelemetryListener?) {
@@ -134,11 +148,15 @@ class EchidnaControlService : Service() {
         }
 
         override fun setTelemetryOptIn(enabled: Boolean) {
-            telemetryExporter.setOptIn(enabled)
+            safeBinder("set telemetry opt-in", Unit) {
+                telemetryExporter.setOptIn(enabled)
+            }
         }
 
         override fun exportTelemetry(includeTrends: Boolean): String {
-            return telemetryExporter.exportAnonymized(includeTrends)
+            return safeBinder("export telemetry", "{}") {
+                telemetryExporter.exportAnonymized(includeTrends)
+            }
         }
 
         override fun setProfile(profile: String?) {
@@ -151,57 +169,81 @@ class EchidnaControlService : Service() {
                 Log.w(TAG, "Profile '$profile' not found; ignoring request")
                 return
             }
-            EchidnaNative.setProfile(payload)
+            safeBinder("set native profile", Unit) {
+                EchidnaNative.setProfile(payload)
+            }
         }
 
         override fun pushProfileSnapshot(profileId: String?, profileJson: String?) {
             if (profileId.isNullOrBlank() || profileJson.isNullOrBlank()) {
                 return
             }
-            profileStore.saveProfile(profileId, profileJson)
-            EchidnaNative.setProfile(profileJson)
+            safeBinder("push profile snapshot", Unit) {
+                profileStore.saveProfile(profileId, profileJson)
+                EchidnaNative.setProfile(profileJson)
+            }
         }
 
         override fun setLatencyModeOverride(profileId: String?, latencyMode: String?) {
             if (profileId.isNullOrBlank() || latencyMode.isNullOrBlank()) return
-            profileStore.setLatencyOverride(profileId, latencyMode)
+            safeBinder("set latency override", Unit) {
+                profileStore.setLatencyOverride(profileId, latencyMode)
+            }
         }
 
         override fun setAppPresetBinding(packageName: String?, presetId: String?) {
             if (packageName.isNullOrBlank()) return
-            profileStore.setAppBinding(packageName, presetId.orEmpty())
+            safeBinder("set app preset binding", Unit) {
+                profileStore.setAppBinding(packageName, presetId.orEmpty())
+            }
         }
 
         override fun getWhitelistBindings(): String {
-            return profileStore.buildWhitelistBindingsJson()
+            return safeBinder("get whitelist bindings", "{\"whitelist\":{},\"appBindings\":{}}") {
+                profileStore.buildWhitelistBindingsJson()
+            }
         }
 
         override fun setMasterEnabled(enabled: Boolean) {
-            profileStore.setMasterEnabled(enabled)
+            safeBinder("set master enabled", Unit) {
+                profileStore.setMasterEnabled(enabled)
+            }
         }
 
         override fun setBypass(bypass: Boolean) {
-            profileStore.setBypass(bypass)
+            safeBinder("set bypass", Unit) {
+                profileStore.setBypass(bypass)
+            }
         }
 
         override fun triggerPanic(holdMs: Long) {
-            profileStore.panic(holdMs)
+            safeBinder("trigger panic", Unit) {
+                profileStore.panic(holdMs.coerceIn(0L, 60L * 60L * 1000L))
+            }
         }
 
         override fun setSidetone(enabled: Boolean, gainDb: Float) {
-            profileStore.setSidetone(enabled, gainDb.toDouble())
+            safeBinder("set sidetone", Unit) {
+                profileStore.setSidetone(enabled, gainDb.coerceIn(-60f, -6f).toDouble())
+            }
         }
 
         override fun setEngineMode(engineMode: String?) {
             if (engineMode.isNullOrBlank()) return
-            profileStore.setEngineMode(engineMode)
+            safeBinder("set engine mode", Unit) {
+                profileStore.setEngineMode(engineMode)
+            }
         }
 
         override fun getControlState(): String {
-            return profileStore.buildControlStateJson()
+            return safeBinder("get control state", "{}") {
+                profileStore.buildControlStateJson()
+            }
         }
 
-        override fun getStatus(): Int = EchidnaNative.getStatus()
+        override fun getStatus(): Int = safeBinder("get native status", 3) {
+            EchidnaNative.getStatus()
+        }
 
         override fun processBlock(
             input: FloatArray,
@@ -213,28 +255,37 @@ class EchidnaControlService : Service() {
             if (frames <= 0 || sampleRate <= 0 || channelCount <= 0) {
                 return -2
             }
-            val requiredSamples = frames * channelCount
-            if (input.size < requiredSamples) {
+            val requiredSamples = frames.toLong() * channelCount.toLong()
+            if (
+                requiredSamples <= 0L ||
+                requiredSamples > Int.MAX_VALUE ||
+                input.size.toLong() < requiredSamples
+            ) {
                 return -2
             }
-            val tempOutput = output?.let { FloatArray(requiredSamples) }
-            val result = EchidnaNative.processBlock(
-                input,
-                tempOutput,
-                frames,
-                sampleRate,
-                channelCount,
-            )
-            if (output != null && tempOutput != null) {
-                val limit = min(output.size, requiredSamples)
-                for (index in 0 until limit) {
-                    output[index] = tempOutput[index]
+            return safeBinder("process block", -1) {
+                val sampleCount = requiredSamples.toInt()
+                val tempOutput = output?.let { FloatArray(sampleCount) }
+                val result = EchidnaNative.processBlock(
+                    input,
+                    tempOutput,
+                    frames,
+                    sampleRate,
+                    channelCount,
+                )
+                if (output != null && tempOutput != null) {
+                    val limit = min(output.size, sampleCount)
+                    for (index in 0 until limit) {
+                        output[index] = tempOutput[index]
+                    }
                 }
+                result
             }
-            return result
         }
 
-        override fun getApiVersion(): Long = EchidnaNative.getApiVersion()
+        override fun getApiVersion(): Long = safeBinder("get API version", DEFAULT_API_VERSION) {
+            EchidnaNative.getApiVersion()
+        }
     }
 
     /**
@@ -273,7 +324,18 @@ class EchidnaControlService : Service() {
 
     private fun dispatchPrivileged(action: () -> ModuleStatus) {
         executor.execute {
-            val status = action.invoke()
+            val status = try {
+                action.invoke()
+            } catch (exception: Exception) {
+                Log.e(TAG, "Privileged action failed", exception)
+                ModuleStatus(
+                    magiskModuleInstalled = false,
+                    zygiskEnabled = false,
+                    selinuxState = SelinuxState.DISABLED,
+                    javaFallbackActive = true,
+                    lastError = exception.message ?: "privileged action failed",
+                )
+            }
             if (status.javaFallbackActive) {
                 Log.w(TAG, "Native engine unavailable; Java-only mode active: ${status.lastError}")
             } else {
@@ -287,8 +349,12 @@ class EchidnaControlService : Service() {
             return
         }
         telemetryTask = telemetryExecutor.scheduleAtFixedRate({
-            val payload = telemetryExporter.snapshotJson()
-            broadcastTelemetry(payload)
+            try {
+                val payload = telemetryExporter.snapshotJson()
+                broadcastTelemetry(payload)
+            } catch (exception: Exception) {
+                Log.w(TAG, "Telemetry streaming tick failed", exception)
+            }
         }, 0, 500, TimeUnit.MILLISECONDS)
     }
 
@@ -299,22 +365,46 @@ class EchidnaControlService : Service() {
 
     private fun broadcastTelemetry(payload: String) {
         val count = telemetryCallbacks.beginBroadcast()
-        if (count == 0) {
-            telemetryCallbacks.finishBroadcast()
-            stopTelemetryStreaming()
-            return
-        }
-        for (i in 0 until count) {
-            try {
-                telemetryCallbacks.getBroadcastItem(i)?.onTelemetry(payload)
-            } catch (ex: RemoteException) {
-                Log.w(TAG, "Telemetry callback failed", ex)
+        try {
+            if (count == 0) {
+                stopTelemetryStreaming()
+                return
             }
+            for (i in 0 until count) {
+                try {
+                    telemetryCallbacks.getBroadcastItem(i)?.onTelemetry(payload)
+                } catch (ex: RemoteException) {
+                    Log.w(TAG, "Telemetry callback failed", ex)
+                }
+            }
+        } finally {
+            telemetryCallbacks.finishBroadcast()
         }
-        telemetryCallbacks.finishBroadcast()
+    }
+
+    private inline fun <T> safeBinder(label: String, fallback: T, block: () -> T): T {
+        return try {
+            block()
+        } catch (exception: Exception) {
+            Log.e(TAG, "Binder $label failed", exception)
+            fallback
+        }
+    }
+
+    private fun fallbackStatusJson(message: String): String {
+        val json = JSONObject()
+        json.put("magiskModuleInstalled", false)
+        json.put("zygiskEnabled", false)
+        json.put("selinuxState", SelinuxState.DISABLED.name)
+        json.put("selinuxStatus", humanReadableSelinux(SelinuxState.DISABLED))
+        json.put("javaFallbackActive", true)
+        json.put("lastError", message)
+        json.put("notes", message)
+        return json.toString()
     }
 
     companion object {
         private const val TAG = "EchidnaControlSvc"
+        private const val DEFAULT_API_VERSION: Long = 65792L
     }
 }

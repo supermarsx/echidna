@@ -4,6 +4,7 @@ import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import de.robv.android.xposed.XposedBridge;
 
@@ -13,9 +14,12 @@ import de.robv.android.xposed.XposedBridge;
 public final class NativeBridge {
 
     private static final String TAG = "EchidnaNativeBridge";
+    private static final int MAX_PROCESS_BUFFER_BYTES = 8 * 1024 * 1024;
 
     private static final AtomicBoolean LIBRARY_LOADED = new AtomicBoolean(false);
     private static final AtomicBoolean INITIALISED = new AtomicBoolean(false);
+    private static final AtomicBoolean NATIVE_AVAILABLE = new AtomicBoolean(true);
+    private static final AtomicBoolean FAILURE_LOGGED = new AtomicBoolean(false);
 
     private NativeBridge() {
     }
@@ -25,7 +29,7 @@ public final class NativeBridge {
             return false;
         }
         if (INITIALISED.compareAndSet(false, true)) {
-            if (!nativeInitialise()) {
+            if (!safeNativeBoolean("initialise", NativeBridge::nativeInitialise)) {
                 INITIALISED.set(false);
                 return false;
             }
@@ -34,18 +38,26 @@ public final class NativeBridge {
     }
 
     public static boolean isEngineReady() {
-        return initialize() && nativeIsEngineReady();
+        return initialize() && safeNativeBoolean("engine ready", NativeBridge::nativeIsEngineReady);
     }
 
     public static void setBypass(boolean bypass) {
         if (initialize()) {
-            nativeSetBypass(bypass);
+            try {
+                nativeSetBypass(bypass);
+            } catch (Throwable throwable) {
+                handleNativeFailure("set bypass", throwable);
+            }
         }
     }
 
     public static void setProfile(String profile) {
-        if (initialize()) {
-            nativeSetProfile(profile);
+        if (profile != null && initialize()) {
+            try {
+                nativeSetProfile(profile);
+            } catch (Throwable throwable) {
+                handleNativeFailure("set profile", throwable);
+            }
         }
     }
 
@@ -53,7 +65,12 @@ public final class NativeBridge {
         if (!initialize()) {
             return EchidnaStatus.DISABLED;
         }
-        return EchidnaStatus.fromNativeCode(nativeGetStatus());
+        try {
+            return EchidnaStatus.fromNativeCode(nativeGetStatus());
+        } catch (Throwable throwable) {
+            handleNativeFailure("get status", throwable);
+            return EchidnaStatus.DISABLED;
+        }
     }
 
     public static boolean isNativeAvailable() {
@@ -62,45 +79,75 @@ public final class NativeBridge {
 
     public static boolean processByteArray(
             byte[] buffer, int offset, int length, int encoding, int sampleRate, int channelCount) {
-        if (!initialize()) {
+        if (buffer == null
+                || !isValidAudioRequest(byteCount(length), sampleRate, channelCount)
+                || !isValidRange(buffer.length, offset, length)
+                || !initialize()) {
             return false;
         }
-        return nativeProcessByteArray(buffer, offset, length, encoding, sampleRate, channelCount);
+        return safeNativeBoolean(
+                "process byte[]",
+                () -> nativeProcessByteArray(buffer, offset, length, encoding, sampleRate, channelCount));
     }
 
     public static boolean processShortArray(
             short[] buffer, int offset, int length, int sampleRate, int channelCount) {
-        if (!initialize()) {
+        if (buffer == null
+                || !isValidAudioRequest(byteCount(length, Short.BYTES), sampleRate, channelCount)
+                || !isValidRange(buffer.length, offset, length)
+                || !initialize()) {
             return false;
         }
-        return nativeProcessShortArray(buffer, offset, length, sampleRate, channelCount);
+        return safeNativeBoolean(
+                "process short[]",
+                () -> nativeProcessShortArray(buffer, offset, length, sampleRate, channelCount));
     }
 
     public static boolean processFloatArray(
             float[] buffer, int offset, int length, int sampleRate, int channelCount) {
-        if (!initialize()) {
+        if (buffer == null
+                || !isValidAudioRequest(byteCount(length, Float.BYTES), sampleRate, channelCount)
+                || !isValidRange(buffer.length, offset, length)
+                || !initialize()) {
             return false;
         }
-        return nativeProcessFloatArray(buffer, offset, length, sampleRate, channelCount);
+        return safeNativeBoolean(
+                "process float[]",
+                () -> nativeProcessFloatArray(buffer, offset, length, sampleRate, channelCount));
     }
 
     public static boolean processByteBuffer(
             ByteBuffer buffer, int position, int length, int encoding, int sampleRate, int channelCount) {
-        if (!initialize()) {
+        if (buffer == null
+                || !isValidAudioRequest(byteCount(length), sampleRate, channelCount)
+                || !isValidRange(buffer.limit(), position, length)
+                || !initialize()) {
             return false;
         }
         if (!buffer.isDirect()) {
-            byte[] scratch = new byte[length];
-            int originalPosition = buffer.position();
-            buffer.position(position);
-            buffer.get(scratch, 0, length);
-            buffer.position(originalPosition);
-            return nativeProcessByteArray(scratch, 0, length, encoding, sampleRate, channelCount);
+            try {
+                byte[] scratch = new byte[length];
+                ByteBuffer duplicate = buffer.duplicate();
+                duplicate.position(position);
+                duplicate.limit(position + length);
+                duplicate.get(scratch, 0, length);
+                return safeNativeBoolean(
+                        "process heap ByteBuffer",
+                        () -> nativeProcessByteArray(scratch, 0, length, encoding, sampleRate, channelCount));
+            } catch (Throwable throwable) {
+                handleNativeFailure("copy heap ByteBuffer", throwable);
+                return false;
+            }
         }
-        return nativeProcessByteBuffer(buffer, position, length, encoding, sampleRate, channelCount);
+        return safeNativeBoolean(
+                "process direct ByteBuffer",
+                () -> nativeProcessByteBuffer(buffer, position, length, encoding, sampleRate, channelCount));
     }
 
     private static boolean ensureLibraryLoaded() {
+        if (!NATIVE_AVAILABLE.get()) {
+            return false;
+        }
         if (LIBRARY_LOADED.get()) {
             return true;
         }
@@ -108,10 +155,62 @@ public final class NativeBridge {
             System.loadLibrary("echidna");
             LIBRARY_LOADED.set(true);
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": failed to load native bridge: " + Log.getStackTraceString(throwable));
+            NATIVE_AVAILABLE.set(false);
+            if (FAILURE_LOGGED.compareAndSet(false, true)) {
+                XposedBridge.log(
+                        TAG + ": failed to load native bridge: " + Log.getStackTraceString(throwable));
+            }
             LIBRARY_LOADED.set(false);
         }
         return LIBRARY_LOADED.get();
+    }
+
+    private static boolean isValidAudioRequest(long byteCount, int sampleRate, int channelCount) {
+        return byteCount > 0
+                && byteCount <= MAX_PROCESS_BUFFER_BYTES
+                && sampleRate > 0
+                && channelCount > 0
+                && channelCount <= 8;
+    }
+
+    private static boolean isValidRange(int containerLength, int offset, int length) {
+        return containerLength >= 0
+                && offset >= 0
+                && length > 0
+                && (long) offset + (long) length <= (long) containerLength;
+    }
+
+    private static long byteCount(int units) {
+        return byteCount(units, 1);
+    }
+
+    private static long byteCount(int units, int bytesPerUnit) {
+        if (units <= 0 || bytesPerUnit <= 0) {
+            return -1L;
+        }
+        return (long) units * (long) bytesPerUnit;
+    }
+
+    private static boolean safeNativeBoolean(String operation, BooleanSupplier call) {
+        try {
+            return call.getAsBoolean();
+        } catch (Throwable throwable) {
+            handleNativeFailure(operation, throwable);
+            return false;
+        }
+    }
+
+    private static void handleNativeFailure(String operation, Throwable throwable) {
+        if (throwable instanceof LinkageError) {
+            NATIVE_AVAILABLE.set(false);
+            LIBRARY_LOADED.set(false);
+            INITIALISED.set(false);
+        }
+        if (FAILURE_LOGGED.compareAndSet(false, true)) {
+            XposedBridge.log(
+                    TAG + ": native " + operation + " failed; disabling bridge: "
+                            + Log.getStackTraceString(throwable));
+        }
     }
 
     private static native boolean nativeInitialise();

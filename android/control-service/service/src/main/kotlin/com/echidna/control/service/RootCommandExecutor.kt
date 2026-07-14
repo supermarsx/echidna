@@ -2,6 +2,7 @@ package com.echidna.control.service
 
 import android.util.Log
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 private const val ROOT_TAG = "EchidnaRoot"
@@ -9,15 +10,23 @@ private const val ROOT_TAG = "EchidnaRoot"
 /**
  * Thin wrapper for executing commands through `su`.
  */
-class RootCommandExecutor(private val suBinary: String = "su") {
+class RootCommandExecutor(
+    private val suBinary: String = "su",
+    private val timeoutSeconds: Long = 60,
+) {
     private val sequence = AtomicLong(0)
 
     fun runCommand(command: String): CommandResult {
+        if (command.isBlank()) {
+            return CommandResult(false, "", "command cannot be blank")
+        }
         return runCommandInternal(arrayOf(suBinary, "-c", command))
     }
 
     fun runCommand(arguments: List<String>): CommandResult {
-        require(arguments.isNotEmpty()) { "Command arguments cannot be empty" }
+        if (arguments.isEmpty()) {
+            return CommandResult(false, "", "command arguments cannot be empty")
+        }
         val quoted = arguments.joinToString(separator = " ") { it.shellQuote() }
         return runCommand(quoted)
     }
@@ -28,17 +37,25 @@ class RootCommandExecutor(private val suBinary: String = "su") {
         var stdoutText = ""
         var stderrText = ""
         return try {
-            process = ProcessBuilder(*command).redirectErrorStream(false).start()
-            val runningProcess = process!!
+            val runningProcess = ProcessBuilder(*command).redirectErrorStream(false).start()
+            process = runningProcess
             val stdoutThread = thread(name = "echidna-root-$id-out") {
                 stdoutText = runningProcess.inputStream.bufferedReader().use { it.readText() }
             }
             val stderrThread = thread(name = "echidna-root-$id-err") {
                 stderrText = runningProcess.errorStream.bufferedReader().use { it.readText() }
             }
-            val exitCode = runningProcess.waitFor()
-            stdoutThread.join()
-            stderrThread.join()
+            val completed = runningProcess.waitFor(timeoutSeconds.coerceAtLeast(1), TimeUnit.SECONDS)
+            if (!completed) {
+                runningProcess.destroyForcibly()
+                stdoutThread.join(500)
+                stderrThread.join(500)
+                Log.w(ROOT_TAG, "Command #$id timed out after $timeoutSeconds seconds")
+                return CommandResult(false, stdoutText.trim(), "command timed out", -1)
+            }
+            val exitCode = runningProcess.exitValue()
+            stdoutThread.join(1000)
+            stderrThread.join(1000)
             val success = exitCode == 0
             val stdout = stdoutText.trim()
             val stderr = stderrText.trim()
@@ -49,7 +66,7 @@ class RootCommandExecutor(private val suBinary: String = "su") {
             }
             CommandResult(success, stdout, stderr, exitCode)
         } catch (e: Exception) {
-            Log.e(ROOT_TAG, "Command #$id threw exception", e)
+            Log.e(ROOT_TAG, "Command #$id failed before completion", e)
             CommandResult(false, "", e.message ?: "")
         } finally {
             process?.destroy()
