@@ -122,6 +122,9 @@ of claiming that every manager is operational:
 - Echidna attempts every eligible normal-flow candidate because an app may touch multiple APIs
   (see [Architecture](architecture.md)). “Operational candidate” is code reachability, not device
   proof.
+- The native rows are ABI-qualified. On `armeabi-v7a`, AAudio, OpenSL ES, tinyalsa, native
+  `AudioRecord`, and libc-read are unsupported before installation; see item 6. LSPosed Java/JNI
+  and the legacy input preprocessor remain eligible under their separate policy and device gates.
 - Even so, some apps or devices route audio through a path Echidna does not yet hook, or
   through a vendor-specific HAL variation, in which case that app's capture is **not**
   transformed (and, being fail-closed, is left untouched rather than corrupted).
@@ -165,23 +168,39 @@ Echidna's inline hooking is **ABI-specific**:
 | --- | --- |
 | **arm64-v8a (aarch64)** | Primary, fully implemented. |
 | **x86_64** | Implemented (absolute-jump patch + relocating trampoline with a fail-closed length decoder); host harness verified. The older rooted `AudioRecord` slice predates the current route contract. |
-| **armeabi-v7a (32-bit ARM / Thumb-2)** | **Graceful degrade — hooking disabled.** The module builds and loads, but `install()` returns `false` and emits a `hook_unsupported_abi` log signal; **no audio hooks activate.** |
+| **armeabi-v7a (32-bit ARM / Thumb-2)** | **Graceful degrade — direct inline-symbol routes disabled.** The module builds and loads, but AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, and libc-read report `unsupported_armv7_late_symbol_hooking` before installation. |
 
 Why armv7 degrades instead of shipping a trampoline: correct ARM/Thumb-2 relocation must
 handle variable-length (2/4-byte) Thumb encoding, IT-block hazards (patching mid-IT-block
 corrupts execution), ARM/Thumb interworking on the low pointer bit, and PC-relative
 prologue relocation — and the failure mode is a **crash inside a system audio process**.
-Since arm64 is the locked primary target and an armv7 trampoline could not be validated
-on-device, armv7 hooking ships **safely inactive** rather than as fragile, untested
-machine-code generation. On a 32-bit-ARM device, expect no voice transformation until a
-validated trampoline is added.
+Zygisk's PLT API is not a safe late-load replacement. The bundled API v3 contract says API
+functions stop working after `postAppSpecialize`; its Magisk v25.2 implementation registers with
+`xhook`, refreshes the ELFs currently loaded in memory, and then clears the registration set.
+Current Magisk retains the same one-shot property: the compatibility path scans current maps at
+commit and clears its registrations. Echidna intentionally waits for authenticated process policy
+after specialization, when the API is no longer available and app-native caller libraries can
+still load later. It therefore cannot provide complete, target-scoped PLT coverage without adding
+an unsafe loader hook.
+
+Primary-source references: Magisk v25.2
+[`api.hpp` lines 162–220](https://github.com/topjohnwu/Magisk/blob/6066b5cf86703512451a021cf1aaf1a877530af7/native/jni/zygisk/api.hpp#L162-L220)
+and
+[`hook.cpp` lines 306–312](https://github.com/topjohnwu/Magisk/blob/6066b5cf86703512451a021cf1aaf1a877530af7/native/jni/zygisk/hook.cpp#L306-L312),
+plus the current compatibility implementation
+[`module.cpp` lines 164–220](https://github.com/topjohnwu/Magisk/blob/14ea5cfb4a5771c742f7c3fd1e685bdbfac7aa8c/native/src/core/zygisk/module.cpp#L164-L220).
+
+Since arm64 is the locked primary target and neither a complete PLT transaction nor an armv7
+trampoline can be validated safely, direct armv7 symbol hooking ships inactive. This does not
+disable the LSPosed Java/JNI route or the official legacy input preprocessor, which use different
+attachment boundaries and retain their existing policy and device gates.
 
 The 64-bit path (arm64-v8a) covers essentially all current mainstream devices, so in
 practice this affects only older/32-bit hardware.
 
 The app now reports CPU/ABI support directly in Compatibility and Diagnostics. A supported
 module ABI does not always mean active hooks are enabled: `arm64-v8a` and `x86_64` report native
-hook support, while `armeabi-v7a` reports that the module can load but audio hooks are disabled
+hook support, while `armeabi-v7a` reports that direct inline-symbol routes are disabled
 fail-closed.
 
 ## 7. What runs today vs. what needs hardware

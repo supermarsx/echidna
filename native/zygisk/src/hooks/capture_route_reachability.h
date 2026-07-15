@@ -12,6 +12,14 @@ namespace echidna::hooks
         kUnsupported,
     };
 
+    enum class CaptureHookAbi
+    {
+        kArm64,
+        kArmv7,
+        kX86_64,
+        kOther,
+    };
+
     struct CaptureRouteDescriptor
     {
         const char *id;
@@ -80,6 +88,58 @@ namespace echidna::hooks
         &kAudioHalRoute,
         &kAudioFlingerRoute,
     };
+
+    inline constexpr const char *kArmv7DirectHookUnavailableReason =
+        "unsupported_armv7_late_symbol_hooking";
+
+    struct CaptureRouteAvailability
+    {
+        CaptureRouteSupport support;
+        const char *unavailable_reason;
+    };
+
+    constexpr bool IsDirectInlineSymbolRoute(const CaptureRouteDescriptor &route)
+    {
+        return &route == &kAAudioRoute ||
+               &route == &kOpenSlRoute ||
+               &route == &kTinyAlsaRoute ||
+               &route == &kNativeAudioRecordRoute ||
+               &route == &kLibcReadRoute;
+    }
+
+    constexpr CaptureRouteAvailability CaptureRouteAvailabilityForAbi(
+        const CaptureRouteDescriptor &route,
+        CaptureHookAbi abi)
+    {
+        if (abi == CaptureHookAbi::kArmv7 && IsDirectInlineSymbolRoute(route))
+        {
+            return {
+                CaptureRouteSupport::kUnsupported,
+                kArmv7DirectHookUnavailableReason,
+            };
+        }
+        return {route.support, route.unavailable_reason};
+    }
+
+    constexpr bool IsCaptureRouteAbiEligible(const CaptureRouteDescriptor &route,
+                                             CaptureHookAbi abi)
+    {
+        return !(abi == CaptureHookAbi::kArmv7 &&
+                 IsDirectInlineSymbolRoute(route));
+    }
+
+    constexpr CaptureHookAbi CurrentCaptureHookAbi()
+    {
+#if defined(__aarch64__)
+        return CaptureHookAbi::kArm64;
+#elif defined(__arm__)
+        return CaptureHookAbi::kArmv7;
+#elif defined(__x86_64__) || defined(_M_X64)
+        return CaptureHookAbi::kX86_64;
+#else
+        return CaptureHookAbi::kOther;
+#endif
+    }
 
     constexpr const char *CaptureRouteSupportName(CaptureRouteSupport support)
     {

@@ -49,6 +49,22 @@ namespace
         Check(route.unavailable_reason && route.unavailable_reason[0] == '\0',
               "operational route must not carry an unsupported reason");
     }
+
+    void CheckArmv7DirectRouteUnsupported(const CaptureRouteDescriptor &route)
+    {
+        const CaptureRouteAvailability availability =
+            CaptureRouteAvailabilityForAbi(route, CaptureHookAbi::kArmv7);
+        Check(IsDirectInlineSymbolRoute(route),
+              "armv7 downgrade fixture must be a direct inline-symbol route");
+        Check(!IsCaptureRouteAbiEligible(route, CaptureHookAbi::kArmv7),
+              "armv7 direct inline-symbol route must be rejected before installation");
+        Check(availability.support == CaptureRouteSupport::kUnsupported,
+              "armv7 direct inline-symbol route must be unreachable");
+        Check(availability.unavailable_reason &&
+                  std::strcmp(availability.unavailable_reason,
+                              kArmv7DirectHookUnavailableReason) == 0,
+              "armv7 direct inline-symbol route must report the PLT late-load blocker");
+    }
 } // namespace
 
 int main()
@@ -90,6 +106,43 @@ int main()
                           "requires_mapped_compatible_tinyalsa_in_target_process") == 0,
           "tinyalsa must report its device and target-process gate honestly");
     CheckOperational(kLsposedJavaAudioRecordRoute);
+
+    CheckArmv7DirectRouteUnsupported(kAAudioRoute);
+    CheckArmv7DirectRouteUnsupported(kOpenSlRoute);
+    CheckArmv7DirectRouteUnsupported(kTinyAlsaRoute);
+    CheckArmv7DirectRouteUnsupported(kNativeAudioRecordRoute);
+    CheckArmv7DirectRouteUnsupported(kLibcReadRoute);
+
+    const CaptureRouteAvailability armv7_lsposed =
+        CaptureRouteAvailabilityForAbi(kLsposedJavaAudioRecordRoute,
+                                       CaptureHookAbi::kArmv7);
+    Check(!IsDirectInlineSymbolRoute(kLsposedJavaAudioRecordRoute) &&
+              IsCaptureRouteAbiEligible(kLsposedJavaAudioRecordRoute,
+                                        CaptureHookAbi::kArmv7) &&
+              armv7_lsposed.support == CaptureRouteSupport::kOperational &&
+              armv7_lsposed.unavailable_reason[0] == '\0',
+          "armv7 downgrade must not disable the LSPosed Java/JNI route");
+
+    for (const CaptureHookAbi abi : {CaptureHookAbi::kArm64,
+                                     CaptureHookAbi::kX86_64})
+    {
+        Check(CaptureRouteAvailabilityForAbi(kAAudioRoute, abi).support ==
+                      kAAudioRoute.support &&
+                  IsCaptureRouteAbiEligible(kAAudioRoute, abi) &&
+                  CaptureRouteAvailabilityForAbi(kOpenSlRoute, abi).support ==
+                      kOpenSlRoute.support &&
+                  IsCaptureRouteAbiEligible(kOpenSlRoute, abi) &&
+                  CaptureRouteAvailabilityForAbi(kTinyAlsaRoute, abi).support ==
+                      kTinyAlsaRoute.support &&
+                  IsCaptureRouteAbiEligible(kTinyAlsaRoute, abi) &&
+                  CaptureRouteAvailabilityForAbi(kNativeAudioRecordRoute, abi).support ==
+                      kNativeAudioRecordRoute.support &&
+                  IsCaptureRouteAbiEligible(kNativeAudioRecordRoute, abi) &&
+                  CaptureRouteAvailabilityForAbi(kLibcReadRoute, abi).support ==
+                      kLibcReadRoute.support &&
+                  IsCaptureRouteAbiEligible(kLibcReadRoute, abi),
+              "supported ABIs must retain direct-route classifications");
+    }
 
     Check(&AudioRecordHookManager::kReachability == &kNativeAudioRecordRoute,
           "native AudioRecord manager must map to developer-contract descriptor");

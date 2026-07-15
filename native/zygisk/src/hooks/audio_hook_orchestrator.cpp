@@ -27,14 +27,19 @@ namespace
     echidna::utils::TelemetryRoute RouteForHook(std::string_view name)
     {
         using echidna::utils::TelemetryRoute;
-        if (name == "AAudio") return TelemetryRoute::kAAudio;
-        if (name == "AudioRecord") return TelemetryRoute::kAudioRecord;
-        if (name == "OpenSL") return TelemetryRoute::kOpenSl;
-        if (name == "tinyalsa_pcm_read") return TelemetryRoute::kTinyAlsa;
-        if (name == "libc_read") return TelemetryRoute::kLibcRead;
+        if (name == "AAudio")
+            return TelemetryRoute::kAAudio;
+        if (name == "AudioRecord")
+            return TelemetryRoute::kAudioRecord;
+        if (name == "OpenSL")
+            return TelemetryRoute::kOpenSl;
+        if (name == "tinyalsa_pcm_read")
+            return TelemetryRoute::kTinyAlsa;
+        if (name == "libc_read")
+            return TelemetryRoute::kLibcRead;
         return TelemetryRoute::kUnknown;
     }
-}
+} // namespace
 
 namespace echidna
 {
@@ -52,9 +57,26 @@ namespace echidna
 
         bool AudioHookOrchestrator::attempt(HookManager &manager)
         {
+            const auto &route = manager.routeDescriptor();
+            const CaptureRouteAvailability availability =
+                CaptureRouteAvailabilityForAbi(route, CurrentCaptureHookAbi());
+            if (!IsCaptureRouteAbiEligible(route, CurrentCaptureHookAbi()))
+            {
+                state::SharedState::instance().telemetry().recordInstall(
+                    RouteForHook(manager.name()), false);
+                __android_log_print(ANDROID_LOG_WARN,
+                                    "echidna",
+                                    "hook install skipped name='%s' reason='%s' support='%s' "
+                                    "metadata='%s'",
+                                    manager.name(),
+                                    availability.unavailable_reason,
+                                    CaptureRouteSupportName(availability.support),
+                                    route.metadata_source);
+                return false;
+            }
+
             const bool success = manager.install();
             const auto &info = manager.lastInstallInfo();
-            const auto &route = manager.routeDescriptor();
             state::SharedState::instance().telemetry().recordInstall(
                 RouteForHook(manager.name()), success);
             __android_log_print(success ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
@@ -66,7 +88,7 @@ namespace echidna
                                 info.library.c_str(),
                                 info.symbol.c_str(),
                                 info.reason.c_str(),
-                                CaptureRouteSupportName(route.support),
+                                CaptureRouteSupportName(availability.support),
                                 route.metadata_source);
             return success;
         }

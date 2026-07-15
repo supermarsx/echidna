@@ -126,7 +126,10 @@ PCM back in place. All hooking is gated on `hooksEnabled()` **and**
 
 Operational means the route has a reachable code contract, not that it has passed on a physical
 device. The orchestrator reports support, metadata source, and the exact unavailable reason in hook
-telemetry.
+telemetry. This matrix is ABI-qualified: on `armeabi-v7a`, AAudio, OpenSL ES, tinyalsa, native
+`AudioRecord`, and libc-read are reported as unsupported before installation. The LSPosed Java/JNI
+route and the legacy input preprocessor do not use Echidna's inline-symbol backend and remain
+eligible subject to their normal policy and device gates.
 
 ```mermaid
 flowchart TB
@@ -149,7 +152,7 @@ app touches multiple APIs. Unsupported or unconfigured routes return false with 
 ### Zygisk module lifecycle
 
 `libechidna.so` is a genuine Zygisk module (t2-e9). It registers via
-`REGISTER_ZYGISK_MODULE(EchidnaModule)` against the Zygisk API v4 header
+`REGISTER_ZYGISK_MODULE(EchidnaModule)` against the compatibility-focused Zygisk API v3 header
 (`native/zygisk/include/zygisk.hpp`):
 
 ```mermaid
@@ -205,9 +208,15 @@ trampoline support differs by ABI (t2-e11):
   decoder + end-to-end hook harness. The earlier rooted-emulator `AudioRecord`
   probe predates the current route contract.
 - **armeabi-v7a** — **graceful degrade**: it builds and loads, but `install()`
-  returns `false` and emits a `hook_unsupported_abi` log signal, because Thumb-2 /
-  IT-block relocation is unsafe and untested. armv7 hooking is intentionally
-  non-functional rather than silently wrong.
+  rejects direct inline-symbol routes before manager installation with
+  `unsupported_armv7_late_symbol_hooking`. This covers AAudio, OpenSL ES, tinyalsa,
+  native `AudioRecord`, and libc-read. Thumb-2 / IT-block relocation is unsafe and
+  untested, and Zygisk API v3 is not a late-load substitute: its API ends after
+  specialization, while its PLT commit applies to ELFs already loaded in memory and
+  clears the registrations. Echidna receives authenticated policy after that callback,
+  so a complete, process-scoped PLT transaction cannot be installed safely. The LSPosed
+  Java/JNI route and official legacy preprocessor remain eligible because they do not
+  depend on this inline-symbol backend.
 
 ## Authenticated policy v2 delivery
 

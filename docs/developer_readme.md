@@ -280,7 +280,7 @@ entry points are:
 ### Zygisk module registration
 
 `libechidna.so` is a genuine Zygisk module: `native/zygisk/include/zygisk.hpp` provides the Zygisk
-API v4 contract, and `native/zygisk/src/module.cpp` defines `class EchidnaModule : public
+API v3 contract, and `native/zygisk/src/module.cpp` defines `class EchidnaModule : public
 zygisk::ModuleBase` with `REGISTER_ZYGISK_MODULE(EchidnaModule)`. The hook lifecycle is driven from
 `preAppSpecialize` caches the target process and resolves the trusted companion UID while the
 package registry remains readable. `postAppSpecialize` creates a fail-closed profile reader and
@@ -309,9 +309,13 @@ does not own audioserver or a stable vendor stream ABI, so HAL and AudioFlinger 
 **ABI support.** `arm64-v8a` is the locked primary implementation, but live arm64 Zygisk loading
 and hook installation still need physical-device proof. `x86_64` has a complete inline-hook
 trampoline; its earlier rooted-emulator `AudioRecord.read` probe predates the current route
-contract. Broader target-app injection is not claimed. `armeabi-v7a` builds but **gracefully degrades** —
-`install()` returns false and emits a `hook_unsupported_abi` log signal (Thumb-2/IT-block
-relocation is not implemented). Real armv7 runtime telemetry still needs device proof.
+contract. Broader target-app injection is not claimed. `armeabi-v7a` builds but **gracefully
+degrades**: AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, and libc-read report
+`unsupported_armv7_late_symbol_hooking` before installation. Thumb-2/IT-block relocation is not
+implemented, and the one-shot Zygisk v3 PLT API cannot cover caller libraries loaded after
+specialization and authenticated policy delivery. LSPosed Java/JNI and the official legacy
+preprocessor use separate attachment boundaries and remain eligible. Real armv7 runtime telemetry
+still needs device proof.
 
 ## Safety Watchdog
 
@@ -428,8 +432,10 @@ Do not assign one process to both capture owners. The policy schema permits only
 
 ### armeabi-v7a hooking degrades
 
-As noted above, armv7 builds and loads but does not install hooks (graceful degrade with a telemetry
-signal). arm64 is the primary target.
+As noted above, armv7 builds and loads but rejects direct inline-symbol routes before installation
+(graceful degrade with an exact diagnostic reason). LSPosed Java/JNI and the official legacy
+preprocessor remain eligible through their separate boundaries. arm64 is the primary native-hook
+target.
 
 ### Capture routes are not all operational
 
