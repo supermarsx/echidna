@@ -3,9 +3,13 @@ package com.echidna.app.data
 import com.echidna.app.model.Preset
 import org.json.JSONObject
 
-/** Builds the atomic app-to-service profile definition and binding document. */
+/** Builds the atomic app-to-service profile, binding, and whitelist document. */
 internal object ProfileBindingSyncCodec {
-    fun encode(presets: List<Preset>, appBindings: Map<String, String>): String {
+    fun encode(
+        presets: List<Preset>,
+        appBindings: Map<String, String>,
+        whitelist: Map<String, Boolean>,
+    ): String {
         require(presets.isNotEmpty()) { "profile sync cannot be empty" }
         val profiles = JSONObject()
         presets.forEach { preset ->
@@ -19,9 +23,15 @@ internal object ProfileBindingSyncCodec {
             }
             bindings.put(packageName, presetId)
         }
+        val whitelistJson = JSONObject()
+        whitelist.forEach { (processName, enabled) ->
+            require(processName.isNotBlank()) { "whitelist process cannot be blank" }
+            whitelistJson.put(processName, enabled)
+        }
         return JSONObject()
             .put("profiles", profiles)
             .put("appBindings", bindings)
+            .put("whitelist", whitelistJson)
             .toString()
     }
 }

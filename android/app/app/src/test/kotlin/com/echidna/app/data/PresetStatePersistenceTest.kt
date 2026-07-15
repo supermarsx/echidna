@@ -49,6 +49,7 @@ class PresetStatePersistenceTest {
                 selected.id,
                 first.id,
                 mapOf("com.example.recorder" to selected.id),
+                mapOf("com.example.recorder" to true),
             )
         )
         writeAtomicUtf8(file, encoded)
@@ -60,6 +61,7 @@ class PresetStatePersistenceTest {
         assertEquals(selected.id, restarted.activePresetId)
         assertEquals(first.id, restarted.defaultPresetId)
         assertEquals(selected.id, restarted.appBindings?.get("com.example.recorder"))
+        assertTrue(restarted.whitelist?.get("com.example.recorder") == true)
     }
 
     @Test
@@ -71,6 +73,7 @@ class PresetStatePersistenceTest {
             target.id,
             target.id,
             appBindings,
+            mapOf("com.example.recorder" to true),
         )
 
         val firstRestart = PresetStoreCodec.decode(PresetStoreCodec.encode(initial))!!
@@ -80,6 +83,7 @@ class PresetStatePersistenceTest {
         assertEquals(target.id, secondRestart.activePresetId)
         assertEquals(target.id, secondRestart.defaultPresetId)
         assertEquals(target.name, secondRestart.presets.single { it.id == boundId }.name)
+        assertTrue(secondRestart.whitelist?.get("com.example.recorder") == true)
     }
 
     @Test

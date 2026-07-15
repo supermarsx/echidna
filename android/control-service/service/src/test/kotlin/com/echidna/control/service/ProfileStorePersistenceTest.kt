@@ -38,6 +38,7 @@ class ProfileStorePersistenceTest {
         val restartedBridge = PayloadBridge()
         val restarted = ProfileStore(tempDir, restartedBridge)
         assertEquals("bound", restarted.getAppBindings()["com.example.recorder"])
+        assertTrue(restarted.getWhitelist().getValue("com.example.recorder"))
         assertTrue(restarted.resolveProfilePayload("bound")!!.contains("Bound v1"))
 
         assertTrue(restarted.synchronizeProfilesAndBindings(syncState(boundName = "Bound v2")))
@@ -188,6 +189,7 @@ class ProfileStorePersistenceTest {
         return JSONObject()
             .put("profiles", profiles)
             .put("appBindings", bindings)
+            .put("whitelist", JSONObject().put("com.example.recorder", true))
             .toString()
     }
 

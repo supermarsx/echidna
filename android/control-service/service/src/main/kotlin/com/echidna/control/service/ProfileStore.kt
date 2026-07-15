@@ -193,7 +193,7 @@ class ProfileStore(
         scheduleFlush(snapshot)
     }
 
-    /** Atomically replaces all app-owned profiles and bindings from one validated document. */
+    /** Atomically replaces all app-owned profiles, bindings, and whitelist policy. */
     fun synchronizeProfilesAndBindings(stateJson: String): Boolean {
         if (stateJson.toByteArray(StandardCharsets.UTF_8).size > MAX_PROFILE_STORE_BYTES) {
             Log.w(STORE_TAG, "Rejected profile/binding state: too large")
@@ -207,6 +207,7 @@ class ProfileStore(
         }
         val profileJson = root.optJSONObject("profiles") ?: return false
         val bindingJson = root.optJSONObject("appBindings") ?: return false
+        val whitelistJson = root.optJSONObject("whitelist") ?: return false
         val nextProfiles = linkedMapOf<String, JSONObject>()
         val profileKeys = profileJson.keys()
         while (profileKeys.hasNext()) {
@@ -231,11 +232,25 @@ class ProfileStore(
             nextBindings[packageName] = presetId
         }
 
+        val nextWhitelist = linkedMapOf<String, Boolean>()
+        val whitelistKeys = whitelistJson.keys()
+        while (whitelistKeys.hasNext()) {
+            val processName = whitelistKeys.next()
+            val enabled = whitelistJson.opt(processName)
+            if (!isValidProcessName(processName) || enabled !is Boolean) {
+                Log.w(STORE_TAG, "Rejected invalid whitelist entry: $processName")
+                return false
+            }
+            nextWhitelist[processName] = enabled
+        }
+
         val snapshot = lock.write {
             profiles.clear()
             profiles.putAll(nextProfiles)
             appBindings.clear()
             appBindings.putAll(nextBindings)
+            whitelist.clear()
+            whitelist.putAll(nextWhitelist)
             buildSnapshotLocked()
         }
         scheduleFlush(snapshot)

@@ -10,6 +10,8 @@ internal data class PersistedPresetStore(
     val defaultPresetId: String,
     /** Null means a legacy store whose service-owned bindings must be adopted once. */
     val appBindings: Map<String, String>? = null,
+    /** Null means a legacy store whose service-owned whitelist must be adopted once. */
+    val whitelist: Map<String, Boolean>? = null,
 )
 
 /** Version-tolerant codec for the app-owned preset selection store. */
@@ -33,6 +35,15 @@ internal object PresetStoreCodec {
                 }
             }
             root.put("appBindings", bindingJson)
+        }
+        store.whitelist?.let { whitelist ->
+            val whitelistJson = JSONObject()
+            whitelist.forEach { (processName, enabled) ->
+                if (processName.isNotBlank()) {
+                    whitelistJson.put(processName, enabled)
+                }
+            }
+            root.put("whitelist", whitelistJson)
         }
         return root.toString()
     }
@@ -69,6 +80,20 @@ internal object PresetStoreCodec {
         } else {
             null
         }
-        return PersistedPresetStore(presets, active, default, appBindings)
+        val whitelist: Map<String, Boolean>? = if (root.has("whitelist")) {
+            buildMap {
+                val entries = root.optJSONObject("whitelist") ?: JSONObject()
+                val keys = entries.keys()
+                while (keys.hasNext()) {
+                    val processName = keys.next()
+                    if (processName.isNotBlank()) {
+                        put(processName, entries.optBoolean(processName, false))
+                    }
+                }
+            }
+        } else {
+            null
+        }
+        return PersistedPresetStore(presets, active, default, appBindings, whitelist)
     }
 }

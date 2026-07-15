@@ -12,6 +12,7 @@ import com.echidna.control.service.IEchidnaControlService
 import com.echidna.control.service.IEchidnaTelemetryListener
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -129,18 +130,42 @@ class ControlServiceClientTest {
         assertEquals(1, context.unbindCalls.get())
     }
 
+    @Test
+    fun `disconnected whitelist mutations coalesce and replay newest coherent state`() {
+        val context = RecordingBindingContext()
+        val client = client(context)
+        val first = RecordingControlService()
+        client.synchronize(snapshot("policy", whitelistEnabled = true))
+        assertTrue(client.bind())
+        context.connectCurrent(first)
+        assertTrue(await { first.profileBindingStates.size == 1 })
+
+        context.disconnectCurrent()
+        client.synchronize(snapshot("policy", whitelistEnabled = false))
+        client.synchronize(snapshot("policy", whitelistEnabled = true))
+        val replacement = RecordingControlService()
+        context.connectCurrent(replacement)
+
+        assertTrue(await { replacement.profileBindingStates.size == 1 })
+        val replayed = JSONObject(replacement.profileBindingStates.single())
+        assertTrue(replayed.getJSONObject("whitelist").getBoolean("com.example.recorder"))
+        assertEquals("policy", replayed.getJSONObject("appBindings").getString("com.example.recorder"))
+    }
+
     private fun client(context: Context): ControlServiceClient =
         ControlServiceClient(context).also(clients::add)
 
     private fun snapshot(
         presetId: String,
         masterEnabled: Boolean = true,
+        whitelistEnabled: Boolean = true,
     ): ControlServiceSyncSnapshot = ControlServiceSyncSnapshot(
         profileId = presetId,
         profileJson = """{"name":"$presetId","engine":{},"modules":[]}""",
         profileBindingStateJson = """{
             "profiles":{"$presetId":{"name":"$presetId","engine":{},"modules":[]}},
-            "appBindings":{"com.example.recorder":"$presetId"}
+            "appBindings":{"com.example.recorder":"$presetId"},
+            "whitelist":{"com.example.recorder":$whitelistEnabled}
         }""".trimIndent(),
         masterEnabled = masterEnabled,
         bypass = false,

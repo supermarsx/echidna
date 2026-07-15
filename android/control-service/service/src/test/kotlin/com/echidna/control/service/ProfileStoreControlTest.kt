@@ -170,6 +170,7 @@ class ProfileStoreControlTest {
         val valid = JSONObject()
             .put("profiles", JSONObject().put("p1", JSONObject(PRESET_JSON)))
             .put("appBindings", JSONObject().put("com.example.app", "p1"))
+            .put("whitelist", JSONObject().put("com.example.app", true))
         assertTrue(store.synchronizeProfilesAndBindings(valid.toString()))
         awaitNextSnapshot()
 
@@ -178,6 +179,25 @@ class ProfileStoreControlTest {
         assertFalse(store.synchronizeProfilesAndBindings(dangling.toString()))
         assertFalse(syncBridge.awaitPush(timeoutMs = 200))
         assertEquals("p1", store.getAppBindings()["com.example.app"])
+        assertTrue(store.getWhitelist().getValue("com.example.app"))
+    }
+
+    @Test
+    fun `atomic policy sync replaces stale whitelist entries`() {
+        val first = JSONObject()
+            .put("profiles", JSONObject().put("p1", JSONObject(PRESET_JSON)))
+            .put("appBindings", JSONObject())
+            .put("whitelist", JSONObject().put("com.example.old", true))
+        assertTrue(store.synchronizeProfilesAndBindings(first.toString()))
+        awaitNextSnapshot()
+
+        val newest = JSONObject(first.toString())
+            .put("whitelist", JSONObject().put("com.example.new", true))
+        assertTrue(store.synchronizeProfilesAndBindings(newest.toString()))
+        val snapshot = awaitNextSnapshot()
+
+        assertFalse(snapshot.getJSONObject("whitelist").has("com.example.old"))
+        assertTrue(snapshot.getJSONObject("whitelist").getBoolean("com.example.new"))
     }
 
     @Test

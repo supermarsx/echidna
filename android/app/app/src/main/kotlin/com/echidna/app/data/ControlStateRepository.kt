@@ -104,6 +104,7 @@ object ControlStateRepository {
         MutableStateFlow(WhitelistBindings(emptyMap(), emptyMap()))
     val whitelistBindings: StateFlow<WhitelistBindings> = _whitelistBindings.asStateFlow()
     @Volatile private var appBindingsAuthoritative = false
+    @Volatile private var whitelistAuthoritative = false
 
     private val _latencyHistogram = MutableStateFlow<List<LatencyBucket>>(emptyList())
     val latencyHistogram: StateFlow<List<LatencyBucket>> = _latencyHistogram.asStateFlow()
@@ -661,14 +662,13 @@ object ControlStateRepository {
     }
 
     fun updateWhitelist(packageName: String, enabled: Boolean) {
-        if (!::serviceClient.isInitialized) return
-        scope.launch {
-            try {
-                serviceClient.updateWhitelist(packageName, enabled)
-                fetchWhitelistBindings()
-            } catch (_: Exception) {
-            }
-        }
+        if (packageName.isBlank()) return
+        whitelistAuthoritative = true
+        _whitelistBindings.value = _whitelistBindings.value.copy(
+            whitelist = _whitelistBindings.value.whitelist + (packageName to enabled),
+        )
+        persistPresets()
+        synchronizeServiceState()
     }
 
     fun setAppPresetBinding(packageName: String, presetId: String) {
@@ -700,6 +700,11 @@ object ControlStateRepository {
                 } else {
                     null
                 },
+                whitelist = if (whitelistAuthoritative) {
+                    _whitelistBindings.value.whitelist
+                } else {
+                    null
+                },
             )
         )
         presetStateWriter.submit(payload)
@@ -720,6 +725,10 @@ object ControlStateRepository {
         restored.appBindings?.let { bindings ->
             appBindingsAuthoritative = true
             _whitelistBindings.value = _whitelistBindings.value.copy(appBindings = bindings)
+        }
+        restored.whitelist?.let { whitelist ->
+            whitelistAuthoritative = true
+            _whitelistBindings.value = _whitelistBindings.value.copy(whitelist = whitelist)
         }
     }
 
@@ -1018,19 +1027,31 @@ object ControlStateRepository {
             emptyMap()
         )
         val validIds = _presets.value.mapTo(mutableSetOf(), Preset::id)
-        val wasAuthoritative = appBindingsAuthoritative
-        val resolvedBindings = if (wasAuthoritative) {
+        val bindingsWereAuthoritative = appBindingsAuthoritative
+        val whitelistWasAuthoritative = whitelistAuthoritative
+        val resolvedBindings = if (bindingsWereAuthoritative) {
             _whitelistBindings.value.appBindings
         } else {
             appBindingsAuthoritative = true
             bindings.appBindings.filterValues(validIds::contains)
         }
-        val resolved = WhitelistBindings(bindings.whitelist, resolvedBindings)
+        val resolvedWhitelist = if (whitelistWasAuthoritative) {
+            _whitelistBindings.value.whitelist
+        } else {
+            whitelistAuthoritative = true
+            bindings.whitelist
+        }
+        val resolved = WhitelistBindings(resolvedWhitelist, resolvedBindings)
         _whitelistBindings.value = resolved
-        if (!wasAuthoritative) {
+        if (!bindingsWereAuthoritative || !whitelistWasAuthoritative) {
             persistPresets()
         }
-        if (!wasAuthoritative || bindings.appBindings != resolvedBindings) {
+        if (
+            !bindingsWereAuthoritative ||
+            !whitelistWasAuthoritative ||
+            bindings.appBindings != resolvedBindings ||
+            bindings.whitelist != resolvedWhitelist
+        ) {
             synchronizeServiceState()
         }
         resolved
@@ -1161,10 +1182,13 @@ object ControlStateRepository {
             ControlServiceSyncSnapshot(
                 profileId = preset.id,
                 profileJson = PresetSerializer.toJson(preset),
-                profileBindingStateJson = if (appBindingsAuthoritative) {
+                profileBindingStateJson = if (
+                    appBindingsAuthoritative && whitelistAuthoritative
+                ) {
                     ProfileBindingSyncCodec.encode(
                         presets = _presets.value,
                         appBindings = _whitelistBindings.value.appBindings,
+                        whitelist = _whitelistBindings.value.whitelist,
                     )
                 } else {
                     null

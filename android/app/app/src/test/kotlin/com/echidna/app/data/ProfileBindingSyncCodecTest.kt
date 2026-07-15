@@ -22,10 +22,12 @@ class ProfileBindingSyncCodecTest {
         val root = JSONObject(ProfileBindingSyncCodec.encode(
             listOf(active, bound),
             mapOf("com.example.recorder" to bound.id),
+            mapOf("com.example.recorder" to true),
         ))
 
         assertEquals("bound", root.getJSONObject("appBindings").getString("com.example.recorder"))
         assertEquals("bound", root.getJSONObject("profiles").getJSONObject("bound").getString("id"))
+        assertTrue(root.getJSONObject("whitelist").getBoolean("com.example.recorder"))
     }
 
     @Test
@@ -34,6 +36,7 @@ class ProfileBindingSyncCodecTest {
             ProfileBindingSyncCodec.encode(
                 listOf(preset("active")),
                 mapOf("com.example.recorder" to "deleted"),
+                emptyMap(),
             )
         }
         assertTrue(failure.exceptionOrNull() is IllegalArgumentException)
