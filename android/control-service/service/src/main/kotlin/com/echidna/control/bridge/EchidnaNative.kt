@@ -8,7 +8,8 @@ internal object EchidnaNative {
     private const val RESULT_NOT_AVAILABLE = -7
     private const val RESULT_INVALID_ARGUMENT = -2
     private const val STATUS_ERROR = 3
-    private const val DEFAULT_API_VERSION: Long = (1L shl 16) or (1L shl 8)
+    internal const val API_VERSION_UNAVAILABLE = 0L
+    internal const val EXPECTED_API_VERSION: Long = (1L shl 16) or (2L shl 8)
 
     private val available = AtomicBoolean(true)
 
@@ -87,13 +88,26 @@ internal object EchidnaNative {
     }
 
     fun getApiVersion(): Long {
-        return if (available.get()) {
-            callNative("get API version", DEFAULT_API_VERSION) {
-                nativeGetApiVersion()
-            }
-        } else {
-            DEFAULT_API_VERSION
+        if (!available.get()) {
+            return API_VERSION_UNAVAILABLE
         }
+        val version = callNative("get API version", API_VERSION_UNAVAILABLE) {
+            nativeGetApiVersion()
+        }
+        if (!isSupportedApiVersion(version)) {
+            available.set(false)
+            Log.w(TAG, "Incompatible or unavailable native API version: 0x${version.toString(16)}")
+            return API_VERSION_UNAVAILABLE
+        }
+        return version
+    }
+
+    internal fun isSupportedApiVersion(version: Long): Boolean {
+        val major = (version ushr 16) and 0xFFFFL
+        val minor = (version ushr 8) and 0xFFL
+        val expectedMajor = (EXPECTED_API_VERSION ushr 16) and 0xFFFFL
+        val expectedMinor = (EXPECTED_API_VERSION ushr 8) and 0xFFL
+        return major == expectedMajor && minor == expectedMinor
     }
 
     private inline fun <T> callNative(operation: String, fallback: T, block: () -> T): T {

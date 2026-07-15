@@ -21,6 +21,14 @@ namespace
     constexpr std::array<std::string_view, 2> kCandidateLibraryDirectories = {
         "/data/adb/echidna/lib", "/data/adb/modules/echidna/lib"};
     constexpr const char *kLogTag = "EchidnaControlJNI";
+    constexpr uint32_t kApiVersionUnavailable = 0U;
+
+    constexpr bool IsSupportedApiVersion(uint32_t version)
+    {
+        const uint32_t major = (version >> 16U) & 0xFFFFU;
+        const uint32_t minor = (version >> 8U) & 0xFFU;
+        return major == ECHIDNA_API_VERSION_MAJOR && minor == ECHIDNA_API_VERSION_MINOR;
+    }
 
     struct EchidnaSymbols
     {
@@ -62,6 +70,29 @@ namespace
             dlsym(handle, "echidna_api_get_version"));
         if (!set_profile || !process_block || !get_status || !get_version)
         {
+            dlclose(handle);
+            return false;
+        }
+
+        uint32_t api_version = kApiVersionUnavailable;
+        try
+        {
+            api_version = get_version();
+        }
+        catch (...)
+        {
+            dlclose(handle);
+            return false;
+        }
+        if (!IsSupportedApiVersion(api_version))
+        {
+            __android_log_print(ANDROID_LOG_ERROR,
+                                kLogTag,
+                                "Rejected incompatible Echidna API version 0x%08x; expected "
+                                "major=%u minor=%u",
+                                api_version,
+                                ECHIDNA_API_VERSION_MAJOR,
+                                ECHIDNA_API_VERSION_MINOR);
             dlclose(handle);
             return false;
         }
@@ -300,7 +331,7 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeGetApiVersion(JNIEnv *, jcla
 {
     if (!EnsureLoaded())
     {
-        return static_cast<jlong>(ECHIDNA_API_VERSION);
+        return static_cast<jlong>(kApiVersionUnavailable);
     }
     try
     {
@@ -308,6 +339,6 @@ Java_com_echidna_control_bridge_EchidnaNative_nativeGetApiVersion(JNIEnv *, jcla
     }
     catch (...)
     {
-        return static_cast<jlong>(ECHIDNA_API_VERSION);
+        return static_cast<jlong>(kApiVersionUnavailable);
     }
 }

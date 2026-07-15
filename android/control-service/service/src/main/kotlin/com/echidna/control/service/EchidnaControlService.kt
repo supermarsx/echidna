@@ -319,7 +319,7 @@ class EchidnaControlService : Service() {
             }
         }
 
-        override fun getApiVersion(): Long = safeBinder("get API version", DEFAULT_API_VERSION) {
+        override fun getApiVersion(): Long = safeBinder("get API version", API_VERSION_UNAVAILABLE) {
             EchidnaNative.getApiVersion()
         }
     }
@@ -441,6 +441,6 @@ class EchidnaControlService : Service() {
 
     companion object {
         private const val TAG = "EchidnaControlSvc"
-        private const val DEFAULT_API_VERSION: Long = 65792L
+        private const val API_VERSION_UNAVAILABLE = 0L
     }
 }
