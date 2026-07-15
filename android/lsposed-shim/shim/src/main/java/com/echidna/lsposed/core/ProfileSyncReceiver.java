@@ -1,166 +1,192 @@
 package com.echidna.lsposed.core;
 
-import android.net.LocalSocket;
-import android.net.LocalSocketAddress;
+import android.app.Application;
+import android.app.AndroidAppHelper;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.IBinder;
+import android.os.RemoteException;
 import android.util.Log;
 
-import java.io.DataInputStream;
-import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import com.echidna.control.service.IEchidnaPolicyListener;
+import com.echidna.control.service.IEchidnaPolicyProvider;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XposedBridge;
 
 /**
- * Receives policy snapshots served by the control service over the
- * ProfileSyncBridge contract and forwards them to {@link ProfileSnapshotStore}.
+ * Fetches target-UID-scoped policy from the companion's explicit read-only Binder component.
  *
- * <p>This is the LSPosed-side counterpart of the native profile-sync reader
- * (native/zygisk/src/runtime/profile_sync_server.cpp). It connects to the
- * companion service's abstract AF_UNIX socket ({@link #SOCKET_NAME}) and reads
- * the same framing as the native path: a 4-byte big-endian length prefix
- * followed by the UTF-8 JSON snapshot.
- *
- * <p>No policy is ever fabricated: any connect/read failure leaves the last
- * snapshot in place (initially {@link ProfileSnapshot#empty()}), so hook
- * resolution stays fail-closed.
+ * <p>The former abstract-socket client could not authenticate which UID had won the global socket
+ * name. Explicit component binding delegates server identity to Android's package/component
+ * resolver; the provider then authenticates this injected process through Binder's caller UID.
  */
 final class ProfileSyncReceiver {
 
-    private static final String TAG = "EchidnaProfileSync";
-    private static final String SOCKET_NAME = "echidna_profiles";
-    private static final int MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
+    private static final String TAG = "EchidnaPolicySync";
     private static final long RECONNECT_DELAY_MS = 1000L;
+    private static final ComponentName POLICY_COMPONENT = new ComponentName(
+            "com.echidna.app",
+            "com.echidna.control.service.PolicySnapshotService");
 
     private final ProfileSnapshotStore store;
-    private boolean loggedConnectFailure;
+    private final String processName;
+    private final ScheduledExecutorService executor =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "echidna-policy-binder");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private final AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean bindPending = new AtomicBoolean(false);
+    private final AtomicBoolean rebindScheduled = new AtomicBoolean(false);
+    private volatile Context context;
+    private volatile IEchidnaPolicyProvider provider;
+    private volatile boolean bound;
+    private volatile boolean bindingRegistered;
 
-    ProfileSyncReceiver(ProfileSnapshotStore store) {
+    private final IEchidnaPolicyListener listener = new IEchidnaPolicyListener.Stub() {
+        @Override
+        public void onPolicyChanged(long generation) {
+            executor.execute(ProfileSyncReceiver.this::fetchLatest);
+        }
+    };
+
+    private final ServiceConnection connection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            bindPending.set(false);
+            if (!POLICY_COMPONENT.equals(name) || service == null) {
+                failClosedAndReconnect();
+                return;
+            }
+            bound = true;
+            provider = IEchidnaPolicyProvider.Stub.asInterface(service);
+            executor.execute(() -> {
+                IEchidnaPolicyProvider connected = provider;
+                if (connected == null) {
+                    failClosedAndReconnect();
+                    return;
+                }
+                try {
+                    // Register before the first fetch so an intervening generation is not missed.
+                    connected.registerListener(processName, listener);
+                    fetchLatest();
+                } catch (RemoteException | RuntimeException error) {
+                    logFailure("policy provider registration failed", error);
+                    failClosedAndReconnect();
+                }
+            });
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            failClosedAndReconnect();
+        }
+
+        @Override
+        public void onBindingDied(ComponentName name) {
+            failClosedAndReconnect();
+        }
+
+        @Override
+        public void onNullBinding(ComponentName name) {
+            failClosedAndReconnect();
+        }
+    };
+
+    ProfileSyncReceiver(ProfileSnapshotStore store, String processName) {
         this.store = store;
+        this.processName = processName != null ? processName : "";
     }
 
     void start() {
-        Thread thread = new Thread(this::run, "echidna-profile-sync");
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private void run() {
-        while (!Thread.currentThread().isInterrupted()) {
-            try (LocalSocket socket = connectPublisher()) {
-                loggedConnectFailure = false;
-                readSnapshots(socket);
-            } catch (IOException e) {
-                if (!loggedConnectFailure) {
-                    loggedConnectFailure = true;
-                    XposedBridge.log(
-                            TAG + ": unable to connect profile-sync socket; policy stays "
-                                    + "fail-closed: " + Log.getStackTraceString(e));
-                }
-                sleepBeforeReconnect();
-            } catch (Throwable throwable) {
-                XposedBridge.log(
-                        TAG + ": profile-sync reader failed; policy stays fail-closed: "
-                                + Log.getStackTraceString(throwable));
-                store.update(ProfileSnapshot.empty());
-                sleepBeforeReconnect();
-            }
+        if (started.compareAndSet(false, true)) {
+            executor.execute(this::bindExplicitProvider);
         }
     }
 
-    private LocalSocket connectPublisher() throws IOException {
-        LocalSocket socket = new LocalSocket();
+    private void bindExplicitProvider() {
+        rebindScheduled.set(false);
+        if (bound || !bindPending.compareAndSet(false, true)) {
+            return;
+        }
+        Application application = AndroidAppHelper.currentApplication();
+        if (application == null) {
+            bindPending.set(false);
+            scheduleRebind();
+            return;
+        }
+        Context appContext = application.getApplicationContext();
+        context = appContext;
+        Intent intent = new Intent().setComponent(POLICY_COMPONENT);
         try {
-            socket.connect(new LocalSocketAddress(
-                    SOCKET_NAME,
-                    LocalSocketAddress.Namespace.ABSTRACT));
-            return socket;
-        } catch (IOException e) {
-            try {
-                socket.close();
-            } catch (IOException ignored) {
-                // Nothing to do.
+            bindingRegistered = true;
+            if (!appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
+                bindingRegistered = false;
+                bindPending.set(false);
+                scheduleRebind();
             }
-            throw e;
+        } catch (RuntimeException error) {
+            bindingRegistered = false;
+            bindPending.set(false);
+            logFailure("explicit policy bind failed", error);
+            scheduleRebind();
         }
     }
 
-    private void readSnapshots(LocalSocket socket) throws IOException {
-        while (!Thread.currentThread().isInterrupted()) {
-            String payload = readFramedPayload(socket.getInputStream());
-            if (isBlank(payload)) {
-                payload = readFromAncillaryFd(socket);
-            }
-            if (isBlank(payload)) {
+    private void fetchLatest() {
+        IEchidnaPolicyProvider connected = provider;
+        if (connected == null) {
+            store.failClosed();
+            return;
+        }
+        try {
+            String payload = connected.getPolicySnapshot(processName);
+            ProfileSnapshot parsed = ProfileSnapshot.parse(payload);
+            if (!parsed.isValid()) {
+                store.failClosed();
                 return;
             }
+            store.update(parsed);
+        } catch (RemoteException | RuntimeException error) {
+            logFailure("policy fetch failed", error);
+            failClosedAndReconnect();
+        }
+    }
+
+    private void failClosedAndReconnect() {
+        provider = null;
+        store.failClosed();
+        Context appContext = context;
+        if (bindingRegistered && appContext != null) {
             try {
-                store.update(ProfileSnapshot.parse(payload));
-            } catch (Throwable throwable) {
-                XposedBridge.log(
-                        TAG + ": rejected unsafe profile snapshot: "
-                                + Log.getStackTraceString(throwable));
-                store.update(ProfileSnapshot.empty());
+                appContext.unbindService(connection);
+            } catch (IllegalArgumentException ignored) {
+                // The framework may already have released a dead binding.
             }
         }
+        bindingRegistered = false;
+        bound = false;
+        bindPending.set(false);
+        scheduleRebind();
     }
 
-    /** Reads a {@code [4-byte big-endian length][payload]} frame, matching ProfileSyncBridge. */
-    private String readFramedPayload(InputStream stream) throws IOException {
-        DataInputStream in = new DataInputStream(stream);
-        int length;
-        try {
-            length = in.readInt();
-        } catch (IOException endOfStream) {
-            return null;
+    private void scheduleRebind() {
+        if (!started.get() || !rebindScheduled.compareAndSet(false, true)) {
+            return;
         }
-        if (length <= 0 || length > MAX_PAYLOAD_BYTES) {
-            return null;
-        }
-        byte[] buffer = new byte[length];
-        in.readFully(buffer);
-        return new String(buffer, StandardCharsets.UTF_8);
+        executor.schedule(this::bindExplicitProvider, RECONNECT_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * Legacy fallback path mirroring the native {@code ReadFromSharedFd}: when no
-     * inline payload arrived, read the framed snapshot from an ancillary file
-     * descriptor.
-     */
-    private String readFromAncillaryFd(LocalSocket client) {
-        try {
-            FileDescriptor[] fds = client.getAncillaryFileDescriptors();
-            if (fds == null) {
-                return null;
-            }
-            for (FileDescriptor fd : fds) {
-                if (fd == null) {
-                    continue;
-                }
-                try (FileInputStream fis = new FileInputStream(fd)) {
-                    String payload = readFramedPayload(fis);
-                    if (!isBlank(payload)) {
-                        return payload;
-                    }
-                }
-            }
-        } catch (IOException e) {
-            XposedBridge.log(TAG + ": ancillary fd read failed: " + Log.getStackTraceString(e));
-        }
-        return null;
-    }
-
-    private void sleepBeforeReconnect() {
-        try {
-            Thread.sleep(RECONNECT_DELAY_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isEmpty();
+    private static void logFailure(String message, Throwable error) {
+        XposedBridge.log(TAG + ": " + message + "; failing closed: "
+                + Log.getStackTraceString(error));
     }
 }

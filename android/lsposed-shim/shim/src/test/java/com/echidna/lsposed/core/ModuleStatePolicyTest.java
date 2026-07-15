@@ -27,11 +27,13 @@ public final class ModuleStatePolicyTest {
     private ProfileSnapshotStore store;
     private RecordingNativeController nativeController;
     private ModuleState state;
+    private long generation;
 
     @Before
     public void setUp() {
         store = ProfileSnapshotStore.getInstance();
-        store.update(ProfileSnapshot.empty());
+        store.resetForTests();
+        generation = 0L;
         nativeController = new RecordingNativeController();
         state = new ModuleState(store, nativeController, false);
         state.onProcessAttached(PACKAGE_NAME, PROCESS_NAME);
@@ -68,7 +70,7 @@ public final class ModuleStatePolicyTest {
     }
 
     @Test
-    public void danglingOrMissingBindingNeverReusesPreviousNativeProfile() throws Exception {
+    public void invalidPayloadFailsClosedWhileMissingBindingUsesDefault() throws Exception {
         store.update(snapshot(true, null, true, true, true, false));
         assertTrue(state.isHookAllowed());
         String previouslyApplied = nativeController.profile;
@@ -79,8 +81,8 @@ public final class ModuleStatePolicyTest {
         assertEquals(previouslyApplied, nativeController.profile);
 
         store.update(snapshot(true, null, false, true, true, false));
-        assertFalse(state.isHookAllowed());
-        assertTrue(nativeController.bypass);
+        assertTrue(state.isHookAllowed());
+        assertFalse(nativeController.bypass);
     }
 
     @Test
@@ -102,7 +104,7 @@ public final class ModuleStatePolicyTest {
         store.update(snapshot(true, false, true, true, true, false));
         assertDeniedReadIsUntouched();
 
-        store.update(snapshot(true, null, false, true, true, false));
+        store.update(snapshot(true, null, true, false, true, false));
         assertDeniedReadIsUntouched();
 
         store.update(ProfileSnapshot.parse("{"));
@@ -112,6 +114,52 @@ public final class ModuleStatePolicyTest {
         assertTrue(state.isHookAllowed());
         store.update(ProfileSnapshot.empty());
         assertDeniedReadIsUntouched();
+    }
+
+    @Test
+    public void captureOwnerMustExplicitlySelectLsposed() throws Exception {
+        store.update(snapshot(true, null, true, true, true, false, "zygisk"));
+
+        assertFalse(state.isHookAllowed());
+        assertTrue(nativeController.bypass);
+    }
+
+    @Test
+    public void generationWatermarkRejectsRollbackAndConflictButRestoresExactBytes()
+            throws Exception {
+        generation = 1L;
+        ProfileSnapshot accepted = snapshot(true, null, true, true, true, false);
+        store.update(accepted);
+        long acceptedVersion = store.version();
+
+        store.update(accepted);
+        assertEquals(acceptedVersion, store.version());
+
+        JSONObject conflictJson = new JSONObject(accepted.rawPayload());
+        conflictJson.getJSONObject("control").put("bypass", true);
+        store.update(ProfileSnapshot.parse(conflictJson.toString()));
+        assertEquals(acceptedVersion, store.version());
+        assertTrue(store.getSnapshot().isGloballyEnabled());
+
+        JSONObject rollbackJson = new JSONObject(accepted.rawPayload()).put("generation", 1L);
+        store.update(ProfileSnapshot.parse(rollbackJson.toString()));
+        assertEquals(acceptedVersion, store.version());
+
+        store.failClosed();
+        assertFalse(store.getSnapshot().isValid());
+        store.update(accepted);
+        assertTrue(store.getSnapshot().isValid());
+        assertEquals(2L, store.getSnapshot().generation());
+    }
+
+    @Test
+    public void nonJsonNumericSpellingIsRejectedBeforeOrgJsonCanNormalizeIt() throws Exception {
+        ProfileSnapshot valid = snapshot(true, null, true, true, true, false);
+        String leadingZeroGeneration = valid.rawPayload().replace(
+                "\"generation\":1",
+                "\"generation\":01");
+
+        assertFalse(ProfileSnapshot.parse(leadingZeroGeneration).isValid());
     }
 
     @Test
@@ -176,13 +224,32 @@ public final class ModuleStatePolicyTest {
         };
     }
 
-    private static ProfileSnapshot snapshot(
+    private ProfileSnapshot snapshot(
             boolean packageAllowed,
             Boolean processAllowed,
             boolean includeBinding,
             boolean includePayload,
             boolean masterEnabled,
             boolean bypass) throws Exception {
+        return snapshot(
+                packageAllowed,
+                processAllowed,
+                includeBinding,
+                includePayload,
+                masterEnabled,
+                bypass,
+                "lsposed");
+    }
+
+    private ProfileSnapshot snapshot(
+            boolean packageAllowed,
+            Boolean processAllowed,
+            boolean includeBinding,
+            boolean includePayload,
+            boolean masterEnabled,
+            boolean bypass,
+            String owner) throws Exception {
+        generation++;
         JSONObject whitelist = new JSONObject().put(PACKAGE_NAME, packageAllowed);
         if (processAllowed != null) {
             whitelist.put(PROCESS_NAME, processAllowed);
@@ -201,14 +268,22 @@ public final class ModuleStatePolicyTest {
                             .put("modules", new org.json.JSONArray()));
         }
         JSONObject root = new JSONObject()
+                .put("schemaVersion", 2)
+                .put("generation", generation)
                 .put("profiles", profiles)
+                .put("defaultProfileId", PRESET_ID)
                 .put("whitelist", whitelist)
+                .put("captureOwners", new JSONObject().put(PACKAGE_NAME, owner))
                 .put("appBindings", bindings)
                 .put(
                         "control",
                         new JSONObject()
                                 .put("masterEnabled", masterEnabled)
-                                .put("bypass", bypass));
+                                .put("bypass", bypass)
+                                .put("panicUntilEpochMs", 0L)
+                                .put("sidetoneEnabled", false)
+                                .put("sidetoneGainDb", 0.0)
+                                .put("engineMode", "compatibility"));
         return ProfileSnapshot.parse(root.toString());
     }
 

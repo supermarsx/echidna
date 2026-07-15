@@ -44,12 +44,14 @@ public final class AppConfig {
         }
         boolean globallyEnabled = snapshot.isGloballyEnabled();
         boolean processAllowed = snapshot.isProcessAllowed(packageName, processName);
-        String profile = globallyEnabled && processAllowed
+        boolean ownedByLsposed = "lsposed".equals(
+                snapshot.captureOwner(packageName, processName));
+        String profile = globallyEnabled && processAllowed && ownedByLsposed
                 ? snapshot.resolveProfile(packageName)
                 : "";
         // The snapshot contract requires both explicit process policy and a resolvable
         // per-package preset. Never run with a stale native profile after a binding was deleted.
-        boolean allowed = globallyEnabled && processAllowed && !profile.isEmpty();
+        boolean allowed = globallyEnabled && processAllowed && ownedByLsposed && !profile.isEmpty();
         long expiresAt = SystemClock.elapsedRealtime() + DEFAULT_TTL_MS;
         return new AppConfig(allowed, !allowed, allowed ? profile : "", expiresAt);
     }

@@ -69,6 +69,7 @@ public final class ModuleState {
     private final AtomicLong appliedSnapshotVersion = new AtomicLong(Long.MIN_VALUE);
     private final AtomicLong policyEpoch = new AtomicLong(0L);
     private final Object policyRefreshLock = new Object();
+    private final boolean startReceiver;
 
     ModuleState(
             ProfileSnapshotStore snapshotStore,
@@ -76,19 +77,9 @@ public final class ModuleState {
             boolean startReceiver) {
         this.snapshotStore = snapshotStore;
         this.nativeController = nativeController;
+        this.startReceiver = startReceiver;
         safeNativeInitialise();
-        // Begin receiving the control service's policy snapshot over the
-        // ProfileSyncBridge socket. Until a snapshot arrives, resolution below
-        // reads ProfileSnapshot.empty() and stays fail-closed.
-        if (startReceiver) {
-            try {
-                snapshotStore.ensureStarted();
-            } catch (Throwable throwable) {
-                XposedBridge.log(
-                        TAG + ": profile snapshot receiver unavailable; failing closed: "
-                                + Log.getStackTraceString(throwable));
-            }
-        }
+        // The explicit Binder receiver starts once the real target process identity is known.
     }
 
     private AppConfig resolveConfig(String packageName, String processName) {
@@ -122,6 +113,15 @@ public final class ModuleState {
     public void onProcessAttached(String packageName, String processName) {
         currentPackage.set(packageName != null ? packageName : "");
         currentProcess.set(processName != null ? processName : "");
+        if (startReceiver) {
+            try {
+                snapshotStore.ensureStarted(packageName, processName);
+            } catch (Throwable throwable) {
+                XposedBridge.log(
+                        TAG + ": policy snapshot receiver unavailable; failing closed: "
+                                + Log.getStackTraceString(throwable));
+            }
+        }
         refreshPolicyIfNeeded(true);
     }
 
