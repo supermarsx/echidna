@@ -15,6 +15,7 @@ endif()
 
 add_library(echidna SHARED
     src/api.cpp
+    src/dsp/stream_handle_registry.cpp
     src/module.cpp
     src/audio/pcm_buffer_processor.cpp
     src/state/shared_state.cpp

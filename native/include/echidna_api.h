@@ -14,7 +14,7 @@ extern "C"
      */
 
 #define ECHIDNA_API_VERSION_MAJOR 1U
-#define ECHIDNA_API_VERSION_MINOR 2U
+#define ECHIDNA_API_VERSION_MINOR 3U
 #define ECHIDNA_API_VERSION_PATCH 0U
 
 #define ECHIDNA_API_VERSION                                                 \
@@ -40,6 +40,27 @@ extern "C"
         ECHIDNA_STATUS_HOOKED = 2,
         ECHIDNA_STATUS_ERROR = 3
     } echidna_status_t;
+
+    /** Portable generation token for one independently-owned DSP stream. */
+    typedef uint32_t echidna_stream_handle_t;
+
+    typedef enum echidna_pcm_format
+    {
+        ECHIDNA_PCM_FORMAT_SIGNED_16 = 1,
+        ECHIDNA_PCM_FORMAT_FLOAT_32 = 2
+    } echidna_pcm_format_t;
+
+    typedef struct echidna_stream_config
+    {
+        /** Must be sizeof(echidna_stream_config_t). */
+        uint32_t struct_size;
+        uint32_t sample_rate;
+        uint32_t channel_count;
+        uint32_t max_frames;
+        /** One of echidna_pcm_format_t. */
+        uint32_t format;
+        uint32_t reserved[3];
+    } echidna_stream_config_t;
 
     /**
      * @brief Returns packed MAJOR.MINOR.PATCH version.
@@ -90,6 +111,33 @@ extern "C"
                                            uint32_t frames,
                                            uint32_t sample_rate,
                                            uint32_t channel_count);
+
+    /** Creates one fixed-registry DSP stream. This is never callback-safe. */
+    echidna_result_t echidna_stream_create(const echidna_stream_config_t *config,
+                                           echidna_stream_handle_t *handle);
+
+    /**
+     * Processes PCM without allocation or locking. Input and output may alias.
+     * The supplied format must exactly match the stream's immutable format.
+     */
+    echidna_result_t echidna_stream_process(echidna_stream_handle_t handle,
+                                            const void *input,
+                                            void *output,
+                                            uint32_t frames,
+                                            uint32_t format);
+
+    /**
+     * Publishes a replacement engine for a strictly newer profile generation.
+     * A null profile with zero length revokes processing and causes immediate
+     * pass-through until a newer non-empty generation is published.
+     */
+    echidna_result_t echidna_stream_update(echidna_stream_handle_t handle,
+                                           const char *profile_json,
+                                           size_t length,
+                                           uint64_t profile_generation);
+
+    /** Revokes, quiesces, and destroys a stream. Stale tokens remain invalid. */
+    echidna_result_t echidna_stream_destroy(echidna_stream_handle_t handle);
 
 #ifdef __cplusplus
 }

@@ -141,6 +141,20 @@ target_include_directories(telemetry_accumulator_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(telemetry_accumulator_test PRIVATE cxx_std_20)
 
+add_executable(stream_handle_registry_test
+    stream_handle_registry_test.cpp
+    ../src/dsp/stream_handle_registry.cpp)
+target_link_libraries(stream_handle_registry_test PRIVATE ech_dsp Threads::Threads)
+target_include_directories(stream_handle_registry_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../dsp/include)
+target_compile_features(stream_handle_registry_test PRIVATE cxx_std_20)
+target_compile_definitions(stream_handle_registry_test
+    PRIVATE ECHIDNA_STREAM_REGISTRY_TESTING=1)
+
 if(NOT WIN32)
   add_executable(config_shared_memory_test
       config_shared_memory_test.cpp
@@ -198,7 +212,8 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     profile_sync_protocol_test
     activation_gate_test
     process_utils_test
-    telemetry_accumulator_test)
+    telemetry_accumulator_test
+    stream_handle_registry_test)
 if(NOT WIN32)
   list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS
       config_shared_memory_test
@@ -226,6 +241,7 @@ add_test(NAME profile_sync_protocol_test COMMAND profile_sync_protocol_test)
 add_test(NAME activation_gate_test COMMAND activation_gate_test)
 add_test(NAME process_utils_test COMMAND process_utils_test)
 add_test(NAME telemetry_accumulator_test COMMAND telemetry_accumulator_test)
+add_test(NAME stream_handle_registry_test COMMAND stream_handle_registry_test)
 if(NOT WIN32)
   add_test(NAME config_shared_memory_test COMMAND config_shared_memory_test)
   add_test(NAME telemetry_socket_exporter_test COMMAND telemetry_socket_exporter_test)

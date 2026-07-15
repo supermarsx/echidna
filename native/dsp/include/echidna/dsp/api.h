@@ -9,7 +9,7 @@ extern "C"
 #endif
 
 #define ECH_DSP_API_VERSION_MAJOR 1U
-#define ECH_DSP_API_VERSION_MINOR 1U
+#define ECH_DSP_API_VERSION_MINOR 2U
 #define ECH_DSP_API_VERSION_PATCH 0U
 
 #define ECH_DSP_API_VERSION                                                 \
@@ -35,6 +35,9 @@ extern "C"
         ECH_DSP_QUALITY_BALANCED = 1,
         ECH_DSP_QUALITY_HIGH = 2
     } ech_dsp_quality_mode_t;
+
+    /** Opaque independently-owned DSP engine used by stream registries. */
+    typedef struct ech_dsp_engine ech_dsp_engine_t;
 
     /** @brief Returns the packed DSP ABI version used by native bridge loaders. */
     uint32_t ech_dsp_api_get_version(void);
@@ -74,6 +77,30 @@ extern "C"
     ech_dsp_status_t ech_dsp_process_block(const float *input,
                                            float *output,
                                            size_t frames);
+
+    /**
+     * @brief Builds one independent, callback-prepared DSP engine.
+     *
+     * This lifecycle operation may allocate. When config is null and length is
+     * zero, a safe pass-through preset is applied. The returned engine never
+     * shares format or preset state with the legacy singleton C ABI.
+     */
+    ech_dsp_status_t ech_dsp_engine_create(uint32_t sample_rate,
+                                           uint32_t channels,
+                                           ech_dsp_quality_mode_t quality_mode,
+                                           size_t max_frames,
+                                           const char *config,
+                                           size_t config_length,
+                                           ech_dsp_engine_t **engine);
+
+    /** Processes one block without allocation or internal locking. */
+    ech_dsp_status_t ech_dsp_engine_process(ech_dsp_engine_t *engine,
+                                            const float *input,
+                                            float *output,
+                                            size_t frames);
+
+    /** Destroys an engine after its owner has quiesced all callbacks. */
+    void ech_dsp_engine_destroy(ech_dsp_engine_t *engine);
 
     /** @brief Destroys engine state and frees resources. */
     void ech_dsp_shutdown(void);

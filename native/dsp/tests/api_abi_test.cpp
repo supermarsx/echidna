@@ -44,6 +44,21 @@ static_assert(std::is_same_v<decltype(&ech_dsp_prepare_realtime),
                              ech_dsp_status_t (*)(size_t)>);
 static_assert(std::is_same_v<decltype(&ech_dsp_process_block),
                              ech_dsp_status_t (*)(const float *, float *, size_t)>);
+static_assert(std::is_same_v<decltype(&ech_dsp_engine_create),
+                             ech_dsp_status_t (*)(uint32_t,
+                                                  uint32_t,
+                                                  ech_dsp_quality_mode_t,
+                                                  size_t,
+                                                  const char *,
+                                                  size_t,
+                                                  ech_dsp_engine_t **)>);
+static_assert(std::is_same_v<decltype(&ech_dsp_engine_process),
+                             ech_dsp_status_t (*)(ech_dsp_engine_t *,
+                                                  const float *,
+                                                  float *,
+                                                  size_t)>);
+static_assert(std::is_same_v<decltype(&ech_dsp_engine_destroy),
+                             void (*)(ech_dsp_engine_t *)>);
 static_assert(std::is_same_v<decltype(&ech_dsp_shutdown), void (*)(void)>);
 static_assert(std::is_constructible_v<echidna::dsp::DspEngine,
                                       uint32_t,

@@ -87,7 +87,8 @@ namespace echidna::dsp
         std::scoped_lock lock(preset_mutex_, process_mutex_);
         preset_ = preset;
 
-        if (preset.processing_mode == config::ProcessingMode::kHybrid &&
+        if (!options_.lock_free_realtime_process &&
+            preset.processing_mode == config::ProcessingMode::kHybrid &&
             quality_mode_ != ECH_DSP_QUALITY_LOW_LATENCY)
         {
             processing_mode_ = config::ProcessingMode::kHybrid;

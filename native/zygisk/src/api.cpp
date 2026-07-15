@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "echidna/dsp/api.h"
+#include "dsp/stream_handle_registry.h"
 #include "state/shared_state.h"
 #include "utils/telemetry_accumulator.h"
 
@@ -47,6 +48,18 @@ namespace
         using PrepareFn = ech_dsp_status_t (*)(size_t);
         using ProcessFn = ech_dsp_status_t (*)(const float *, float *, size_t);
         using ShutdownFn = void (*)(void);
+        using EngineCreateFn = ech_dsp_status_t (*)(uint32_t,
+                                                    uint32_t,
+                                                    ech_dsp_quality_mode_t,
+                                                    size_t,
+                                                    const char *,
+                                                    size_t,
+                                                    ech_dsp_engine_t **);
+        using EngineProcessFn = ech_dsp_status_t (*)(ech_dsp_engine_t *,
+                                                     const float *,
+                                                     float *,
+                                                     size_t);
+        using EngineDestroyFn = void (*)(ech_dsp_engine_t *);
 
         void *handle{nullptr};
         VersionFn version{nullptr};
@@ -55,6 +68,9 @@ namespace
         PrepareFn prepare{nullptr};
         ProcessFn process{nullptr};
         ShutdownFn shutdown{nullptr};
+        EngineCreateFn engine_create{nullptr};
+        EngineProcessFn engine_process{nullptr};
+        EngineDestroyFn engine_destroy{nullptr};
         uint32_t sample_rate{0};
         uint32_t channels{0};
         ech_dsp_quality_mode_t quality{ECH_DSP_QUALITY_BALANCED};
@@ -86,6 +102,12 @@ namespace
     {
         static std::mutex mutex;
         return mutex;
+    }
+
+    echidna::dsp_runtime::StreamHandleRegistry &GetStreamRegistry()
+    {
+        static echidna::dsp_runtime::StreamHandleRegistry registry;
+        return registry;
     }
 
     void LogWarn(const char *format, const char *detail)
@@ -305,7 +327,8 @@ namespace
         if (dsp.handle)
         {
             return dsp.version && dsp.init && dsp.update && dsp.prepare && dsp.process &&
-                   dsp.shutdown;
+                   dsp.shutdown && dsp.engine_create && dsp.engine_process &&
+                   dsp.engine_destroy;
         }
         const char *candidates[] = {
             "libech_dsp.so",
@@ -350,8 +373,15 @@ namespace
         dsp.process =
             reinterpret_cast<DspBridge::ProcessFn>(dlsym(dsp.handle, "ech_dsp_process_block"));
         dsp.shutdown = reinterpret_cast<DspBridge::ShutdownFn>(dlsym(dsp.handle, "ech_dsp_shutdown"));
+        dsp.engine_create = reinterpret_cast<DspBridge::EngineCreateFn>(
+            dlsym(dsp.handle, "ech_dsp_engine_create"));
+        dsp.engine_process = reinterpret_cast<DspBridge::EngineProcessFn>(
+            dlsym(dsp.handle, "ech_dsp_engine_process"));
+        dsp.engine_destroy = reinterpret_cast<DspBridge::EngineDestroyFn>(
+            dlsym(dsp.handle, "ech_dsp_engine_destroy"));
         if (!dsp.version || dsp.version() != ECH_DSP_API_VERSION || !dsp.init || !dsp.update ||
-            !dsp.prepare || !dsp.process || !dsp.shutdown)
+            !dsp.prepare || !dsp.process || !dsp.shutdown || !dsp.engine_create ||
+            !dsp.engine_process || !dsp.engine_destroy)
         {
             dlclose(dsp.handle);
             dsp.handle = nullptr;
@@ -361,8 +391,29 @@ namespace
             dsp.prepare = nullptr;
             dsp.process = nullptr;
             dsp.shutdown = nullptr;
+            dsp.engine_create = nullptr;
+            dsp.engine_process = nullptr;
+            dsp.engine_destroy = nullptr;
             return false;
         }
+        return true;
+    }
+
+    bool GetStreamBackend(echidna::dsp_runtime::StreamDspBackend *backend)
+    {
+        if (!backend)
+        {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(DspMutex());
+        auto &dsp = GetDspBridge();
+        if (!LoadDspLocked(dsp))
+        {
+            return false;
+        }
+        backend->create = dsp.engine_create;
+        backend->process = dsp.engine_process;
+        backend->destroy = dsp.engine_destroy;
         return true;
     }
 
@@ -749,4 +800,72 @@ echidna_result_t echidna_process_block(const float *input,
         state.setStatus(echidna::state::InternalStatus::kError);
     }
     return result;
+}
+
+echidna_result_t echidna_stream_create(const echidna_stream_config_t *config,
+                                       echidna_stream_handle_t *handle)
+{
+    if (!config || !handle)
+    {
+        return ECHIDNA_RESULT_INVALID_ARGUMENT;
+    }
+    echidna::dsp_runtime::StreamDspBackend backend;
+    if (!GetStreamBackend(&backend))
+    {
+        *handle = 0;
+        return ECHIDNA_RESULT_NOT_AVAILABLE;
+    }
+    (void)SharedState::instance();
+    return GetStreamRegistry().create(*config, backend, handle);
+}
+
+echidna_result_t echidna_stream_process(echidna_stream_handle_t handle,
+                                        const void *input,
+                                        void *output,
+                                        uint32_t frames,
+                                        uint32_t format)
+{
+    auto &state = SharedState::instance();
+    const bool bypassed = state.isBypassed(MonotonicNowNs());
+    bool mutated = false;
+    bool stream_bypassed = false;
+    const echidna_result_t result = GetStreamRegistry().process(handle,
+                                                               input,
+                                                               output,
+                                                               frames,
+                                                               format,
+                                                               bypassed,
+                                                               &mutated,
+                                                               &stream_bypassed);
+    const auto outcome = result != ECHIDNA_RESULT_OK
+                             ? echidna::utils::TelemetryBlockOutcome::kFailure
+                         : stream_bypassed
+                             ? echidna::utils::TelemetryBlockOutcome::kBypassed
+                         : mutated
+                             ? echidna::utils::TelemetryBlockOutcome::kMutated
+                             : echidna::utils::TelemetryBlockOutcome::kUnchanged;
+    state.telemetry().recordBlock(echidna::utils::CurrentTelemetryRoute(), frames, outcome);
+    return result;
+}
+
+echidna_result_t echidna_stream_update(echidna_stream_handle_t handle,
+                                       const char *profile_json,
+                                       size_t length,
+                                       uint64_t profile_generation)
+{
+    echidna::dsp_runtime::StreamDspBackend backend;
+    if (!GetStreamBackend(&backend))
+    {
+        return ECHIDNA_RESULT_NOT_AVAILABLE;
+    }
+    return GetStreamRegistry().update(handle,
+                                      profile_json,
+                                      length,
+                                      profile_generation,
+                                      backend);
+}
+
+echidna_result_t echidna_stream_destroy(echidna_stream_handle_t handle)
+{
+    return GetStreamRegistry().destroy(handle);
 }
