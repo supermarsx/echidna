@@ -166,8 +166,11 @@ namespace echidna::hooks
 
             slot.allocated = true;
             slot.handle = handle;
+            slot.config = config;
             slot.format = config.format;
+            slot.create = api.create;
             slot.process = api.process;
+            slot.update = api.update;
             slot.destroy = api.destroy;
             slot.owner = static_cast<uint32_t>(owner);
             slot.stream.store(stream, std::memory_order_relaxed);
@@ -249,8 +252,11 @@ namespace echidna::hooks
                 (void)slot.destroy(slot.handle);
             }
             slot.handle = 0;
+            slot.config = {};
             slot.format = 0;
+            slot.create = nullptr;
             slot.process = nullptr;
+            slot.update = nullptr;
             slot.destroy = nullptr;
             slot.owner = 0;
             slot.allocated = false;
@@ -295,14 +301,37 @@ namespace echidna::hooks
         bool updated = true;
         for (Slot &slot : slots_)
         {
-            if (!slot.allocated || slot.handle == 0)
+            if (!slot.allocated)
             {
                 continue;
             }
             const char *preset = admitted ? retained_preset.data() : nullptr;
             const size_t length = admitted ? retained_preset.size() : 0;
-            if (api.update(slot.handle, preset, length, next_publication) !=
-                ECHIDNA_RESULT_OK)
+            if (slot.handle == 0)
+            {
+                echidna_stream_handle_t recovered = 0;
+                const bool created = slot.create && slot.update && slot.destroy &&
+                                     slot.create(&slot.config, &recovered) ==
+                                         ECHIDNA_RESULT_OK &&
+                                     recovered != 0;
+                if (created &&
+                    slot.update(recovered, preset, length, next_publication) ==
+                        ECHIDNA_RESULT_OK)
+                {
+                    slot.handle = recovered;
+                }
+                else
+                {
+                    if (recovered != 0 && slot.destroy)
+                    {
+                        (void)slot.destroy(recovered);
+                    }
+                    updated = false;
+                }
+            }
+            else if (!slot.update ||
+                     slot.update(slot.handle, preset, length, next_publication) !=
+                         ECHIDNA_RESULT_OK)
             {
                 updated = false;
             }

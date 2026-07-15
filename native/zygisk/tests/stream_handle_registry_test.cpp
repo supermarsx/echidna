@@ -241,6 +241,183 @@ namespace
         Check(registry.destroy(second) == ECHIDNA_RESULT_OK, "destroy second");
     }
 
+    void TestExactInPlaceAndOutOfPlaceMutationTruth()
+    {
+        echidna::dsp_runtime::StreamHandleRegistry registry;
+        const auto backend = RealBackend();
+
+        const auto verify_float = [&]
+        {
+            const auto config = Config(48000, 1, ECHIDNA_PCM_FORMAT_FLOAT_32, 32);
+            echidna_stream_handle_t separate = 0;
+            echidna_stream_handle_t in_place = 0;
+            Check(registry.create(config, backend, &separate) == ECHIDNA_RESULT_OK &&
+                      registry.create(config, backend, &in_place) == ECHIDNA_RESULT_OK,
+                  "float mutation handles create");
+            Check(registry.update(separate,
+                                  kGainPreset,
+                                  std::strlen(kGainPreset),
+                                  1,
+                                  backend) == ECHIDNA_RESULT_OK &&
+                      registry.update(in_place,
+                                      kGainPreset,
+                                      std::strlen(kGainPreset),
+                                      1,
+                                      backend) == ECHIDNA_RESULT_OK,
+                  "float gain profiles publish");
+
+            const std::array<float, 8> input{
+                0.0f, 0.125f, -0.25f, 0.375f, -0.5f, 0.625f, -0.75f, 0.0f};
+            std::array<float, 8> separate_output{};
+            auto aliased = input;
+            bool separate_mutated = false;
+            bool aliased_mutated = false;
+            Check(registry.process(separate,
+                                   input.data(),
+                                   separate_output.data(),
+                                   input.size(),
+                                   ECHIDNA_PCM_FORMAT_FLOAT_32,
+                                   false,
+                                   &separate_mutated) == ECHIDNA_RESULT_OK &&
+                      registry.process(in_place,
+                                       aliased.data(),
+                                       aliased.data(),
+                                       aliased.size(),
+                                       ECHIDNA_PCM_FORMAT_FLOAT_32,
+                                       false,
+                                       &aliased_mutated) == ECHIDNA_RESULT_OK,
+                  "float gain processes in-place and out-of-place");
+            Check(separate_mutated && aliased_mutated &&
+                      std::memcmp(separate_output.data(),
+                                  aliased.data(),
+                                  sizeof(aliased)) == 0,
+                  "float mutation truth and output are alias-independent");
+
+            Check(registry.update(separate,
+                                  kPassThroughPreset,
+                                  std::strlen(kPassThroughPreset),
+                                  2,
+                                  backend) == ECHIDNA_RESULT_OK &&
+                      registry.update(in_place,
+                                      kPassThroughPreset,
+                                      std::strlen(kPassThroughPreset),
+                                      2,
+                                      backend) == ECHIDNA_RESULT_OK,
+                  "float neutral profiles publish");
+            separate_output.fill(99.0f);
+            aliased = input;
+            separate_mutated = true;
+            aliased_mutated = true;
+            Check(registry.process(separate,
+                                   input.data(),
+                                   separate_output.data(),
+                                   input.size(),
+                                   ECHIDNA_PCM_FORMAT_FLOAT_32,
+                                   false,
+                                   &separate_mutated) == ECHIDNA_RESULT_OK &&
+                      registry.process(in_place,
+                                       aliased.data(),
+                                       aliased.data(),
+                                       aliased.size(),
+                                       ECHIDNA_PCM_FORMAT_FLOAT_32,
+                                       false,
+                                       &aliased_mutated) == ECHIDNA_RESULT_OK,
+                  "float neutral processes in-place and out-of-place");
+            Check(!separate_mutated && !aliased_mutated &&
+                      std::memcmp(separate_output.data(), input.data(), sizeof(input)) == 0 &&
+                      std::memcmp(aliased.data(), input.data(), sizeof(input)) == 0,
+                  "float unchanged truth remains bit-exact for both ownership modes");
+            Check(registry.destroy(separate) == ECHIDNA_RESULT_OK &&
+                      registry.destroy(in_place) == ECHIDNA_RESULT_OK,
+                  "float mutation handles destroy");
+        };
+
+        const auto verify_pcm16 = [&]
+        {
+            const auto config = Config(44100, 1, ECHIDNA_PCM_FORMAT_SIGNED_16, 32);
+            echidna_stream_handle_t separate = 0;
+            echidna_stream_handle_t in_place = 0;
+            Check(registry.create(config, backend, &separate) == ECHIDNA_RESULT_OK &&
+                      registry.create(config, backend, &in_place) == ECHIDNA_RESULT_OK,
+                  "PCM16 mutation handles create");
+            Check(registry.update(separate,
+                                  kGainPreset,
+                                  std::strlen(kGainPreset),
+                                  1,
+                                  backend) == ECHIDNA_RESULT_OK &&
+                      registry.update(in_place,
+                                      kGainPreset,
+                                      std::strlen(kGainPreset),
+                                      1,
+                                      backend) == ECHIDNA_RESULT_OK,
+                  "PCM16 gain profiles publish");
+
+            const std::array<int16_t, 8> input{
+                0, 1000, -2000, 3000, -4000, 12000, -16000, 0};
+            std::array<int16_t, 8> separate_output{};
+            auto aliased = input;
+            bool separate_mutated = false;
+            bool aliased_mutated = false;
+            Check(registry.process(separate,
+                                   input.data(),
+                                   separate_output.data(),
+                                   input.size(),
+                                   ECHIDNA_PCM_FORMAT_SIGNED_16,
+                                   false,
+                                   &separate_mutated) == ECHIDNA_RESULT_OK &&
+                      registry.process(in_place,
+                                       aliased.data(),
+                                       aliased.data(),
+                                       aliased.size(),
+                                       ECHIDNA_PCM_FORMAT_SIGNED_16,
+                                       false,
+                                       &aliased_mutated) == ECHIDNA_RESULT_OK,
+                  "PCM16 gain processes in-place and out-of-place");
+            Check(separate_mutated && aliased_mutated && separate_output == aliased,
+                  "PCM16 mutation truth and output are alias-independent");
+
+            Check(registry.update(separate,
+                                  kPassThroughPreset,
+                                  std::strlen(kPassThroughPreset),
+                                  2,
+                                  backend) == ECHIDNA_RESULT_OK &&
+                      registry.update(in_place,
+                                      kPassThroughPreset,
+                                      std::strlen(kPassThroughPreset),
+                                      2,
+                                      backend) == ECHIDNA_RESULT_OK,
+                  "PCM16 neutral profiles publish");
+            separate_output.fill(123);
+            aliased = input;
+            separate_mutated = true;
+            aliased_mutated = true;
+            Check(registry.process(separate,
+                                   input.data(),
+                                   separate_output.data(),
+                                   input.size(),
+                                   ECHIDNA_PCM_FORMAT_SIGNED_16,
+                                   false,
+                                   &separate_mutated) == ECHIDNA_RESULT_OK &&
+                      registry.process(in_place,
+                                       aliased.data(),
+                                       aliased.data(),
+                                       aliased.size(),
+                                       ECHIDNA_PCM_FORMAT_SIGNED_16,
+                                       false,
+                                       &aliased_mutated) == ECHIDNA_RESULT_OK,
+                  "PCM16 neutral processes in-place and out-of-place");
+            Check(!separate_mutated && !aliased_mutated && separate_output == input &&
+                      aliased == input,
+                  "PCM16 unchanged truth remains exact for both ownership modes");
+            Check(registry.destroy(separate) == ECHIDNA_RESULT_OK &&
+                      registry.destroy(in_place) == ECHIDNA_RESULT_OK,
+                  "PCM16 mutation handles destroy");
+        };
+
+        verify_float();
+        verify_pcm16();
+    }
+
     struct FakeEngine
     {
         uint32_t channels{0};
@@ -248,15 +425,18 @@ namespace
     std::atomic<bool> g_fake_block{false};
     std::atomic<bool> g_fake_entered{false};
     std::atomic<bool> g_fake_release{false};
+    std::atomic<uint32_t> g_fake_quality{ECH_DSP_QUALITY_HIGH};
 
     ech_dsp_status_t FakeCreate(uint32_t,
                                 uint32_t channels,
-                                ech_dsp_quality_mode_t,
+                                ech_dsp_quality_mode_t quality,
                                 size_t,
                                 const char *,
                                 size_t,
                                 ech_dsp_engine_t **engine)
     {
+        g_fake_quality.store(static_cast<uint32_t>(quality),
+                             std::memory_order_release);
         *engine = reinterpret_cast<ech_dsp_engine_t *>(new FakeEngine{channels});
         return ECH_DSP_STATUS_OK;
     }
@@ -300,6 +480,9 @@ namespace
             Check(registry.create(config, backend, &handle) == ECHIDNA_RESULT_OK,
                   "live slot create");
         }
+        Check(g_fake_quality.load(std::memory_order_acquire) ==
+                  ECH_DSP_QUALITY_LOW_LATENCY,
+              "capture handles always request explicit low-latency quality");
         echidna_stream_handle_t overflow = 0;
         Check(registry.create(config, backend, &overflow) == ECHIDNA_RESULT_NOT_AVAILABLE &&
                   overflow == 0,
@@ -425,6 +608,7 @@ int main()
 {
     TestMixedIndependentStreams();
     TestProfileGenerationAndLegacyIsolation();
+    TestExactInPlaceAndOutOfPlaceMutationTruth();
     TestExhaustionAndDestroyRace();
     TestNoCallbackAllocationsAndGenerationExhaustion();
     std::cout << "stream_handle_registry_test: PASS\n";

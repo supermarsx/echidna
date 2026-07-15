@@ -84,8 +84,11 @@ namespace echidna::hooks
             std::atomic<void *> stream{nullptr};
             uint32_t owner{0};
             echidna_stream_handle_t handle{0};
+            echidna_stream_config_t config{};
             uint32_t format{0};
+            AAudioDspApi::CreateFn create{nullptr};
             AAudioDspApi::ProcessFn process{nullptr};
+            AAudioDspApi::UpdateFn update{nullptr};
             AAudioDspApi::DestroyFn destroy{nullptr};
             bool allocated{false};
         };

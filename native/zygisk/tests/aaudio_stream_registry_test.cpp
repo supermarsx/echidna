@@ -286,6 +286,16 @@ namespace
                                &sample,
                                1) == echidna::hooks::AAudioProcessResult::kBypassed,
               "failed update leaves global AAudio admission closed");
+        gFailUpdate = false;
+        CHECK(registry.publishProfile(13, true, "gain", api),
+              "later valid publication recovers after transient update failure");
+        sample = 0.25f;
+        CHECK(registry.process(stream,
+                               echidna::hooks::AAudioProcessOwner::kRead,
+                               &sample,
+                               1) == echidna::hooks::AAudioProcessResult::kProcessed &&
+                  sample == 0.5f,
+              "recovered publication reopens processing");
         registry.close(stream);
 
         echidna::hooks::AAudioStreamRegistry create_failure;
@@ -304,7 +314,41 @@ namespace
                                      1) == echidna::hooks::AAudioProcessResult::kUnavailable &&
                   untouched == 123,
               "create failure never falls back or mutates");
+        gFailCreate = false;
+        CHECK(create_failure.publishProfile(2, true, "gain", api),
+              "later profile publication retries a zero-handle stream");
+        CHECK(create_failure.process(failed_stream,
+                                     echidna::hooks::AAudioProcessOwner::kRead,
+                                     &untouched,
+                                     1) == echidna::hooks::AAudioProcessResult::kProcessed &&
+                  untouched == 246,
+              "transient create failure recovers without reopening the stream");
         create_failure.close(failed_stream);
+
+        ResetFake();
+        echidna::hooks::AAudioStreamRegistry initial_update_failure;
+        CHECK(initial_update_failure.publishProfile(1, true, "gain", api),
+              "update-failure policy");
+        gFailUpdate = true;
+        void *update_failed_stream = reinterpret_cast<void *>(uintptr_t{0x3200});
+        CHECK(!initial_update_failure.open(
+                  update_failed_stream,
+                  Config(48000, 1, ECHIDNA_PCM_FORMAT_SIGNED_16),
+                  echidna::hooks::AAudioProcessOwner::kRead,
+                  api),
+              "initial handle profile failure publishes no broken handle");
+        gFailUpdate = false;
+        CHECK(initial_update_failure.publishProfile(2, true, "gain", api),
+              "later generation recreates a handle after initial update failure");
+        untouched = 123;
+        CHECK(initial_update_failure.process(
+                  update_failed_stream,
+                  echidna::hooks::AAudioProcessOwner::kRead,
+                  &untouched,
+                  1) == echidna::hooks::AAudioProcessResult::kProcessed &&
+                  untouched == 246,
+              "recreated handle processes the original stream identity");
+        initial_update_failure.close(update_failed_stream);
     }
 
     void TestCloseAndPublicationQuiesceProcessing()

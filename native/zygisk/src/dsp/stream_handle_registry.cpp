@@ -167,7 +167,7 @@ namespace echidna::dsp_runtime
             state->output_scratch.resize(samples);
             const ech_dsp_status_t status = backend.create(config.sample_rate,
                                                            config.channel_count,
-                                                           ECH_DSP_QUALITY_BALANCED,
+                                                           ECH_DSP_QUALITY_LOW_LATENCY,
                                                            config.max_frames,
                                                            profile_json,
                                                            length,
@@ -390,6 +390,7 @@ namespace echidna::dsp_runtime
                     auto *destination = static_cast<int16_t *>(output);
                     for (size_t i = 0; i < samples; ++i)
                     {
+                        const int16_t original = source[i];
                         const float processed = state->output_scratch[i];
                         if (!std::isfinite(processed))
                         {
@@ -400,9 +401,9 @@ namespace echidna::dsp_runtime
                             std::bit_cast<uint32_t>(processed) !=
                             std::bit_cast<uint32_t>(state->input_scratch[i]);
                         const int16_t encoded =
-                            float_changed ? EncodeSigned16(processed) : source[i];
+                            float_changed ? EncodeSigned16(processed) : original;
+                        changed = changed || encoded != original;
                         destination[i] = encoded;
-                        changed = changed || encoded != source[i];
                     }
                 }
                 else
@@ -411,16 +412,18 @@ namespace echidna::dsp_runtime
                     auto *destination = static_cast<float *>(output);
                     for (size_t i = 0; i < samples; ++i)
                     {
+                        const uint32_t original_bits =
+                            std::bit_cast<uint32_t>(source[i]);
                         const float processed = state->output_scratch[i];
                         if (!std::isfinite(processed))
                         {
                             result = ECHIDNA_RESULT_ERROR;
                             break;
                         }
-                        destination[i] = processed;
                         changed = changed ||
                                   std::bit_cast<uint32_t>(processed) !=
-                                      std::bit_cast<uint32_t>(source[i]);
+                                      original_bits;
+                        destination[i] = processed;
                     }
                 }
                 if (mutated && result == ECHIDNA_RESULT_OK)
