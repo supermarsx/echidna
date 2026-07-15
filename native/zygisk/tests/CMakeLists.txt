@@ -27,6 +27,8 @@ endif()
 
 project(echidna-zygisk-tests LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 add_executable(zygisk_dsp_smoke_test dsp_smoke_test.cpp)
 target_link_libraries(zygisk_dsp_smoke_test PRIVATE ech_dsp)
 # Only the DSP public C API header is needed (echidna/dsp/api.h under native/dsp).
@@ -116,6 +118,19 @@ target_include_directories(profile_sync_protocol_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(profile_sync_protocol_test PRIVATE cxx_std_20)
 
+add_executable(activation_gate_test activation_gate_test.cpp)
+target_link_libraries(activation_gate_test PRIVATE Threads::Threads)
+target_include_directories(activation_gate_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(activation_gate_test PRIVATE cxx_std_20)
+
+add_executable(process_utils_test
+    process_utils_test.cpp
+    ../src/utils/process_utils.cpp)
+target_include_directories(process_utils_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(process_utils_test PRIVATE cxx_std_20)
+
 if(NOT WIN32)
   add_executable(config_shared_memory_test
       config_shared_memory_test.cpp
@@ -126,6 +141,24 @@ if(NOT WIN32)
       PRIVATE
           ${CMAKE_CURRENT_SOURCE_DIR}/../src)
   target_compile_features(config_shared_memory_test PRIVATE cxx_std_20)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  add_executable(profile_sync_server_test
+      profile_sync_server_test.cpp
+      ../src/runtime/profile_sync_server.cpp
+      ../src/runtime/profile_sync_protocol.cpp
+      ../src/state/shared_state.cpp
+      ../src/utils/config_shared_memory.cpp
+      ../src/utils/telemetry_shared_memory.cpp
+      ../src/utils/process_utils.cpp)
+  target_link_libraries(profile_sync_server_test PRIVATE Threads::Threads)
+  target_include_directories(profile_sync_server_test
+      PRIVATE
+          ${CMAKE_CURRENT_SOURCE_DIR}/../src
+          ${CMAKE_CURRENT_SOURCE_DIR}/../include
+          ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+  target_compile_features(profile_sync_server_test PRIVATE cxx_std_20)
 endif()
 
 # Emit into the top-level build dir so a `./build/<...>/zygisk_dsp_smoke_test`
@@ -141,9 +174,14 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     opensl_lifecycle_test
     tinyalsa_contract_test
     capture_route_reachability_test
-    profile_sync_protocol_test)
+    profile_sync_protocol_test
+    activation_gate_test
+    process_utils_test)
 if(NOT WIN32)
   list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS config_shared_memory_test)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS profile_sync_server_test)
 endif()
 
 set_target_properties(${ECHIDNA_ZYGISK_TEST_TARGETS} PROPERTIES
@@ -161,6 +199,11 @@ add_test(NAME opensl_lifecycle_test COMMAND opensl_lifecycle_test)
 add_test(NAME tinyalsa_contract_test COMMAND tinyalsa_contract_test)
 add_test(NAME capture_route_reachability_test COMMAND capture_route_reachability_test)
 add_test(NAME profile_sync_protocol_test COMMAND profile_sync_protocol_test)
+add_test(NAME activation_gate_test COMMAND activation_gate_test)
+add_test(NAME process_utils_test COMMAND process_utils_test)
 if(NOT WIN32)
   add_test(NAME config_shared_memory_test COMMAND config_shared_memory_test)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  add_test(NAME profile_sync_server_test COMMAND profile_sync_server_test)
 endif()

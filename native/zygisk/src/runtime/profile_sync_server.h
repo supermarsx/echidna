@@ -7,7 +7,9 @@
  */
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -30,7 +32,8 @@ namespace echidna
             ProfileSyncServer();
             ProfileSyncServer(std::string process_name,
                               SnapshotCallback callback,
-                              PresetApplier preset_applier = {});
+                              PresetApplier preset_applier = {},
+                              int64_t expected_publisher_uid = -1);
             ~ProfileSyncServer();
 
             /**
@@ -57,13 +60,26 @@ namespace echidna
              */
             void stop();
 
+            /** Quiesces publication/callbacks and interrupts I/O without joining. */
+            void beginStop();
+
+            /** Joins the quiesced worker and performs the final admission revoke. */
+            void finishStop();
+
         private:
             std::atomic<bool> running_{false};
+            std::atomic<bool> accepting_payloads_{true};
             std::thread worker_;
-            std::atomic<int> client_fd_{-1};
+            // The worker exclusively closes this descriptor. stop() only
+            // shutdowns it while holding client_mutex_ so a recycled fd can
+            // never be touched by a concurrent teardown.
+            int client_fd_{-1};
+            std::mutex client_mutex_;
             std::string process_name_;
             SnapshotCallback callback_;
+            std::mutex callback_mutex_;
             PresetApplier preset_applier_;
+            int64_t expected_publisher_uid_{-1};
             mutable std::mutex state_mutex_;
             std::mutex wait_mutex_;
             std::condition_variable stop_requested_;
@@ -71,10 +87,13 @@ namespace echidna
             std::string generation_payload_;
             DecodedProfileSnapshot current_snapshot_;
             bool has_snapshot_{false};
+            bool snapshot_published_{false};
 
             void run();
             bool readAndApply(int client_fd);
-            bool waitBeforeReconnect();
+            bool waitBeforeReconnect(std::chrono::milliseconds delay);
+            void revokeProcessAdmission(bool notify_callback);
+            void dispatchSnapshot(const DecodedProfileSnapshot &snapshot);
         };
 
     } // namespace runtime

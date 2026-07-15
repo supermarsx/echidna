@@ -5,7 +5,9 @@
  * @brief Helpers for querying the current process name and caching it.
  */
 
+#include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace echidna
 {
@@ -21,7 +23,19 @@ namespace echidna
         /**
          * @brief Returns cached process name.
          */
-        const std::string &CachedProcessName();
+        std::string CachedProcessName();
+
+        /** Parses one package UID from Android's root-owned packages.list data. */
+        int64_t ParsePackageUid(std::string_view packages_list,
+                                std::string_view package_name);
+
+        /** Reads and parses one package UID, returning -1 on any unsafe input. */
+        int64_t ResolvePackageUid(
+            std::string_view package_name,
+            const std::string &packages_list_path = "/data/system/packages.list");
+
+        /** Maps a system-user package UID to the target Android user profile. */
+        int64_t PackageUidForTargetUser(int64_t package_uid, int64_t target_uid);
 
     } // namespace utils
 } // namespace echidna

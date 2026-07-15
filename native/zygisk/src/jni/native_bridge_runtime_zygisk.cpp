@@ -9,14 +9,13 @@ namespace echidna::jni
     bool InitialiseRuntime()
     {
         auto &state = state::SharedState::instance();
-        state.refreshFromSharedMemory();
         state.setStatus(state::InternalStatus::kWaitingForAttach);
         return true;
     }
 
     bool IsRuntimeReady()
     {
-        return state::SharedState::instance().hooksEnabled();
+        return state::SharedState::instance().audioProcessingAllowed();
     }
 
     void SetRuntimeBypass(bool bypass)

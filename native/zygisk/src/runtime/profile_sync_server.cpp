@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "echidna/api.h"
+#include "runtime/reconnect_backoff.h"
 #include "state/shared_state.h"
 #include "utils/config_shared_memory.h"
 #include "utils/process_utils.h"
@@ -28,7 +29,6 @@ namespace
 {
     constexpr const char *kSocketName = "echidna_profiles";
     constexpr const char *kLogTag = "echidna_profile_sync";
-    constexpr int kReconnectDelayMs = 1000;
     constexpr int kInitialReadTimeoutMs = 750;
 
     bool SetReadTimeout(int fd, int timeout_ms)
@@ -88,7 +88,27 @@ namespace
         return true;
     }
 
-    int ConnectPublisher()
+    bool IsTrustedPublisher(int fd, int64_t expected_uid)
+    {
+        if (expected_uid < 0)
+        {
+            return false;
+        }
+        ucred credentials{};
+        socklen_t credentials_size = sizeof(credentials);
+        if (::getsockopt(fd,
+                         SOL_SOCKET,
+                         SO_PEERCRED,
+                         &credentials,
+                         &credentials_size) != 0 ||
+            credentials_size != sizeof(credentials))
+        {
+            return false;
+        }
+        return static_cast<int64_t>(credentials.uid) == expected_uid;
+    }
+
+    int ConnectPublisher(int64_t expected_uid)
     {
         const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0)
@@ -110,6 +130,7 @@ namespace
         const auto address_length = static_cast<socklen_t>(
             offsetof(sockaddr_un, sun_path) + 1 + name_length);
         if (::connect(fd, reinterpret_cast<sockaddr *>(&address), address_length) != 0 ||
+            !IsTrustedPublisher(fd, expected_uid) ||
             !SendBytes(fd, echidna::runtime::kProfileSyncV2ZygiskHello))
         {
             ::close(fd);
@@ -151,21 +172,38 @@ namespace
         return result == ECHIDNA_RESULT_OK || result == ECHIDNA_RESULT_NOT_INITIALISED;
     }
 
+    echidna::utils::ConfigurationSnapshot ConfigurationFor(
+        const echidna::runtime::DecodedProfileSnapshot &snapshot,
+        std::string_view process_name)
+    {
+        echidna::utils::ConfigurationSnapshot configuration;
+        configuration.hooks_enabled = snapshot.global_hooks_enabled;
+        if (snapshot.process_whitelisted &&
+            snapshot.capture_owner == echidna::runtime::CaptureOwner::kZygisk)
+        {
+            configuration.process_whitelist.emplace_back(process_name);
+        }
+        configuration.profile = snapshot.profile_id;
+        return configuration;
+    }
+
 } // namespace
 
 namespace echidna::runtime
 {
     ProfileSyncServer::ProfileSyncServer()
-        : ProfileSyncServer(utils::CachedProcessName(), {}, {})
+        : ProfileSyncServer(utils::CachedProcessName(), {}, {}, -1)
     {
     }
 
     ProfileSyncServer::ProfileSyncServer(std::string process_name,
                                          SnapshotCallback callback,
-                                         PresetApplier preset_applier)
+                                         PresetApplier preset_applier,
+                                         int64_t expected_publisher_uid)
         : process_name_(std::move(process_name)),
           callback_(std::move(callback)),
-          preset_applier_(std::move(preset_applier))
+          preset_applier_(std::move(preset_applier)),
+          expected_publisher_uid_(expected_publisher_uid)
     {
         if (!preset_applier_)
         {
@@ -180,7 +218,7 @@ namespace echidna::runtime
 
     bool ProfileSyncServer::refreshOnce()
     {
-        const int fd = ConnectPublisher();
+        const int fd = ConnectPublisher(expected_publisher_uid_);
         if (fd < 0)
         {
             return false;
@@ -213,19 +251,36 @@ namespace echidna::runtime
         std::string retained_payload(payload);
         DecodedProfileSnapshot retained_snapshot(candidate);
 
-        SnapshotCallback callback;
+        bool notify_callback = false;
+        DecodedProfileSnapshot published_snapshot;
         {
             std::scoped_lock lock(state_mutex_);
+            if (!accepting_payloads_.load(std::memory_order_acquire))
+            {
+                return false;
+            }
             const GenerationDecision decision = EvaluateGeneration(candidate.generation,
                                                                    payload,
                                                                    generation_,
                                                                    generation_payload_);
             if (decision == GenerationDecision::kDuplicate)
             {
-                return true;
+                if (snapshot_published_)
+                {
+                    return true;
+                }
+
+                // Disconnect revocation deliberately preserves the watermark.
+                // Re-publish an exact duplicate so the legitimate service can
+                // restore admission without inventing a new generation.
+                state::SharedState::instance().updateConfiguration(
+                    ConfigurationFor(current_snapshot_, process_name_));
+                snapshot_published_ = true;
+                published_snapshot = current_snapshot_;
+                notify_callback = true;
             }
-            if (decision == GenerationDecision::kRejectRollback ||
-                decision == GenerationDecision::kRejectConflict)
+            else if (decision == GenerationDecision::kRejectRollback ||
+                     decision == GenerationDecision::kRejectConflict)
             {
                 __android_log_print(ANDROID_LOG_WARN,
                                     kLogTag,
@@ -237,40 +292,38 @@ namespace echidna::runtime
                                         : "same_generation_conflict");
                 return false;
             }
-
-            if (candidate.nativeProcessAdmitted() && !preset_applier_(candidate.preset_json))
+            else
             {
-                __android_log_print(ANDROID_LOG_WARN,
-                                    kLogTag,
-                                    "Rejected generation=%llu: selected preset was not accepted",
-                                    static_cast<unsigned long long>(candidate.generation));
-                return false;
+                if (candidate.nativeProcessAdmitted() &&
+                    !preset_applier_(candidate.preset_json))
+                {
+                    __android_log_print(
+                        ANDROID_LOG_WARN,
+                        kLogTag,
+                        "Rejected generation=%llu: selected preset was not accepted",
+                        static_cast<unsigned long long>(candidate.generation));
+                    return false;
+                }
+
+                // The socket snapshot is process-specific. Publish directly to the
+                // process-local singleton only after every validation and preset step
+                // succeeds; do not leak one process's selected profile into a global map.
+                state::SharedState::instance().updateConfiguration(
+                    ConfigurationFor(candidate, process_name_));
+
+                generation_ = candidate.generation;
+                generation_payload_ = std::move(retained_payload);
+                current_snapshot_ = std::move(retained_snapshot);
+                has_snapshot_ = true;
+                snapshot_published_ = true;
+                published_snapshot = candidate;
+                notify_callback = true;
             }
-
-            utils::ConfigurationSnapshot configuration;
-            configuration.hooks_enabled = candidate.global_hooks_enabled;
-            if (candidate.process_whitelisted &&
-                candidate.capture_owner == CaptureOwner::kZygisk)
-            {
-                configuration.process_whitelist.push_back(process_name_);
-            }
-            configuration.profile = candidate.profile_id;
-
-            // The socket snapshot is process-specific. Publish directly to the
-            // process-local singleton only after every validation and preset step
-            // succeeds; do not leak one process's selected profile into a global map.
-            state::SharedState::instance().updateConfiguration(configuration);
-
-            generation_ = candidate.generation;
-            generation_payload_ = std::move(retained_payload);
-            current_snapshot_ = std::move(retained_snapshot);
-            has_snapshot_ = true;
-            callback = callback_;
         }
 
-        if (callback)
+        if (notify_callback)
         {
-            callback(candidate);
+            dispatchSnapshot(published_snapshot);
         }
         return true;
     }
@@ -284,7 +337,8 @@ namespace echidna::runtime
     bool ProfileSyncServer::nativeProcessAdmitted() const
     {
         std::scoped_lock lock(state_mutex_);
-        return has_snapshot_ && current_snapshot_.nativeProcessAdmitted();
+        return has_snapshot_ && snapshot_published_ &&
+               current_snapshot_.nativeProcessAdmitted();
     }
 
     void ProfileSyncServer::start()
@@ -299,51 +353,109 @@ namespace echidna::runtime
 
     void ProfileSyncServer::stop()
     {
+        beginStop();
+        finishStop();
+    }
+
+    void ProfileSyncServer::beginStop()
+    {
         running_.store(false, std::memory_order_release);
-        const int fd = client_fd_.exchange(-1);
-        if (fd >= 0)
+        accepting_payloads_.store(false, std::memory_order_release);
         {
-            ::shutdown(fd, SHUT_RDWR);
-            ::close(fd);
+            // Wait out any callback that already began, then detach permanently.
+            // applyPayload rechecks accepting_payloads_ before dispatch, so no
+            // callback can begin after this section completes.
+            std::scoped_lock lock(callback_mutex_);
+            callback_ = {};
+        }
+        // Existing hook trampolines consult SharedState directly. Revoke before
+        // waiting on the socket worker so teardown is fail-closed immediately.
+        revokeProcessAdmission(false);
+        {
+            std::scoped_lock lock(client_mutex_);
+            if (client_fd_ >= 0)
+            {
+                // Interrupt recv(), but leave close() to the worker that owns
+                // the raw descriptor. This prevents a subsequent setsockopt or
+                // close from acting on an fd number already recycled elsewhere.
+                (void)::shutdown(client_fd_, SHUT_RDWR);
+            }
         }
         stop_requested_.notify_all();
+    }
+
+    void ProfileSyncServer::finishStop()
+    {
         if (worker_.joinable())
         {
             worker_.join();
         }
+        // A frame may already have passed recv() before shutdown and then waited
+        // behind the first revoke. Clear again after join so it cannot leave the
+        // process admitted once teardown returns.
+        revokeProcessAdmission(false);
     }
 
     void ProfileSyncServer::run()
     {
+        ReconnectBackoff reconnect_backoff(static_cast<uint32_t>(::getpid()));
         while (running_.load(std::memory_order_acquire))
         {
-            const int client = ConnectPublisher();
+            const int client = ConnectPublisher(expected_publisher_uid_);
             if (client < 0)
             {
-                if (!waitBeforeReconnect())
+                if (!waitBeforeReconnect(reconnect_backoff.nextDelay()))
                 {
                     break;
                 }
+                reconnect_backoff.recordFailure();
                 continue;
             }
-            client_fd_.store(client, std::memory_order_release);
+            {
+                std::scoped_lock lock(client_mutex_);
+                if (!running_.load(std::memory_order_acquire))
+                {
+                    ::close(client);
+                    break;
+                }
+                client_fd_ = client;
+            }
             __android_log_print(ANDROID_LOG_INFO, kLogTag, "Connected to v2 profile publisher");
-            while (running_.load(std::memory_order_acquire) && readAndApply(client))
+            (void)SetReadTimeout(client, kInitialReadTimeoutMs);
+            const bool received_initial_frame = readAndApply(client);
+            (void)SetReadTimeout(client, 0);
+            if (received_initial_frame)
+            {
+                reconnect_backoff.reset();
+            }
+            while (received_initial_frame && running_.load(std::memory_order_acquire) &&
+                   readAndApply(client))
             {
                 // Keep consuming framed updates. Invalid policy frames are rejected
                 // by applyPayload without discarding the healthy stream.
             }
-            const int fd = client_fd_.exchange(-1);
-            if (fd >= 0)
             {
-                ::close(fd);
+                std::scoped_lock lock(client_mutex_);
+                if (client_fd_ == client)
+                {
+                    client_fd_ = -1;
+                }
             }
             if (running_.load(std::memory_order_acquire))
             {
-                if (!waitBeforeReconnect())
+                // A disconnected publisher is no longer authoritative. Revoke
+                // live admission and wake the lifecycle gate, while retaining
+                // generation bytes for rollback/conflict protection.
+                revokeProcessAdmission(true);
+            }
+            ::close(client);
+            if (running_.load(std::memory_order_acquire))
+            {
+                if (!waitBeforeReconnect(reconnect_backoff.nextDelay()))
                 {
                     break;
                 }
+                reconnect_backoff.recordFailure();
             }
         }
     }
@@ -375,16 +487,47 @@ namespace echidna::runtime
         return true;
     }
 
-    bool ProfileSyncServer::waitBeforeReconnect()
+    bool ProfileSyncServer::waitBeforeReconnect(std::chrono::milliseconds delay)
     {
         std::unique_lock lock(wait_mutex_);
         stop_requested_.wait_for(lock,
-                                 std::chrono::milliseconds(kReconnectDelayMs),
+                                 delay,
                                  [this]()
                                  {
                                      return !running_.load(std::memory_order_acquire);
                                  });
         return running_.load(std::memory_order_acquire);
+    }
+
+    void ProfileSyncServer::revokeProcessAdmission(bool notify_callback)
+    {
+        bool notify = false;
+        DecodedProfileSnapshot revoked_snapshot;
+        {
+            std::scoped_lock lock(state_mutex_);
+            notify = notify_callback && has_snapshot_ && snapshot_published_ &&
+                     current_snapshot_.nativeProcessAdmitted();
+            snapshot_published_ = false;
+            state::SharedState::instance().updateConfiguration(utils::ConfigurationSnapshot{});
+            if (notify)
+            {
+                revoked_snapshot = current_snapshot_;
+                revoked_snapshot.global_hooks_enabled = false;
+            }
+        }
+        if (notify)
+        {
+            dispatchSnapshot(revoked_snapshot);
+        }
+    }
+
+    void ProfileSyncServer::dispatchSnapshot(const DecodedProfileSnapshot &snapshot)
+    {
+        std::scoped_lock lock(callback_mutex_);
+        if (accepting_payloads_.load(std::memory_order_acquire) && callback_)
+        {
+            callback_(snapshot);
+        }
     }
 
 } // namespace echidna::runtime

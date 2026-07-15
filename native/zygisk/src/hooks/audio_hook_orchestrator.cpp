@@ -71,8 +71,7 @@ namespace echidna
         bool AudioHookOrchestrator::installHooks()
         {
             auto &state = state::SharedState::instance();
-            state.refreshFromSharedMemory();
-            const std::string &process = utils::CachedProcessName();
+            const std::string process = utils::CachedProcessName();
             state.prepareProcessAdmission(process);
             const bool hooks_enabled = state.hooksEnabled();
             const bool process_whitelisted = state.isProcessWhitelisted(process);
