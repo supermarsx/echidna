@@ -34,7 +34,7 @@ class ProfileStoreTest {
 
     @Before
     fun setUp() {
-        tempDir = createTempDir(prefix = "profiles")
+        tempDir = kotlin.io.path.createTempDirectory("profiles").toFile()
         executor = Executors.newSingleThreadExecutor()
         syncBridge = RecordingSyncBridge()
         store = ProfileStore(tempDir, syncBridge, executor)
@@ -43,6 +43,7 @@ class ProfileStoreTest {
     @After
     fun tearDown() {
         store.close()
+        store.awaitClosed()
         executor.shutdownNow()
         tempDir.deleteRecursively()
     }

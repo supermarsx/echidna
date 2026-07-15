@@ -26,10 +26,10 @@ import com.echidna.app.model.TelemetrySnapshot
 import com.echidna.app.model.TunerState
 import com.echidna.app.model.WhitelistBindings
 import com.echidna.app.system.ControlServiceClient
+import com.echidna.app.system.ControlServiceSyncSnapshot
 import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
 import com.echidna.app.ui.diagnostics.NoteUtils
-import com.echidna.app.data.PresetSerializer
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -46,6 +46,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val MAX_APP_STATE_BYTES = 10L * 1024L * 1024L
+
 object ControlStateRepository {
     // Spec §12: panic engages a global bypass for N minutes.
     private const val PANIC_HOLD_MS = 5L * 60L * 1000L
@@ -53,6 +55,8 @@ object ControlStateRepository {
     private lateinit var context: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var serviceClient: ControlServiceClient
+    private lateinit var presetStateWriter: LatestAtomicTextFileWriter
+    private lateinit var settingsStateWriter: LatestAtomicTextFileWriter
 
     private val _masterEnabled = MutableStateFlow(true)
     val masterEnabled: StateFlow<Boolean> = _masterEnabled.asStateFlow()
@@ -97,6 +101,7 @@ object ControlStateRepository {
     private val _whitelistBindings =
         MutableStateFlow(WhitelistBindings(emptyMap(), emptyMap()))
     val whitelistBindings: StateFlow<WhitelistBindings> = _whitelistBindings.asStateFlow()
+    @Volatile private var appBindingsAuthoritative = false
 
     private val _latencyHistogram = MutableStateFlow<List<LatencyBucket>>(emptyList())
     val latencyHistogram: StateFlow<List<LatencyBucket>> = _latencyHistogram.asStateFlow()
@@ -204,7 +209,17 @@ object ControlStateRepository {
     fun initialize(appContext: Context) {
         if (!::context.isInitialized) {
             context = appContext.applicationContext
+            presetStateWriter = LatestAtomicTextFileWriter(
+                java.io.File(context.filesDir, "echidna_presets.json")
+            )
+            settingsStateWriter = LatestAtomicTextFileWriter(
+                java.io.File(context.filesDir, "echidna_settings.json")
+            )
             loadPersistedPresets()
+            // Seed first-run defaults and immediately rewrite legacy presets after their one-time
+            // id migration. Otherwise a user can create a per-app binding before any preset edit,
+            // restart, and find that every generated default id changed underneath that binding.
+            persistPresets()
             loadPersistedSettings()
             NotificationController.ensureChannel(context)
             if (_notificationEnabled.value) {
@@ -213,12 +228,20 @@ object ControlStateRepository {
                 NotificationController.cancel(context)
             }
             serviceClient = ControlServiceClient(context)
-            serviceClient.bind()
+            // Queue the complete app-owned state before the asynchronous bind. The client applies
+            // only the newest queued value once the service connection is confirmed.
+            synchronizeServiceState()
+            scope.launch {
+                serviceClient.connectionState.collect { connected ->
+                    if (connected) fetchWhitelistBindings()
+                }
+            }
             scope.launch {
                 serviceClient.telemetryUpdates.collect { payload ->
                     TelemetryParser.parse(payload)?.let { applyTelemetry(it) }
                 }
             }
+            serviceClient.bind()
             scope.launch {
                 var tick = 0L
                 while (true) {
@@ -279,18 +302,14 @@ object ControlStateRepository {
         // card doesn't lag a poll behind the toggle (and isn't clobbered by the next telemetry).
         _engineStatus.value = _engineStatus.value.copy(active = engineActive())
         commitSettingsChange()
-        if (::serviceClient.isInitialized) {
-            scope.launch { serviceClient.setMasterEnabled(enabled) }
-        }
+        synchronizeServiceState()
     }
 
     fun setBypass(bypass: Boolean) {
         _bypass.value = bypass
         _engineStatus.value = _engineStatus.value.copy(active = engineActive(), bypass = _bypass.value)
         commitSettingsChange()
-        if (::serviceClient.isInitialized) {
-            scope.launch { serviceClient.setBypass(bypass) }
-        }
+        synchronizeServiceState()
     }
 
     fun setSidetoneEnabled(enabled: Boolean) {
@@ -306,29 +325,18 @@ object ControlStateRepository {
     }
 
     private fun pushSidetone() {
-        if (::serviceClient.isInitialized) {
-            val enabled = _sidetoneEnabled.value
-            val gain = _sidetoneLevel.value
-            scope.launch { serviceClient.setSidetone(enabled, gain) }
-        }
+        synchronizeServiceState()
     }
 
     private fun pushEngineMode() {
-        if (::serviceClient.isInitialized) {
-            val mode = _dspEngineMode.value.id
-            scope.launch { serviceClient.setEngineMode(mode) }
-        }
+        synchronizeServiceState()
     }
 
     fun setLatencyMode(mode: LatencyMode) {
         _latencyMode.value = mode
         _engineStatus.value = _engineStatus.value.copy(latencyMs = mode.targetMs)
         commitSettingsChange()
-        if (::serviceClient.isInitialized) {
-            val profileId = _activePresetId.value
-            val latencyMode = PresetSerializer.latencyModeString(mode)
-            scope.launch { serviceClient.setLatencyModeOverride(profileId, latencyMode) }
-        }
+        synchronizeServiceState()
     }
 
     /**
@@ -341,6 +349,7 @@ object ControlStateRepository {
         _engineStatus.value = _engineStatus.value.copy(active = false)
         commitSettingsChange()
         if (::serviceClient.isInitialized) {
+            synchronizeServiceState()
             scope.launch { serviceClient.triggerPanic(holdMs) }
         }
     }
@@ -348,6 +357,7 @@ object ControlStateRepository {
     fun selectPreset(presetId: String) {
         if (_presets.value.any { it.id == presetId }) {
             _activePresetId.value = presetId
+            persistPresets()
             _presets.value.firstOrNull { it.id == presetId }?.let { updatePresetWarnings(it) }
             _presets.value.firstOrNull { it.id == presetId }?.let { pushPresetToService(it) }
         }
@@ -359,6 +369,8 @@ object ControlStateRepository {
         if (idx >= 0) {
             val next = list[(idx + 1) % list.size]
             _activePresetId.value = next.id
+            persistPresets()
+            pushPresetToService(next)
         }
     }
 
@@ -373,6 +385,7 @@ object ControlStateRepository {
         )
         _presets.value = _presets.value + preset
         persistPresets()
+        synchronizeServiceState()
         return preset.id
     }
 
@@ -391,7 +404,14 @@ object ControlStateRepository {
                 _defaultPresetId.value = filtered.first().id
             }
             _presets.value = filtered
+            if (appBindingsAuthoritative) {
+                _whitelistBindings.value = _whitelistBindings.value.copy(
+                    appBindings = _whitelistBindings.value.appBindings
+                        .filterValues { presetId -> presetId != id }
+                )
+            }
             persistPresets()
+            synchronizeServiceState()
         }
     }
 
@@ -399,14 +419,15 @@ object ControlStateRepository {
         _presets.value = _presets.value.map { if (it.id == preset.id) preset else it }
         if (_activePresetId.value == preset.id) {
             updatePresetWarnings(preset)
-            pushPresetToService(preset)
         }
         persistPresets()
+        synchronizeServiceState()
     }
 
     fun renamePreset(id: String, name: String) {
         _presets.value = _presets.value.map { if (it.id == id) it.copy(name = name) else it }
         persistPresets()
+        synchronizeServiceState()
     }
 
     fun setDefaultPreset(id: String) {
@@ -540,9 +561,15 @@ object ControlStateRepository {
     }
 
     fun importPreset(json: String): String? {
-        val preset = PresetSerializer.fromJson(json) ?: return null
+        val imported = PresetSerializer.fromJson(json) ?: return null
+        val preset = if (_presets.value.any { it.id == imported.id }) {
+            imported.copy(id = UUID.randomUUID().toString())
+        } else {
+            imported
+        }
         _presets.value = _presets.value + preset
         persistPresets()
+        synchronizeServiceState()
         return preset.id
     }
 
@@ -630,58 +657,54 @@ object ControlStateRepository {
     }
 
     fun setAppPresetBinding(packageName: String, presetId: String) {
-        if (!::serviceClient.isInitialized) return
-        scope.launch {
-            try {
-                serviceClient.setAppPresetBinding(packageName, presetId)
-                fetchWhitelistBindings()
-            } catch (_: Exception) {
-            }
+        if (packageName.isBlank()) return
+        val current = _whitelistBindings.value
+        val nextBindings = if (presetId.isBlank()) {
+            current.appBindings - packageName
+        } else {
+            if (_presets.value.none { it.id == presetId }) return
+            current.appBindings + (packageName to presetId)
         }
+        appBindingsAuthoritative = true
+        _whitelistBindings.value = current.copy(appBindings = nextBindings)
+        persistPresets()
+        synchronizeServiceState()
     }
 
     private fun persistPresets() {
         if (!::context.isInitialized) return
-        scope.launch(Dispatchers.IO) {
-            try {
-                val file = java.io.File(context.filesDir, "echidna_presets.json")
-                val array = org.json.JSONArray()
-                _presets.value.forEach { preset ->
-                    val json = PresetSerializer.toJson(preset)
-                    array.put(org.json.JSONObject(json))
-                }
-                val data = org.json.JSONObject().apply {
-                    put("activePresetId", _activePresetId.value)
-                    put("defaultPresetId", _defaultPresetId.value)
-                    put("presets", array)
-                }
-                file.writeText(data.toString())
-            } catch (e: Exception) {
-                android.util.Log.e("ControlStateRepo", "Failed to persist presets", e)
-            }
-        }
+        // Capture one immutable transaction before dispatch. The single writer preserves UI
+        // mutation order; AtomicFile prevents a crash/reboot from leaving truncated JSON.
+        val payload = PresetStoreCodec.encode(
+            PersistedPresetStore(
+                presets = _presets.value,
+                activePresetId = _activePresetId.value,
+                defaultPresetId = _defaultPresetId.value,
+                appBindings = if (appBindingsAuthoritative) {
+                    _whitelistBindings.value.appBindings
+                } else {
+                    null
+                },
+            )
+        )
+        presetStateWriter.submit(payload)
     }
 
     private fun loadPersistedPresets() {
         if (!::context.isInitialized) return
         val file = java.io.File(context.filesDir, "echidna_presets.json")
         if (!file.exists()) return
-        val data = runCatching { org.json.JSONObject(file.readText()) }.getOrNull() ?: return
-        val array = data.optJSONArray("presets") ?: return
-        val presets = mutableListOf<Preset>()
-        for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
-            PresetSerializer.fromJson(obj.toString())?.let { presets.add(it) }
-        }
-        if (presets.isNotEmpty()) {
-            // Repair the active/default ids to point at the loaded list BEFORE publishing
-            // `_presets`, so the `activePreset` combine always resolves. Defaults regenerate their
-            // UUIDs each launch, so the pre-load `_activePresetId` never matches a persisted preset.
-            val activeId = data.optString("activePresetId")
-            _activePresetId.value = if (presets.any { it.id == activeId }) activeId else presets.first().id
-            val defaultId = data.optString("defaultPresetId")
-            _defaultPresetId.value = if (presets.any { it.id == defaultId }) defaultId else presets.first().id
-            _presets.value = presets
+        val restored = runCatching {
+            if (file.length() > MAX_APP_STATE_BYTES) return
+            PresetStoreCodec.decode(readAtomicUtf8(file))
+        }.getOrNull() ?: return
+        // Repair/assign ids before publishing the list so activePreset never observes a mismatch.
+        _activePresetId.value = restored.activePresetId
+        _defaultPresetId.value = restored.defaultPresetId
+        _presets.value = restored.presets
+        restored.appBindings?.let { bindings ->
+            appBindingsAuthoritative = true
+            _whitelistBindings.value = _whitelistBindings.value.copy(appBindings = bindings)
         }
     }
 
@@ -700,14 +723,8 @@ object ControlStateRepository {
         )
         _settingsState.value = store.settings
         if (!::context.isInitialized) return
-        scope.launch(Dispatchers.IO) {
-            try {
-                val file = java.io.File(context.filesDir, "echidna_settings.json")
-                file.writeText(SettingsProfileSerializer.storeToJson(store))
-            } catch (e: Exception) {
-                android.util.Log.e("ControlStateRepo", "Failed to persist settings", e)
-            }
-        }
+        val payload = SettingsProfileSerializer.storeToJson(store)
+        settingsStateWriter.submit(payload)
     }
 
     private fun loadPersistedSettings() {
@@ -718,7 +735,8 @@ object ControlStateRepository {
             return
         }
         val store = runCatching {
-            SettingsProfileSerializer.storeFromJson(file.readText())
+            if (file.length() > MAX_APP_STATE_BYTES) return@runCatching null
+            SettingsProfileSerializer.storeFromJson(readAtomicUtf8(file))
         }.getOrNull() ?: run {
             refreshSettingsState()
             return
@@ -732,6 +750,13 @@ object ControlStateRepository {
         store.activeProfileId
             ?.takeIf { store.settings.restoreLastProfile }
             ?.takeIf { id -> store.profiles.any { it.id == id } }
+
+    internal suspend fun awaitPersistenceForTest() {
+        withContext(Dispatchers.IO) {
+            check(presetStateWriter.awaitIdle()) { "preset persistence did not become idle" }
+            check(settingsStateWriter.awaitIdle()) { "settings persistence did not become idle" }
+        }
+    }
 
     private fun refreshSettingsState() {
         _settingsState.value = currentSettingsState()
@@ -811,18 +836,7 @@ object ControlStateRepository {
             }
             EchidnaWidgetProvider.updateAll(context)
         }
-        if (::serviceClient.isInitialized) {
-            val profileId = _activePresetId.value
-            val latencyMode = PresetSerializer.latencyModeString(_latencyMode.value)
-            scope.launch {
-                serviceClient.setMasterEnabled(_masterEnabled.value)
-                serviceClient.setBypass(_bypass.value)
-                serviceClient.setSidetone(_sidetoneEnabled.value, _sidetoneLevel.value)
-                serviceClient.setEngineMode(_dspEngineMode.value.id)
-                serviceClient.setLatencyModeOverride(profileId, latencyMode)
-            }
-            serviceClient.setTelemetryOptIn(_telemetryOptIn.value)
-        }
+        synchronizeServiceState()
     }
 
     /** Builds the wizard result from the real module/SELinux/HAL probe (schema §3). */
@@ -971,8 +985,23 @@ object ControlStateRepository {
             emptyMap(),
             emptyMap()
         )
-        _whitelistBindings.value = bindings
-        bindings
+        val validIds = _presets.value.mapTo(mutableSetOf(), Preset::id)
+        val wasAuthoritative = appBindingsAuthoritative
+        val resolvedBindings = if (wasAuthoritative) {
+            _whitelistBindings.value.appBindings
+        } else {
+            appBindingsAuthoritative = true
+            bindings.appBindings.filterValues(validIds::contains)
+        }
+        val resolved = WhitelistBindings(bindings.whitelist, resolvedBindings)
+        _whitelistBindings.value = resolved
+        if (!wasAuthoritative) {
+            persistPresets()
+        }
+        if (!wasAuthoritative || bindings.appBindings != resolvedBindings) {
+            synchronizeServiceState()
+        }
+        resolved
     }
 
     /** Enumerates user-launchable packages so the whitelist editor need not hand-type them. */
@@ -990,11 +1019,9 @@ object ControlStateRepository {
     }
 
     fun setTelemetryOptIn(enabled: Boolean) {
-        if (::serviceClient.isInitialized) {
-            serviceClient.setTelemetryOptIn(enabled)
-        }
         _telemetryOptIn.value = enabled
         commitSettingsChange()
+        synchronizeServiceState()
     }
 
     fun exportTelemetry(includeTrends: Boolean = true): String? {
@@ -1086,10 +1113,39 @@ object ControlStateRepository {
 
     private fun pushPresetToService(preset: Preset) {
         if (!::serviceClient.isInitialized) return
-        val json = PresetSerializer.toJson(preset)
-        // pushProfileSnapshot persists the profile AND activates it natively in one call
-        // (replaces the former pushProfile + setProfile pair; see t2-e6 §3 semantics).
-        serviceClient.pushProfileSnapshot(preset.id, json)
+        synchronizeServiceState(preset)
+    }
+
+    /**
+     * Queues one coherent app-owned state value. The client retains only the newest value until
+     * the asynchronous bind succeeds, then replays it once after each service reconnection.
+     */
+    private fun synchronizeServiceState(
+        preset: Preset = _presets.value.firstOrNull { it.id == _activePresetId.value }
+            ?: _presets.value.first(),
+    ) {
+        if (!::serviceClient.isInitialized) return
+        serviceClient.synchronize(
+            ControlServiceSyncSnapshot(
+                profileId = preset.id,
+                profileJson = PresetSerializer.toJson(preset),
+                profileBindingStateJson = if (appBindingsAuthoritative) {
+                    ProfileBindingSyncCodec.encode(
+                        presets = _presets.value,
+                        appBindings = _whitelistBindings.value.appBindings,
+                    )
+                } else {
+                    null
+                },
+                masterEnabled = _masterEnabled.value,
+                bypass = _bypass.value,
+                sidetoneEnabled = _sidetoneEnabled.value,
+                sidetoneGainDb = _sidetoneLevel.value,
+                engineMode = _dspEngineMode.value.id,
+                latencyMode = PresetSerializer.latencyModeString(_latencyMode.value),
+                telemetryOptIn = _telemetryOptIn.value,
+            )
+        )
     }
 
     private fun defaultPresets(): List<Preset> = listOf(

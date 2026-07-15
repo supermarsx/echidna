@@ -2,11 +2,10 @@ package com.echidna.control.service
 
 import android.util.Log
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -19,6 +18,8 @@ private const val MAX_PROFILE_STORE_BYTES = 10L * 1024L * 1024L
 private const val ENGINE_MODE_NATIVE_FIRST = "native_first"
 private const val ENGINE_MODE_LOW_LATENCY = "low_latency"
 private const val ENGINE_MODE_COMPATIBILITY = "compatibility"
+private const val MAX_PROFILE_ID_LENGTH = 128
+private const val CLOSE_DRAIN_TIMEOUT_MS = 1_500L
 
 /**
  * Maintains JSON profile definitions and pushes updates to the Zygisk bridge.
@@ -33,6 +34,10 @@ class ProfileStore(
     private val profiles = mutableMapOf<String, JSONObject>()
     private val whitelist = mutableMapOf<String, Boolean>()
     private val appBindings = mutableMapOf<String, String>()
+    private val flushLock = Any()
+    private var pendingSnapshot: String? = null
+    private var flushScheduled = false
+    @Volatile private var closing = false
 
     /**
      * Global engine control state. Mutated by the master/bypass/panic/sidetone
@@ -84,6 +89,7 @@ class ProfileStore(
     fun deleteProfile(id: String) {
         val snapshot = lock.write {
             if (profiles.remove(id) != null) {
+                appBindings.entries.removeAll { (_, presetId) -> presetId == id }
                 buildSnapshotLocked()
             } else {
                 null
@@ -105,7 +111,32 @@ class ProfileStore(
     }
 
     fun close() {
-        executor.shutdownNow()
+        synchronized(flushLock) {
+            if (closing) return
+            closing = true
+        }
+        executor.shutdown()
+        // Service.onDestroy runs on Android's main thread. Enforce the timeout from a daemon
+        // watchdog instead of joining the persistence worker from that lifecycle callback.
+        Thread(
+            {
+                if (!awaitClosed(CLOSE_DRAIN_TIMEOUT_MS)) {
+                    Log.w(STORE_TAG, "Timed out draining profile persistence; interrupting writer")
+                    executor.shutdownNow()
+                }
+            },
+            "echidna-profile-close-watchdog",
+        ).apply { isDaemon = true }.start()
+    }
+
+    /** Test/process-teardown join; production lifecycle code calls non-blocking [close] only. */
+    internal fun awaitClosed(timeoutMs: Long = CLOSE_DRAIN_TIMEOUT_MS): Boolean {
+        try {
+            return executor.awaitTermination(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
     }
 
     fun setLatencyOverride(profileId: String, latencyMode: String) {
@@ -125,13 +156,70 @@ class ProfileStore(
         }
         val snapshot = lock.write {
             if (presetId.isBlank()) {
-                appBindings.remove(packageName)
+                if (appBindings.remove(packageName) == null) null else buildSnapshotLocked()
+            } else if (!profiles.containsKey(presetId)) {
+                null
             } else {
                 appBindings[packageName] = presetId
+                buildSnapshotLocked()
             }
+        }
+        if (snapshot == null) {
+            if (presetId.isNotBlank()) {
+                Log.w(STORE_TAG, "Rejected dangling app binding to unknown preset: $presetId")
+            }
+            return
+        }
+        scheduleFlush(snapshot)
+    }
+
+    /** Atomically replaces all app-owned profiles and bindings from one validated document. */
+    fun synchronizeProfilesAndBindings(stateJson: String): Boolean {
+        if (stateJson.toByteArray(StandardCharsets.UTF_8).size > MAX_PROFILE_STORE_BYTES) {
+            Log.w(STORE_TAG, "Rejected profile/binding state: too large")
+            return false
+        }
+        val root = try {
+            JSONObject(stateJson)
+        } catch (exception: JSONException) {
+            Log.w(STORE_TAG, "Rejected invalid profile/binding state JSON", exception)
+            return false
+        }
+        val profileJson = root.optJSONObject("profiles") ?: return false
+        val bindingJson = root.optJSONObject("appBindings") ?: return false
+        val nextProfiles = linkedMapOf<String, JSONObject>()
+        val profileKeys = profileJson.keys()
+        while (profileKeys.hasNext()) {
+            val id = profileKeys.next()
+            val preset = profileJson.optJSONObject(id) ?: return false
+            if (id.isBlank() || id.length > MAX_PROFILE_ID_LENGTH || !isStructuredPreset(preset)) {
+                return false
+            }
+            nextProfiles[id] = preset
+        }
+        if (nextProfiles.isEmpty()) return false
+
+        val nextBindings = linkedMapOf<String, String>()
+        val bindingKeys = bindingJson.keys()
+        while (bindingKeys.hasNext()) {
+            val packageName = bindingKeys.next()
+            val presetId = bindingJson.optString(packageName)
+            if (!isValidProcessName(packageName) || !nextProfiles.containsKey(presetId)) {
+                Log.w(STORE_TAG, "Rejected dangling or invalid app binding: $packageName")
+                return false
+            }
+            nextBindings[packageName] = presetId
+        }
+
+        val snapshot = lock.write {
+            profiles.clear()
+            profiles.putAll(nextProfiles)
+            appBindings.clear()
+            appBindings.putAll(nextBindings)
             buildSnapshotLocked()
         }
         scheduleFlush(snapshot)
+        return true
     }
 
     fun getAppBindings(): Map<String, String> = lock.read {
@@ -230,24 +318,42 @@ class ProfileStore(
     }
 
     private fun scheduleFlush(snapshot: String) {
-        if (executor.isShutdown) {
-            return
-        }
-        try {
-            executor.execute {
-                writeToDisk(snapshot)
-                syncBridge.pushProfiles(snapshot)
+        synchronized(flushLock) {
+            if (closing || executor.isShutdown) return
+            pendingSnapshot = snapshot
+            if (flushScheduled) return
+            flushScheduled = true
+            try {
+                // Submit while holding the same lock close() uses before shutdown, so the newest
+                // accepted state cannot be stranded between marking and executor submission.
+                executor.execute(::drainPendingSnapshots)
+            } catch (e: RuntimeException) {
+                flushScheduled = false
+                Log.w(STORE_TAG, "Profile flush rejected; service is shutting down", e)
             }
-        } catch (e: RuntimeException) {
-            Log.w(STORE_TAG, "Profile flush rejected; service is shutting down", e)
+        }
+    }
+
+    private fun drainPendingSnapshots() {
+        while (!Thread.currentThread().isInterrupted) {
+            val snapshot = synchronized(flushLock) {
+                val next = pendingSnapshot
+                pendingSnapshot = null
+                if (next == null) flushScheduled = false
+                next
+            } ?: return
+            writeToDisk(snapshot)
+            try {
+                syncBridge.pushProfiles(snapshot)
+            } catch (exception: RuntimeException) {
+                Log.e(STORE_TAG, "Failed to publish profile snapshot", exception)
+            }
         }
     }
 
     private fun writeToDisk(payload: String) {
         try {
-            FileOutputStream(storageFile).use {
-                it.write(payload.toByteArray(StandardCharsets.UTF_8))
-            }
+            writeProfileStoreAtomic(storageFile, payload)
         } catch (e: Exception) {
             Log.e(STORE_TAG, "Failed to persist profiles", e)
         }
@@ -262,8 +368,7 @@ class ProfileStore(
             return
         }
         try {
-            val snapshot = FileInputStream(storageFile).use { input ->
-                val content = input.readBytes().toString(StandardCharsets.UTF_8)
+            val snapshot = readProfileStoreAtomic(storageFile).let { content ->
                 val json = JSONObject(content)
                 lock.write {
                     val profilesJson = json.optJSONObject("profiles") ?: JSONObject()

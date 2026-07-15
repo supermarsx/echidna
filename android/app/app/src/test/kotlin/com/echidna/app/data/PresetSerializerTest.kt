@@ -55,6 +55,7 @@ class PresetSerializerTest {
     @Test
     fun `toJson emits the documented schema keys`() {
         val root = JSONObject(PresetSerializer.toJson(fullPreset()))
+        assertEquals("fixed-id", root.getString("id"))
         assertEquals("Round Trip", root.getString("name"))
         assertEquals(1, root.getInt("version"))
         val meta = root.getJSONObject("meta")
@@ -79,7 +80,7 @@ class PresetSerializerTest {
         val restored = PresetSerializer.fromJson(PresetSerializer.toJson(original))
         assertNotNull(restored)
         restored!!
-        // id is intentionally regenerated on import; everything else must survive.
+        assertEquals(original.id, restored.id)
         assertEquals(original.name, restored.name)
         assertEquals(original.description, restored.description)
         assertEquals(original.tags, restored.tags)

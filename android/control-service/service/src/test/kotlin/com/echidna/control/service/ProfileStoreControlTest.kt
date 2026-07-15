@@ -33,7 +33,7 @@ class ProfileStoreControlTest {
 
     @Before
     fun setUp() {
-        tempDir = createTempDir(prefix = "profiles-control")
+        tempDir = kotlin.io.path.createTempDirectory("profiles-control").toFile()
         executor = Executors.newSingleThreadExecutor()
         syncBridge = CountingSyncBridge()
         store = ProfileStore(tempDir, syncBridge, executor)
@@ -42,6 +42,7 @@ class ProfileStoreControlTest {
     @After
     fun tearDown() {
         store.close()
+        store.awaitClosed()
         executor.shutdownNow()
         tempDir.deleteRecursively()
     }
@@ -117,6 +118,8 @@ class ProfileStoreControlTest {
 
     @Test
     fun `app bindings are stored, read back and cleared on blank preset`() {
+        store.saveProfile("preset-7", PRESET_JSON)
+        awaitNextSnapshot()
         store.setAppBinding("com.example.app", "preset-7")
         awaitNextSnapshot()
         assertEquals("preset-7", store.getAppBindings()["com.example.app"])
@@ -148,6 +151,36 @@ class ProfileStoreControlTest {
         // Rejected before any snapshot push; the binding must not appear.
         assertFalse(syncBridge.awaitPush(timeoutMs = 200))
         assertNull(store.getAppBindings()["bad name!"])
+    }
+
+    @Test
+    fun `atomic profile binding sync rejects dangling ids without changing state`() {
+        val valid = JSONObject()
+            .put("profiles", JSONObject().put("p1", JSONObject(PRESET_JSON)))
+            .put("appBindings", JSONObject().put("com.example.app", "p1"))
+        assertTrue(store.synchronizeProfilesAndBindings(valid.toString()))
+        awaitNextSnapshot()
+
+        val dangling = JSONObject(valid.toString())
+        dangling.getJSONObject("appBindings").put("com.example.app", "deleted")
+        assertFalse(store.synchronizeProfilesAndBindings(dangling.toString()))
+        assertFalse(syncBridge.awaitPush(timeoutMs = 200))
+        assertEquals("p1", store.getAppBindings()["com.example.app"])
+    }
+
+    @Test
+    fun `deleting a profile also removes every binding to it`() {
+        store.saveProfile("bound", PRESET_JSON)
+        awaitNextSnapshot()
+        store.setAppBinding("com.example.app", "bound")
+        awaitNextSnapshot()
+
+        store.deleteProfile("bound")
+        val deleted = awaitNextSnapshot()
+
+        assertFalse(deleted.getJSONObject("profiles").has("bound"))
+        assertFalse(deleted.getJSONObject("appBindings").has("com.example.app"))
+        assertNull(store.getAppBindings()["com.example.app"])
     }
 }
 

@@ -209,6 +209,13 @@ class EchidnaControlService : Service() {
             }
         }
 
+        override fun synchronizeProfilesAndBindings(stateJson: String?) {
+            if (stateJson.isNullOrBlank()) return
+            safeBinder("synchronize profiles and bindings", Unit) {
+                profileStore.synchronizeProfilesAndBindings(stateJson)
+            }
+        }
+
         override fun getWhitelistBindings(): String {
             return safeBinder("get whitelist bindings", "{\"whitelist\":{},\"appBindings\":{}}") {
                 profileStore.buildWhitelistBindingsJson()

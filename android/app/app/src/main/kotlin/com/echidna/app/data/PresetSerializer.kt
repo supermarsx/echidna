@@ -39,7 +39,11 @@ object PresetSerializer {
         }
         if (modules.isEmpty()) return null
         return Preset(
-            id = java.util.UUID.randomUUID().toString(),
+            // Version-0 exports did not carry an id. Generate one only for that legacy shape;
+            // version-1 persistence must preserve ids so active/default/app bindings survive restart.
+            id = root.optString("id")
+                .takeIf { it.isNotBlank() && it.length <= 128 }
+                ?: java.util.UUID.randomUUID().toString(),
             name = name,
             description = description,
             tags = tags,
@@ -51,6 +55,7 @@ object PresetSerializer {
 
     fun toJson(preset: Preset): String {
         val root = JSONObject()
+        root.put("id", preset.id)
         root.put("name", preset.name)
         root.put("version", 1)
         val meta = JSONObject()

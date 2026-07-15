@@ -5,19 +5,44 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.DeadObjectException
 import android.os.RemoteException
 import android.util.Log
 import com.echidna.control.service.EchidnaControlService
 import com.echidna.control.service.IEchidnaControlService
 import com.echidna.control.service.IEchidnaTelemetryListener
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+/**
+ * Complete app-owned state that must reach the in-process control service together.
+ *
+ * Keeping this as one immutable value lets connection recovery coalesce rapid UI changes and
+ * replay only the newest preset/control state after an asynchronous bind or service restart.
+ */
+data class ControlServiceSyncSnapshot(
+    val profileId: String,
+    val profileJson: String,
+    val profileBindingStateJson: String?,
+    val masterEnabled: Boolean,
+    val bypass: Boolean,
+    val sidetoneEnabled: Boolean,
+    val sidetoneGainDb: Float,
+    val engineMode: String,
+    val latencyMode: String,
+    val telemetryOptIn: Boolean,
+)
 
 class ControlServiceClient(private val context: Context) {
     // The control service is hosted inside THIS APK (com.echidna.app); bind the
@@ -28,7 +53,16 @@ class ControlServiceClient(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
     private val bound = AtomicBoolean(false)
-    private var service: IEchidnaControlService? = null
+    private val bindRequested = AtomicBoolean(false)
+    private val connectionGeneration = AtomicLong(0L)
+    private val syncVersion = AtomicLong(0L)
+    private val latestSync = AtomicReference<VersionedSync?>(null)
+    private val syncLock = Any()
+    @Volatile private var service: IEchidnaControlService? = null
+    @Volatile private var appliedGeneration = -1L
+    @Volatile private var appliedVersion = -1L
+    private val _connectionState = MutableStateFlow(false)
+    val connectionState: StateFlow<Boolean> = _connectionState.asStateFlow()
     private val _telemetryUpdates = MutableSharedFlow<String>(replay = 1)
     val telemetryUpdates: SharedFlow<String> = _telemetryUpdates
 
@@ -43,45 +77,78 @@ class ControlServiceClient(private val context: Context) {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            service = IEchidnaControlService.Stub.asInterface(binder)
+            val connectedService = IEchidnaControlService.Stub.asInterface(binder)
+            if (connectedService == null || !bindRequested.get()) {
+                markDisconnected()
+                releaseBinding()
+                return
+            }
+            if (bound.get() && service?.asBinder() === connectedService.asBinder()) {
+                return
+            }
+            service = connectedService
             bound.set(true)
-            try {
-                service?.registerTelemetryListener(listener)
-            } catch (ex: RemoteException) {
-                Log.e(TAG, "Failed to register telemetry listener", ex)
+            _connectionState.value = true
+            connectionGeneration.incrementAndGet()
+            // ServiceConnection callbacks run on the main thread. Replay on the IO scope because
+            // an in-process AIDL interface executes synchronously on its caller's thread.
+            scope.launch {
+                try {
+                    connectedService.registerTelemetryListener(listener)
+                } catch (ex: RemoteException) {
+                    Log.e(TAG, "Failed to register telemetry listener", ex)
+                }
+                flushLatestSync()
             }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            bound.set(false)
-            service = null
+            markDisconnected()
         }
 
         override fun onBindingDied(name: ComponentName?) {
-            bound.set(false)
-            service = null
+            markDisconnected()
+            releaseBinding()
             bind()
+        }
+
+        override fun onNullBinding(name: ComponentName?) {
+            Log.e(TAG, "Control service returned a null binding")
+            markDisconnected()
+            releaseBinding()
         }
     }
 
-    fun bind() {
-        if (!bound.get()) {
-            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    /** Starts at most one outstanding bind. Returns false when Android rejects it immediately. */
+    fun bind(): Boolean {
+        if (bound.get() || !bindRequested.compareAndSet(false, true)) {
+            return bound.get() || bindRequested.get()
         }
+        val accepted = try {
+            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        } catch (exception: RuntimeException) {
+            Log.e(TAG, "Failed to bind control service", exception)
+            false
+        }
+        if (!accepted) {
+            bindRequested.set(false)
+            markDisconnected()
+        }
+        return accepted
     }
 
     fun isBound(): Boolean = bound.get()
 
     fun unbind() {
-        if (bound.getAndSet(false)) {
+        if (bindRequested.get()) {
             try {
                 service?.unregisterTelemetryListener(listener)
             } catch (ex: RemoteException) {
                 Log.w(TAG, "Failed to unregister telemetry listener", ex)
             }
-            context.unbindService(connection)
-            service = null
+            releaseBinding()
         }
+        markDisconnected()
     }
 
     fun shutdown() {
@@ -252,6 +319,20 @@ class ControlServiceClient(private val context: Context) {
         }
     }
 
+    /**
+     * Queues the newest complete state and applies it once per connection generation.
+     *
+     * Calls made before the asynchronous bind completes are retained. Rapid changes coalesce to
+     * the latest immutable snapshot, and a service reconnect replays that current snapshot once.
+     */
+    fun synchronize(snapshot: ControlServiceSyncSnapshot) {
+        val version = syncVersion.incrementAndGet()
+        latestSync.set(VersionedSync(version, snapshot))
+        if (bound.get()) {
+            scope.launch { flushLatestSync() }
+        }
+    }
+
     fun setEngineMode(engineMode: String) {
         try {
             service?.setEngineMode(engineMode)
@@ -273,4 +354,57 @@ class ControlServiceClient(private val context: Context) {
     companion object {
         private const val TAG = "ControlServiceClient"
     }
+
+    private fun markDisconnected() {
+        bound.set(false)
+        service = null
+        _connectionState.value = false
+    }
+
+    private fun releaseBinding() {
+        if (!bindRequested.getAndSet(false)) return
+        try {
+            context.unbindService(connection)
+        } catch (exception: IllegalArgumentException) {
+            Log.w(TAG, "Control service binding was already released", exception)
+        }
+    }
+
+    private fun flushLatestSync() {
+        synchronized(syncLock) {
+            val connectedService = service ?: return
+            val generation = connectionGeneration.get()
+            val pending = latestSync.get() ?: return
+            if (appliedGeneration == generation && appliedVersion == pending.version) return
+            try {
+                val snapshot = pending.snapshot
+                snapshot.profileBindingStateJson?.let {
+                    connectedService.synchronizeProfilesAndBindings(it)
+                }
+                connectedService.pushProfileSnapshot(snapshot.profileId, snapshot.profileJson)
+                connectedService.setMasterEnabled(snapshot.masterEnabled)
+                connectedService.setBypass(snapshot.bypass)
+                connectedService.setSidetone(snapshot.sidetoneEnabled, snapshot.sidetoneGainDb)
+                connectedService.setEngineMode(snapshot.engineMode)
+                connectedService.setLatencyModeOverride(snapshot.profileId, snapshot.latencyMode)
+                connectedService.setTelemetryOptIn(snapshot.telemetryOptIn)
+                appliedGeneration = generation
+                appliedVersion = pending.version
+            } catch (exception: DeadObjectException) {
+                Log.w(TAG, "Control service died while synchronizing state", exception)
+                markDisconnected()
+                releaseBinding()
+                bind()
+            } catch (exception: RemoteException) {
+                Log.w(TAG, "Failed to synchronize current control state", exception)
+            } catch (exception: RuntimeException) {
+                Log.e(TAG, "Control service rejected current state", exception)
+            }
+        }
+    }
+
+    private data class VersionedSync(
+        val version: Long,
+        val snapshot: ControlServiceSyncSnapshot,
+    )
 }
