@@ -39,6 +39,11 @@ using echidna::effects::legacy::CapabilityStatus;
 using echidna::effects::legacy::CapabilityVerifier;
 using echidna::effects::legacy::CapabilityVerifierOptions;
 using echidna::effects::legacy::EffectContext;
+using echidna::effects::legacy::kTelemetryAuthorized;
+using echidna::effects::legacy::kTelemetryEnabled;
+using echidna::effects::legacy::kTelemetryExpired;
+using echidna::effects::legacy::kTelemetrySnapshotParameter;
+using echidna::effects::legacy::kTelemetrySnapshotReplyBytes;
 
 #define REQUIRE(condition)                                                      \
     do                                                                          \
@@ -321,6 +326,83 @@ namespace
         return result;
     }
 
+    uint16_t ReadU16(const uint8_t *data)
+    {
+        return static_cast<uint16_t>(
+            (static_cast<uint16_t>(data[0]) << 8U) | data[1]);
+    }
+
+    uint32_t ReadU32(const uint8_t *data)
+    {
+        return (static_cast<uint32_t>(data[0]) << 24U) |
+               (static_cast<uint32_t>(data[1]) << 16U) |
+               (static_cast<uint32_t>(data[2]) << 8U) |
+               data[3];
+    }
+
+    uint64_t ReadU64(const uint8_t *data)
+    {
+        return (static_cast<uint64_t>(ReadU32(data)) << 32U) |
+               ReadU32(data + 4);
+    }
+
+    struct TelemetryView
+    {
+        int32_t session_id{0};
+        uint64_t generation{0};
+        uint32_t sequence{0};
+        uint16_t flags{0};
+        uint32_t blocks{0};
+        uint32_t frames{0};
+        uint32_t failures{0};
+        uint32_t mutations{0};
+    };
+
+    bool ReadTelemetry(EffectContext *context, TelemetryView *telemetry)
+    {
+        if (context == nullptr || telemetry == nullptr)
+        {
+            return false;
+        }
+        static_assert(kTelemetrySnapshotReplyBytes % sizeof(uint32_t) == 0);
+        std::array<uint32_t,
+                   kTelemetrySnapshotReplyBytes / sizeof(uint32_t)>
+            storage{};
+        auto *parameter = reinterpret_cast<effect_param_t *>(storage.data());
+        parameter->psize = static_cast<uint32_t>(kTelemetrySnapshotParameter.size());
+        parameter->vsize = 48;
+        std::memcpy(parameter->data,
+                    kTelemetrySnapshotParameter.data(),
+                    kTelemetrySnapshotParameter.size());
+        uint32_t reply_size = kTelemetrySnapshotReplyBytes;
+        if (context->Command(EFFECT_CMD_GET_PARAM,
+                             sizeof(effect_param_t) +
+                                 kTelemetrySnapshotParameter.size(),
+                             parameter,
+                             &reply_size,
+                             parameter) != 0 ||
+            reply_size != kTelemetrySnapshotReplyBytes || parameter->status != 0 ||
+            parameter->psize != 8 || parameter->vsize != 48)
+        {
+            return false;
+        }
+        const auto *value = reinterpret_cast<const uint8_t *>(parameter->data) + 8;
+        if (std::memcmp(value, "ECHT", 4) != 0 || ReadU16(value + 4) != 1 ||
+            ReadU16(value + 6) != 1 || ReadU16(value + 8) != 48)
+        {
+            return false;
+        }
+        telemetry->flags = ReadU16(value + 10);
+        telemetry->session_id = static_cast<int32_t>(ReadU32(value + 12));
+        telemetry->generation = ReadU64(value + 16);
+        telemetry->sequence = ReadU32(value + 24);
+        telemetry->blocks = ReadU32(value + 28);
+        telemetry->frames = ReadU32(value + 32);
+        telemetry->failures = ReadU32(value + 36);
+        telemetry->mutations = ReadU32(value + 40);
+        return ReadU32(value + 44) == 0;
+    }
+
     bool Prepare(EffectContext *context)
     {
         return context && context->Initialize() == 0 &&
@@ -504,6 +586,97 @@ namespace
         std::array<float, 8> higher_output{};
         REQUIRE(ProcessProbe(&context, &higher_output));
         REQUIRE(Magnitude(higher_output) > retained_magnitude * 2.0);
+        return true;
+    }
+
+    bool TestSignedTelemetryStateAndCumulativeCounters()
+    {
+        g_now_ms = 700000;
+        SigningKey key;
+        REQUIRE(key.valid());
+        ScopedPath key_path(UniquePath("telemetry-state"));
+        REQUIRE(key.WriteSpki(key_path.get()));
+        EffectContext context(kSessionId, 17, OptionsFor(key_path.get()));
+        REQUIRE(Prepare(&context));
+
+        ClaimsSpec initial;
+        initial.generation = 11;
+        initial.issued_ms = 699990;
+        initial.expires_ms = 701000;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, initial))) == 0);
+
+        TelemetryView snapshot;
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.session_id == kSessionId);
+        REQUIRE(snapshot.generation == 11);
+        REQUIRE(snapshot.sequence == 1);
+        REQUIRE(snapshot.flags == kTelemetryAuthorized);
+        REQUIRE(snapshot.blocks == 0 && snapshot.frames == 0 &&
+                snapshot.failures == 0 && snapshot.mutations == 0);
+
+        REQUIRE(context.Enable() == 0);
+        REQUIRE(OutputDiffers(&context, true));
+        REQUIRE(context.Process(nullptr, nullptr) == -EINVAL);
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 2);
+        REQUIRE(snapshot.flags == (kTelemetryEnabled | kTelemetryAuthorized));
+        REQUIRE(snapshot.blocks == 2 && snapshot.frames == 8 &&
+                snapshot.failures == 1 && snapshot.mutations == 1);
+        const TelemetryView cumulative = snapshot;
+
+        context.RevokeAuthorization();
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 3);
+        REQUIRE(snapshot.flags == kTelemetryEnabled);
+        REQUIRE(snapshot.generation == 11 && snapshot.blocks == cumulative.blocks &&
+                snapshot.frames == cumulative.frames &&
+                snapshot.failures == cumulative.failures &&
+                snapshot.mutations == cumulative.mutations);
+
+        ClaimsSpec renewal = initial;
+        renewal.nonce[0] = 61;
+        renewal.issued_ms = 700010;
+        renewal.expires_ms = 702000;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, renewal))) == 0);
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 4);
+        REQUIRE(snapshot.flags == (kTelemetryEnabled | kTelemetryAuthorized));
+        REQUIRE(snapshot.generation == 11);
+
+        g_now_ms = renewal.expires_ms;
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 5);
+        REQUIRE(snapshot.flags == (kTelemetryEnabled | kTelemetryExpired));
+        REQUIRE(snapshot.generation == 11);
+        REQUIRE(context.Reset() == 0);
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 6);
+        REQUIRE(snapshot.flags == (kTelemetryEnabled | kTelemetryExpired));
+        REQUIRE(snapshot.blocks == cumulative.blocks &&
+                snapshot.frames == cumulative.frames &&
+                snapshot.failures == cumulative.failures &&
+                snapshot.mutations == cumulative.mutations);
+
+        REQUIRE(context.Disable() == 0);
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 7);
+        REQUIRE(snapshot.flags == kTelemetryExpired);
+        REQUIRE(snapshot.generation == 11 && snapshot.blocks == cumulative.blocks);
+
+        ClaimsSpec higher = renewal;
+        higher.generation = 12;
+        higher.nonce[0] = 62;
+        higher.issued_ms = g_now_ms;
+        higher.expires_ms = 703000;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, higher))) == 0);
+        REQUIRE(ReadTelemetry(&context, &snapshot));
+        REQUIRE(snapshot.sequence == 8);
+        REQUIRE(snapshot.flags == kTelemetryAuthorized);
+        REQUIRE(snapshot.generation == 12);
+        REQUIRE(snapshot.blocks == cumulative.blocks &&
+                snapshot.frames == cumulative.frames &&
+                snapshot.failures == cumulative.failures &&
+                snapshot.mutations == cumulative.mutations);
         return true;
     }
 
@@ -852,6 +1025,7 @@ int main()
 #else
     CHECK_TRUE(TestCanonicalVerificationAndAudio());
     CHECK_TRUE(TestVerifiedPresetSurvivesReauthorizationLifecycle());
+    CHECK_TRUE(TestSignedTelemetryStateAndCumulativeCounters());
     CHECK_TRUE(TestCanonicalBodyFixture());
     CHECK_TRUE(TestStateTransitionsAndRevoke());
     CHECK_TRUE(TestVerifierRejections());

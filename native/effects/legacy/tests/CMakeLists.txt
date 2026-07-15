@@ -16,12 +16,16 @@ target_link_libraries(legacy_effect_realtime_test PRIVATE echidna_preproc_core)
 add_executable(legacy_effect_capability_test capability_test.cpp)
 target_link_libraries(legacy_effect_capability_test PRIVATE echidna_preproc_core)
 
+add_executable(legacy_effect_telemetry_test telemetry_test.cpp)
+target_link_libraries(legacy_effect_telemetry_test PRIVATE echidna_preproc_core)
+
 set(_legacy_effect_tests
     legacy_effect_abi_test
     legacy_effect_lifecycle_test
     legacy_effect_audio_test
     legacy_effect_realtime_test
-    legacy_effect_capability_test)
+    legacy_effect_capability_test
+    legacy_effect_telemetry_test)
 foreach(_target IN LISTS _legacy_effect_tests)
   target_include_directories(${_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
   target_compile_features(${_target} PRIVATE cxx_std_20)

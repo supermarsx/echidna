@@ -1,6 +1,7 @@
 #include "effect_context.h"
 
 #include <algorithm>
+#include <bit>
 #include <cerrno>
 #include <cmath>
 #include <cstring>
@@ -35,6 +36,29 @@ namespace echidna::effects::legacy
                 std::clamp(sample,
                            static_cast<int32_t>(std::numeric_limits<int16_t>::min()),
                            static_cast<int32_t>(std::numeric_limits<int16_t>::max())));
+        }
+
+        bool DifferentFloatBits(float left, float right) noexcept
+        {
+            return std::bit_cast<uint32_t>(left) != std::bit_cast<uint32_t>(right);
+        }
+
+        void WriteParameterReplyPrefix(void *reply_data,
+                                       int32_t status,
+                                       uint32_t value_size,
+                                       const uint8_t *key) noexcept
+        {
+            auto *parameter = static_cast<effect_param_t *>(reply_data);
+            parameter->status = status;
+            parameter->psize =
+                static_cast<uint32_t>(kTelemetrySnapshotParameter.size());
+            parameter->vsize = value_size;
+            if (key != nullptr)
+            {
+                std::memcpy(parameter->data,
+                            key,
+                            kTelemetrySnapshotParameter.size());
+            }
         }
 
     } // namespace
@@ -612,9 +636,11 @@ namespace echidna::effects::legacy
         }
     }
 
-    void EffectContext::WriteProcessed(audio_buffer_t &output,
+    bool EffectContext::WriteProcessed(const audio_buffer_t &input,
+                                       audio_buffer_t &output,
                                        size_t samples) noexcept
     {
+        bool mutated = false;
         for (size_t index = 0; index < samples; ++index)
         {
             float value = output_float_[index];
@@ -638,23 +664,43 @@ namespace echidna::effects::legacy
                         existing = 0.0f;
                         Increment(counters_.sanitized_samples);
                     }
+                    const float identity =
+                        std::clamp(existing + input_float_[index], -1.0f, 1.0f);
                     value = std::clamp(existing + value, -1.0f, 1.0f);
+                    mutated = mutated || DifferentFloatBits(value, identity);
+                }
+                else
+                {
+                    mutated = mutated ||
+                              DifferentFloatBits(value, input_float_[index]);
                 }
                 output.f32[index] = value;
                 continue;
             }
 
-            const int32_t converted = static_cast<int32_t>(std::lround(value * 32767.0f));
+            const int16_t input_sample = input.s16[index];
+            const bool unchanged = !DifferentFloatBits(value, input_float_[index]);
+            const int16_t processed_sample = unchanged
+                                                 ? input_sample
+                                                 : SaturatingPcm16(
+                                                       static_cast<int32_t>(std::lround(value * 32767.0f)));
             if (config_.outputCfg.accessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE)
             {
-                output.s16[index] = SaturatingPcm16(
-                    static_cast<int32_t>(output.s16[index]) + converted);
+                const int16_t existing = output.s16[index];
+                const int16_t identity = SaturatingPcm16(
+                    static_cast<int32_t>(existing) + input_sample);
+                const int16_t processed = SaturatingPcm16(
+                    static_cast<int32_t>(existing) + processed_sample);
+                mutated = mutated || processed != identity;
+                output.s16[index] = processed;
             }
             else
             {
-                output.s16[index] = SaturatingPcm16(converted);
+                mutated = mutated || processed_sample != input_sample;
+                output.s16[index] = processed_sample;
             }
         }
+        return mutated;
     }
 
     int32_t EffectContext::Process(audio_buffer_t *input,
@@ -701,8 +747,141 @@ namespace echidna::effects::legacy
             Increment(counters_.bypass_calls);
             return Identity(input, output, samples);
         }
-        WriteProcessed(*output, samples);
+        if (WriteProcessed(*input, *output, samples))
+        {
+            Increment(counters_.mutations);
+        }
         Increment(counters_.processed_calls);
+        return 0;
+    }
+
+    TelemetryWireSnapshot EffectContext::TelemetryWireState()
+    {
+        const uint64_t now = capability_verifier_.nowBoottimeMs();
+        uint64_t generation = 0;
+        uint64_t expires = 0;
+        {
+            std::scoped_lock lock(capability_mutex_);
+            generation = capability_generation_;
+            expires = capability_expires_ms_;
+        }
+
+        uint16_t flags = 0;
+        if (enabled_.load(std::memory_order_acquire))
+        {
+            flags |= kTelemetryEnabled;
+        }
+        const bool expired = generation != 0 && expires != 0 && now >= expires;
+        if (expired)
+        {
+            flags |= kTelemetryExpired;
+        }
+        const uint32_t deadline =
+            authorization_deadline_ms_.load(std::memory_order_acquire);
+        const bool authorized =
+            permanent_bypass_status_.load(std::memory_order_acquire) == 0 &&
+            policy_allowed_.load(std::memory_order_acquire) &&
+            profile_ready_.load(std::memory_order_acquire) && !expired &&
+            CapabilityVerifier::IsActiveDeadline(static_cast<uint32_t>(now), deadline);
+        if (authorized)
+        {
+            flags |= kTelemetryAuthorized;
+        }
+
+        const uint32_t invalid =
+            counters_.invalid_calls.load(std::memory_order_relaxed);
+        const uint32_t dsp_failures =
+            counters_.dsp_failures.load(std::memory_order_relaxed);
+        return {
+            session_id_,
+            generation,
+            ModularAdd(telemetry_sequence_.fetch_add(1, std::memory_order_relaxed), 1),
+            flags,
+            counters_.process_calls.load(std::memory_order_relaxed),
+            counters_.processed_frames.load(std::memory_order_relaxed),
+            ModularAdd(invalid, dsp_failures),
+            counters_.mutations.load(std::memory_order_relaxed),
+        };
+    }
+
+    int32_t EffectContext::GetTelemetryParameter(uint32_t command_size,
+                                                 const void *command_data,
+                                                 uint32_t *reply_size,
+                                                 void *reply_data)
+    {
+        if (command_data == nullptr || command_size < sizeof(effect_param_t) ||
+            reinterpret_cast<uintptr_t>(command_data) % alignof(effect_param_t) != 0 ||
+            reply_size == nullptr)
+        {
+            return -EINVAL;
+        }
+
+        const auto &request = *static_cast<const effect_param_t *>(command_data);
+        if (!ValidTelemetryQueryLayout(request, command_size))
+        {
+            return -EINVAL;
+        }
+
+        std::array<uint8_t, kTelemetrySnapshotParameter.size()> requested_key{};
+        std::memcpy(requested_key.data(), request.data, requested_key.size());
+        const bool known = requested_key == kTelemetrySnapshotParameter;
+        const uint32_t required = static_cast<uint32_t>(
+            known ? kTelemetrySnapshotReplyBytes
+                  : sizeof(effect_param_t) + kTelemetrySnapshotParameter.size());
+        const uint32_t capacity = *reply_size;
+        *reply_size = required;
+
+        if (reply_data == nullptr ||
+            reinterpret_cast<uintptr_t>(reply_data) % alignof(effect_param_t) != 0)
+        {
+            return reply_data == nullptr ? -ENOSPC : -EINVAL;
+        }
+
+        const bool prefix_fits = capacity >= sizeof(effect_param_t);
+        const bool key_fits =
+            capacity >= sizeof(effect_param_t) + kTelemetrySnapshotParameter.size();
+        if (!known)
+        {
+            if (capacity < required)
+            {
+                if (prefix_fits)
+                {
+                    WriteParameterReplyPrefix(reply_data,
+                                              -ENOSPC,
+                                              0,
+                                              key_fits ? requested_key.data() : nullptr);
+                }
+                return -ENOSPC;
+            }
+            WriteParameterReplyPrefix(
+                reply_data, -EINVAL, 0, requested_key.data());
+            return 0;
+        }
+
+        if (request.vsize < kTelemetrySnapshotValueBytes ||
+            capacity < kTelemetrySnapshotReplyBytes)
+        {
+            if (prefix_fits)
+            {
+                WriteParameterReplyPrefix(
+                    reply_data,
+                    -ENOSPC,
+                    static_cast<uint32_t>(kTelemetrySnapshotValueBytes),
+                    key_fits ? kTelemetrySnapshotParameter.data() : nullptr);
+            }
+            return -ENOSPC;
+        }
+
+        const auto encoded = EncodeTelemetrySnapshot(TelemetryWireState());
+        WriteParameterReplyPrefix(
+            reply_data,
+            0,
+            static_cast<uint32_t>(encoded.size()),
+            kTelemetrySnapshotParameter.data());
+        auto *reply = static_cast<effect_param_t *>(reply_data);
+        std::memcpy(reply->data + kTelemetrySnapshotParameter.size(),
+                    encoded.data(),
+                    encoded.size());
         return 0;
     }
 
@@ -774,6 +953,9 @@ namespace echidna::effects::legacy
                 reply_data,
                 ApplyCapability(EffectParameterValue(parameter, command_size)));
         }
+        case EFFECT_CMD_GET_PARAM:
+            return GetTelemetryParameter(
+                command_size, command_data, reply_size, reply_data);
         case EFFECT_CMD_GET_CONFIG:
             if (command_size != 0 || reply_size == nullptr || reply_data == nullptr ||
                 *reply_size < sizeof(effect_config_t))
@@ -801,6 +983,7 @@ namespace echidna::effects::legacy
             counters_.dsp_failures.load(std::memory_order_relaxed),
             counters_.sanitized_samples.load(std::memory_order_relaxed),
             counters_.processed_frames.load(std::memory_order_relaxed),
+            counters_.mutations.load(std::memory_order_relaxed),
         };
     }
 

@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 
 add_library(echidna_preproc_core STATIC
     capability_protocol.cpp
-    effect_context.cpp)
+    effect_context.cpp
+    telemetry_protocol.cpp)
 set_target_properties(echidna_preproc_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON)
 target_include_directories(echidna_preproc_core

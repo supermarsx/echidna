@@ -102,5 +102,6 @@ int main()
     const auto telemetry = context.telemetry();
     CHECK_TRUE(telemetry.processed_calls == 1001);
     CHECK_TRUE(telemetry.dsp_failures == 0);
+    CHECK_TRUE(telemetry.mutations == 1001);
     return 0;
 }

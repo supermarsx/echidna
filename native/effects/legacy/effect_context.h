@@ -12,6 +12,7 @@
 #include "effect_abi.h"
 #include "config/preset_loader.h"
 #include "engine.h"
+#include "telemetry_protocol.h"
 
 namespace echidna::effects::legacy
 {
@@ -28,6 +29,7 @@ namespace echidna::effects::legacy
         uint32_t dsp_failures{0};
         uint32_t sanitized_samples{0};
         uint32_t processed_frames{0};
+        uint32_t mutations{0};
     };
 
     /** One independent legacy effect instance for one AudioFlinger session. */
@@ -86,6 +88,7 @@ namespace echidna::effects::legacy
             std::atomic<uint32_t> dsp_failures{0};
             std::atomic<uint32_t> sanitized_samples{0};
             std::atomic<uint32_t> processed_frames{0};
+            std::atomic<uint32_t> mutations{0};
         };
 
         struct PreparedEngine
@@ -116,8 +119,14 @@ namespace echidna::effects::legacy
                          size_t samples) noexcept;
         void ConvertInput(const audio_buffer_t &input,
                           size_t samples) noexcept;
-        void WriteProcessed(audio_buffer_t &output,
+        bool WriteProcessed(const audio_buffer_t &input,
+                            audio_buffer_t &output,
                             size_t samples) noexcept;
+        int32_t GetTelemetryParameter(uint32_t command_size,
+                                      const void *command_data,
+                                      uint32_t *reply_size,
+                                      void *reply_data);
+        TelemetryWireSnapshot TelemetryWireState();
         bool AuthorizationActive() noexcept;
         bool NonceSeen(const CapabilityNonce &nonce) const noexcept;
         void RememberNonce(const CapabilityNonce &nonce) noexcept;
@@ -150,6 +159,7 @@ namespace echidna::effects::legacy
         size_t accepted_nonce_count_{0};
         size_t next_nonce_slot_{0};
         RealtimeCounters counters_{};
+        std::atomic<uint32_t> telemetry_sequence_{0};
     };
 
     static_assert(std::atomic<uint32_t>::is_always_lock_free,

@@ -113,6 +113,7 @@ namespace
         CHECK_TRUE(telemetry.processed_calls == 1);
         CHECK_TRUE(telemetry.bypass_calls == 1);
         CHECK_TRUE(telemetry.dsp_failures == 0);
+        CHECK_TRUE(telemetry.mutations == 1);
         return 0;
     }
 
@@ -126,13 +127,14 @@ namespace
         auto neutral_preset = GainPreset(0.0f);
         CHECK_TRUE(neutral.SetPolicyPreset(true, &neutral_preset) == 0);
         CHECK_TRUE(neutral.Enable() == 0);
-        neutral.RevokeAuthorization();
         std::array<int16_t, 8> samples{-32768, -12000, -1, 0, 1, 9000, 16000, 32767};
         const auto original = samples;
         audio_buffer_t in{samples.size() / 2, {.s16 = samples.data()}};
         audio_buffer_t out{samples.size() / 2, {.s16 = samples.data()}};
         CHECK_TRUE(neutral.Process(&in, &out) == 0);
         CHECK_TRUE(samples == original);
+        CHECK_TRUE(neutral.telemetry().processed_calls == 1);
+        CHECK_TRUE(neutral.telemetry().mutations == 0);
 
         EffectContext active(104, 12);
         CHECK_TRUE(Configure(active, pcm_config) == 0);
@@ -143,6 +145,7 @@ namespace
         audio_buffer_t processed_out{processed.size() / 2, {.s16 = processed.data()}};
         CHECK_TRUE(active.Process(&in, &processed_out) == 0);
         CHECK_TRUE(processed != original);
+        CHECK_TRUE(active.telemetry().mutations == 1);
         for (size_t index = 0; index < processed.size(); ++index)
         {
             CHECK_TRUE(std::abs(static_cast<int32_t>(processed[index])) <=
@@ -157,7 +160,6 @@ namespace
         CHECK_TRUE(Configure(accumulate, accumulate_config) == 0);
         CHECK_TRUE(accumulate.SetPolicyPreset(true, &neutral_preset) == 0);
         CHECK_TRUE(accumulate.Enable() == 0);
-        accumulate.RevokeAuthorization();
         std::array<float, 2> add_input{0.1f, -0.2f};
         std::array<float, 2> add_output{0.2f, 0.3f};
         audio_buffer_t add_in{2, {.f32 = add_input.data()}};
@@ -165,6 +167,7 @@ namespace
         CHECK_TRUE(accumulate.Process(&add_in, &add_out) == 0);
         CHECK_TRUE(std::abs(add_output[0] - 0.3f) < 1e-6f);
         CHECK_TRUE(std::abs(add_output[1] - 0.1f) < 1e-6f);
+        CHECK_TRUE(accumulate.telemetry().mutations == 0);
         return 0;
     }
 
@@ -266,6 +269,8 @@ namespace
         CHECK_TRUE(ok.load(std::memory_order_relaxed));
         CHECK_TRUE(first.telemetry().processed_calls == 200);
         CHECK_TRUE(second.telemetry().processed_calls == 200);
+        CHECK_TRUE(first.telemetry().mutations == 200);
+        CHECK_TRUE(second.telemetry().mutations == 200);
         return 0;
     }
 } // namespace
