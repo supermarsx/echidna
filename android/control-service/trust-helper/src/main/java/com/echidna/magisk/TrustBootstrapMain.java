@@ -6,6 +6,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.os.Build;
+import android.os.Looper;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -390,6 +391,9 @@ public final class TrustBootstrapMain {
     }
 
     private static Context systemContext() throws Exception {
+        if (Looper.myLooper() == null) {
+            Looper.prepareMainLooper();
+        }
         Class<?> activityThread = Class.forName("android.app.ActivityThread");
         Method systemMain = activityThread.getDeclaredMethod("systemMain");
         systemMain.setAccessible(true);

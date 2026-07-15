@@ -191,6 +191,18 @@ class TrustBootstrapTest(unittest.TestCase):
         self.assertNotIn("new String(rootPin", source)
         self.assertNotIn("Arrays.toString(rootPin", source)
 
+    def test_android_helper_prepares_main_looper_before_system_context(self) -> None:
+        source = TRUST_MAIN.read_text(encoding="utf-8")
+        start = source.index("private static Context systemContext()")
+        end = source.index("private static String requireDataDir", start)
+        system_context = source[start:end]
+        self.assertIn("import android.os.Looper;", source)
+        self.assertIn("if (Looper.myLooper() == null)", system_context)
+        self.assertLess(
+            system_context.index("Looper.prepareMainLooper();"),
+            system_context.index("systemMain.invoke(null)"),
+        )
+
     @staticmethod
     def prepare_module(root: Path, mode: str) -> Path:
         module = root / "module"
