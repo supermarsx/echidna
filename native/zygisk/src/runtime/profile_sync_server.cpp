@@ -416,7 +416,7 @@ namespace
         return false;
     }
 
-    std::vector<std::string> FilterWhitelist(std::vector<std::string> whitelist)
+    std::vector<std::string> FilterWhitelist(const std::vector<std::string> &whitelist)
     {
         std::vector<std::string> filtered;
         filtered.reserve(whitelist.size());
