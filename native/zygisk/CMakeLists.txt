@@ -22,6 +22,7 @@ add_library(echidna SHARED
     src/runtime/inline_hook.cpp
     src/hooks/hook_manager.cpp
     src/hooks/aaudio_callback_registry.cpp
+    src/hooks/aaudio_hook_readiness.cpp
     src/hooks/aaudio_stream_registry.cpp
     src/hooks/aaudio_hook_manager.cpp
     src/hooks/capture_buffer_router.cpp

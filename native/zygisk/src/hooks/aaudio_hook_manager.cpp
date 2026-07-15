@@ -18,6 +18,7 @@
 
 #include "echidna/api.h"
 #include "hooks/aaudio_callback_registry.h"
+#include "hooks/aaudio_hook_readiness.h"
 #include "hooks/aaudio_stream_registry.h"
 #include "runtime/profile_sync_protocol.h"
 #include "state/shared_state.h"
@@ -40,6 +41,7 @@ namespace echidna::hooks
         DeleteBuilderFn gOriginalDeleteBuilder = nullptr;
         ReadFn gOriginalRead = nullptr;
         AAudioCallbackRegistry gCallbackRegistry;
+        AAudioHookReadiness gHookReadiness;
         AAudioStreamRegistry gStreamRegistry;
         const AAudioDspApi gDspApi{
             echidna_stream_create,
@@ -142,7 +144,7 @@ namespace echidna::hooks
         {
             const int32_t read_frames =
                 gOriginalRead ? gOriginalRead(stream, buffer, frames, timeout_ns) : -1;
-            if (read_frames <= 0 || !buffer)
+            if (read_frames <= 0 || !buffer || !gHookReadiness.readReady())
             {
                 return read_frames;
             }
@@ -178,7 +180,7 @@ namespace echidna::hooks
             }
             InvocationGuard invocation(proxy_context);
 
-            if (audio_data && frames > 0)
+            if (gHookReadiness.callbackReady() && audio_data && frames > 0)
             {
                 ProcessPcmBuffer(stream,
                                  AAudioProcessOwner::kCallback,
@@ -195,6 +197,11 @@ namespace echidna::hooks
         {
             if (!gOriginalSetDataCallback)
             {
+                return;
+            }
+            if (!gHookReadiness.callbackReady())
+            {
+                gOriginalSetDataCallback(builder, callback, user_data);
                 return;
             }
             if (!callback)
@@ -220,10 +227,20 @@ namespace echidna::hooks
                 gOriginalOpenStream ? gOriginalOpenStream(builder, stream_out) : -1;
             if (result == kAAudioResultOk && stream_out && *stream_out)
             {
-                const bool callback_owned =
+                const uint32_t ready_routes = gHookReadiness.snapshot();
+                if (ready_routes == 0)
+                {
+                    return result;
+                }
+                const bool callback_ready =
+                    (ready_routes & AAudioHookReadiness::kCallbackRoute) != 0;
+                const bool read_ready =
+                    (ready_routes & AAudioHookReadiness::kReadRoute) != 0;
+                const bool callback_owned = callback_ready &&
                     gCallbackRegistry.attachOpenedStream(builder, *stream_out);
                 const echidna_stream_config_t config = QueryStreamConfig(*stream_out);
-                if (config.struct_size == sizeof(config))
+                if (config.struct_size == sizeof(config) &&
+                    (callback_owned || read_ready))
                 {
                     const bool ready = gStreamRegistry.open(
                         *stream_out,
@@ -246,8 +263,11 @@ namespace echidna::hooks
         {
             // Stop proxy admission before quiescing and destroying the DSP
             // handle. A failed platform close remains permanently bypassed.
-            gCallbackRegistry.closeStream(stream);
-            gStreamRegistry.close(stream);
+            if (gHookReadiness.lifecycleReady())
+            {
+                gCallbackRegistry.closeStream(stream);
+                gStreamRegistry.close(stream);
+            }
             return gOriginalCloseStream ? gOriginalCloseStream(stream) : -1;
         }
 
@@ -255,7 +275,7 @@ namespace echidna::hooks
         {
             const int32_t result =
                 gOriginalDeleteBuilder ? gOriginalDeleteBuilder(builder) : -1;
-            if (result == kAAudioResultOk)
+            if (result == kAAudioResultOk && gHookReadiness.callbackReady())
             {
                 gCallbackRegistry.retireBuilder(builder);
             }
@@ -284,6 +304,7 @@ namespace echidna::hooks
     bool AAudioHookManager::install()
     {
         last_info_ = {};
+        gHookReadiness.clear();
         constexpr const char *kLibrary = "libaaudio.so";
 
         gStreamFns.get_sample_rate = reinterpret_cast<StreamFns::GetIntFn>(
@@ -300,66 +321,78 @@ namespace echidna::hooks
             return false;
         }
 
-        bool read_installed = false;
-        bool callback_installed = false;
-        bool hook_failed = false;
-
-        if (void *read = resolver_.findSymbol(kLibrary, "AAudioStream_read"))
-        {
-            read_installed = hook_read_.install(
-                read,
-                reinterpret_cast<void *>(&ForwardRead),
-                reinterpret_cast<void **>(&gOriginalRead));
-            hook_failed = hook_failed || !read_installed;
-        }
-
         void *open = resolver_.findSymbol(kLibrary, "AAudioStreamBuilder_openStream");
         void *close = resolver_.findSymbol(kLibrary, "AAudioStream_close");
         void *delete_builder =
             resolver_.findSymbol(kLibrary, "AAudioStreamBuilder_delete");
         void *set_callback =
             resolver_.findSymbol(kLibrary, "AAudioStreamBuilder_setDataCallback");
-        if (open && close && delete_builder && set_callback)
-        {
-            const bool open_installed = hook_open_stream_.install(
-                open,
-                reinterpret_cast<void *>(&ForwardOpenStream),
-                reinterpret_cast<void **>(&gOriginalOpenStream));
-            const bool close_installed = hook_close_stream_.install(
-                close,
-                reinterpret_cast<void *>(&ForwardCloseStream),
-                reinterpret_cast<void **>(&gOriginalCloseStream));
-            const bool delete_installed = hook_delete_builder_.install(
-                delete_builder,
-                reinterpret_cast<void *>(&ForwardDeleteBuilder),
-                reinterpret_cast<void **>(&gOriginalDeleteBuilder));
-            if (open_installed && close_installed && delete_installed)
-            {
-                callback_installed = hook_set_data_callback_.install(
-                    set_callback,
-                    reinterpret_cast<void *>(&ForwardSetDataCallback),
-                    reinterpret_cast<void **>(&gOriginalSetDataCallback));
-            }
-            hook_failed = hook_failed || !open_installed || !close_installed ||
-                          !delete_installed || !callback_installed;
-        }
+        void *read = resolver_.findSymbol(kLibrary, "AAudioStream_read");
 
-        last_info_.success = read_installed || callback_installed;
+        const AAudioHookAvailability available{
+            .open = open != nullptr,
+            .close = close != nullptr,
+            .delete_builder = delete_builder != nullptr,
+            .set_data_callback = set_callback != nullptr,
+            .read = read != nullptr,
+        };
+        const AAudioHookInstallation installed = InstallAAudioHookSet(
+            available,
+            [this, open, close, delete_builder, set_callback, read](AAudioHookRole role)
+            {
+                switch (role)
+                {
+                case AAudioHookRole::kClose:
+                    return hook_close_stream_.install(
+                        close,
+                        reinterpret_cast<void *>(&ForwardCloseStream),
+                        reinterpret_cast<void **>(&gOriginalCloseStream));
+                case AAudioHookRole::kDeleteBuilder:
+                    return hook_delete_builder_.install(
+                        delete_builder,
+                        reinterpret_cast<void *>(&ForwardDeleteBuilder),
+                        reinterpret_cast<void **>(&gOriginalDeleteBuilder));
+                case AAudioHookRole::kSetDataCallback:
+                    return hook_set_data_callback_.install(
+                        set_callback,
+                        reinterpret_cast<void *>(&ForwardSetDataCallback),
+                        reinterpret_cast<void **>(&gOriginalSetDataCallback));
+                case AAudioHookRole::kRead:
+                    return hook_read_.install(
+                        read,
+                        reinterpret_cast<void *>(&ForwardRead),
+                        reinterpret_cast<void **>(&gOriginalRead));
+                case AAudioHookRole::kOpen:
+                    return hook_open_stream_.install(
+                        open,
+                        reinterpret_cast<void *>(&ForwardOpenStream),
+                        reinterpret_cast<void **>(&gOriginalOpenStream));
+                }
+                return false;
+            });
+        gHookReadiness.publish(installed);
+
+        last_info_.success = installed.anyRouteComplete();
         if (last_info_.success)
         {
             last_info_.library = kLibrary;
-            last_info_.symbol = callback_installed
+            last_info_.symbol = installed.callbackRouteComplete()
                                     ? "AAudioStreamBuilder_setDataCallback"
                                     : "AAudioStream_read";
             __android_log_print(ANDROID_LOG_INFO,
                                 "echidna",
                                 "AAudio input transform hooks installed (read=%d callback=%d)",
-                                read_installed,
-                                callback_installed);
+                                installed.readRouteComplete(),
+                                installed.callbackRouteComplete());
             return true;
         }
 
-        last_info_.reason = hook_failed ? "hook_failed" : "transform_symbol_not_found";
+        const bool transform_symbols_present = available.open && available.close &&
+            (available.read ||
+             (available.delete_builder && available.set_data_callback));
+        last_info_.reason = transform_symbols_present
+                                ? "hook_failed"
+                                : "transform_symbol_not_found";
         __android_log_print(ANDROID_LOG_WARN,
                             "echidna",
                             "AAudio transform hook not installed: %s",
