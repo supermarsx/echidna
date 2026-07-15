@@ -88,13 +88,29 @@ namespace echidna::effects::legacy
             std::atomic<uint32_t> processed_frames{0};
         };
 
+        struct PreparedEngine
+        {
+            std::unique_ptr<echidna::dsp::DspEngine> engine;
+            std::vector<float> input;
+            std::vector<float> output;
+        };
+
         static bool ValidateConfig(const effect_config_t &config,
                                    uint32_t *channels) noexcept;
         static size_t SampleCount(size_t frames, uint32_t channels) noexcept;
         static void Increment(std::atomic<uint32_t> &counter,
                               uint32_t amount = 1) noexcept;
 
-        int32_t RebuildEngine(uint32_t sample_rate, uint32_t channels);
+        static int32_t BuildPreparedEngine(
+            uint32_t sample_rate,
+            uint32_t channels,
+            const echidna::dsp::config::PresetDefinition *preset,
+            PreparedEngine *prepared);
+        void CommitPreparedEngine(PreparedEngine prepared,
+                                  bool preset_ready) noexcept;
+        int32_t RebuildEngineLocked(uint32_t sample_rate, uint32_t channels);
+        int32_t PrepareVerifiedPresetLocked(
+            const echidna::dsp::config::PresetDefinition &preset);
         int32_t Identity(audio_buffer_t *input,
                          audio_buffer_t *output,
                          size_t samples) noexcept;
@@ -112,7 +128,7 @@ namespace echidna::effects::legacy
         effect_config_t config_{};
         uint32_t channels_{0};
         std::unique_ptr<echidna::dsp::DspEngine> engine_;
-        echidna::dsp::config::PresetDefinition preset_{};
+        std::unique_ptr<echidna::dsp::config::PresetDefinition> verified_preset_;
         std::vector<float> input_float_;
         std::vector<float> output_float_;
         std::atomic<bool> configured_{false};
@@ -123,6 +139,7 @@ namespace echidna::effects::legacy
         std::atomic<int32_t> permanent_bypass_status_{0};
         CapabilityVerifier capability_verifier_;
         std::mutex capability_mutex_;
+        bool engine_preset_ready_{false};
         uint64_t capability_generation_{0};
         uint64_t capability_issued_ms_{0};
         uint64_t capability_expires_ms_{0};

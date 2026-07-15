@@ -327,15 +327,38 @@ namespace
                context->SetConfig(MakeEffectConfig()) == 0;
     }
 
+    bool ProcessProbe(EffectContext *context,
+                      std::array<float, 8> *output,
+                      int32_t expected_status = 0)
+    {
+        if (!context || !output)
+        {
+            return false;
+        }
+        std::array<float, 8> input{0.25f, -0.25f, 0.5f, -0.5f,
+                                   0.1f, -0.1f, 0.8f, -0.8f};
+        output->fill(0.0f);
+        audio_buffer_t input_buffer{input.size(), {.f32 = input.data()}};
+        audio_buffer_t output_buffer{output->size(), {.f32 = output->data()}};
+        return context->Process(&input_buffer, &output_buffer) == expected_status;
+    }
+
+    double Magnitude(const std::array<float, 8> &samples)
+    {
+        double magnitude = 0.0;
+        for (float sample : samples)
+        {
+            magnitude += std::abs(sample);
+        }
+        return magnitude;
+    }
+
     bool OutputDiffers(EffectContext *context, bool expected_difference)
     {
         std::array<float, 8> input{0.25f, -0.25f, 0.5f, -0.5f,
                                    0.1f, -0.1f, 0.8f, -0.8f};
         std::array<float, 8> output{};
-        audio_buffer_t input_buffer{input.size(), {.f32 = input.data()}};
-        audio_buffer_t output_buffer{output.size(), {.f32 = output.data()}};
-        const int32_t status = context->Process(&input_buffer, &output_buffer);
-        if (status != 0)
+        if (!ProcessProbe(context, &output))
         {
             return false;
         }
@@ -388,6 +411,99 @@ namespace
         REQUIRE(OutputDiffers(&context, false));
         REQUIRE(context.Disable() == 0);
         REQUIRE(context.Enable() == -EPERM);
+        return true;
+    }
+
+    bool TestVerifiedPresetSurvivesReauthorizationLifecycle()
+    {
+        g_now_ms = 600000;
+        SigningKey key;
+        REQUIRE(key.valid());
+        ScopedPath key_path(UniquePath("preset-lifecycle"));
+        REQUIRE(key.WriteSpki(key_path.get()));
+        EffectContext context(kSessionId, 12, OptionsFor(key_path.get()));
+        REQUIRE(Prepare(&context));
+
+        ClaimsSpec initial;
+        initial.generation = 7;
+        initial.issued_ms = 599990;
+        initial.expires_ms = 600900;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, initial))) == 0);
+        REQUIRE(context.Enable() == 0);
+        std::array<float, 8> initial_output{};
+        REQUIRE(ProcessProbe(&context, &initial_output));
+        REQUIRE(OutputDiffers(&context, true));
+        const double retained_magnitude = Magnitude(initial_output);
+        REQUIRE(retained_magnitude > 0.1);
+
+        REQUIRE(context.Disable() == 0);
+        REQUIRE(context.Enable() == -EPERM);
+        REQUIRE(context.SetConfig(MakeEffectConfig(
+                    44100, AUDIO_CHANNEL_IN_MONO, AUDIO_FORMAT_PCM_FLOAT)) == 0);
+        REQUIRE(context.Enable() == -EPERM);
+
+        ClaimsSpec after_config = initial;
+        after_config.nonce[0] = 31;
+        after_config.issued_ms = 600010;
+        after_config.expires_ms = 601500;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, after_config))) == 0);
+        REQUIRE(context.Enable() == 0);
+        REQUIRE(OutputDiffers(&context, true));
+
+        REQUIRE(context.Disable() == 0);
+        REQUIRE(context.Reset() == 0);
+        REQUIRE(context.Enable() == -EPERM);
+        ClaimsSpec after_reset = after_config;
+        after_reset.nonce[0] = 32;
+        after_reset.issued_ms = 600020;
+        after_reset.expires_ms = 602000;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, after_reset))) == 0);
+        REQUIRE(context.Enable() == 0);
+        REQUIRE(OutputDiffers(&context, true));
+
+        context.RevokeAuthorization();
+        const auto before_revoke = context.telemetry();
+        REQUIRE(OutputDiffers(&context, false));
+        const auto after_revoke_telemetry = context.telemetry();
+        REQUIRE(after_revoke_telemetry.processed_calls ==
+                before_revoke.processed_calls);
+        REQUIRE(after_revoke_telemetry.bypass_calls ==
+                before_revoke.bypass_calls + 1);
+        ClaimsSpec after_revoke = after_reset;
+        after_revoke.nonce[0] = 33;
+        after_revoke.issued_ms = 600030;
+        after_revoke.expires_ms = 602500;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, after_revoke))) == 0);
+        REQUIRE(OutputDiffers(&context, true));
+
+        g_now_ms = after_revoke.expires_ms;
+        const auto before_expiry = context.telemetry();
+        REQUIRE(OutputDiffers(&context, false));
+        const auto after_expiry_telemetry = context.telemetry();
+        REQUIRE(after_expiry_telemetry.processed_calls ==
+                before_expiry.processed_calls);
+        REQUIRE(after_expiry_telemetry.bypass_calls ==
+                before_expiry.bypass_calls + 1);
+        ClaimsSpec after_expiry = after_revoke;
+        after_expiry.nonce[0] = 34;
+        after_expiry.issued_ms = g_now_ms;
+        after_expiry.expires_ms = 603500;
+        REQUIRE(context.ApplyCapability(BytesView(BuildEnvelope(key, after_expiry))) == 0);
+        REQUIRE(OutputDiffers(&context, true));
+
+        REQUIRE(context.Disable() == 0);
+        ClaimsSpec higher_generation = after_expiry;
+        higher_generation.generation = 8;
+        higher_generation.nonce[0] = 35;
+        higher_generation.expires_ms = 604000;
+        higher_generation.preset =
+            R"({"name":"Higher","engine":{"latencyMode":"LL","blockMs":10},"modules":[{"id":"mix","wet":100,"outGain":-3}]})";
+        REQUIRE(context.ApplyCapability(
+                    BytesView(BuildEnvelope(key, higher_generation))) == 0);
+        REQUIRE(context.Enable() == 0);
+        std::array<float, 8> higher_output{};
+        REQUIRE(ProcessProbe(&context, &higher_output));
+        REQUIRE(Magnitude(higher_output) > retained_magnitude * 2.0);
         return true;
     }
 
@@ -735,6 +851,7 @@ int main()
     return 0;
 #else
     CHECK_TRUE(TestCanonicalVerificationAndAudio());
+    CHECK_TRUE(TestVerifiedPresetSurvivesReauthorizationLifecycle());
     CHECK_TRUE(TestCanonicalBodyFixture());
     CHECK_TRUE(TestStateTransitionsAndRevoke());
     CHECK_TRUE(TestVerifierRejections());

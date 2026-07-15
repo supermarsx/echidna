@@ -132,30 +132,37 @@ namespace echidna::effects::legacy
             return -EBUSY;
         }
         RevokeAuthorization();
+        std::scoped_lock lock(capability_mutex_);
         configured_.store(false, std::memory_order_release);
         engine_.reset();
         input_float_.clear();
         output_float_.clear();
         config_ = {};
         channels_ = 0;
-        preset_ = {};
-        {
-            std::scoped_lock lock(capability_mutex_);
-            capability_generation_ = 0;
-            capability_issued_ms_ = 0;
-            capability_expires_ms_ = 0;
-            capability_target_uid_ = 0;
-            capability_process_.clear();
-            capability_preset_hash_.fill(0);
-            accepted_nonce_count_ = 0;
-            next_nonce_slot_ = 0;
-        }
+        verified_preset_.reset();
+        engine_preset_ready_ = false;
+        capability_generation_ = 0;
+        capability_issued_ms_ = 0;
+        capability_expires_ms_ = 0;
+        capability_target_uid_ = 0;
+        capability_process_.clear();
+        capability_preset_hash_.fill(0);
+        accepted_nonce_count_ = 0;
+        next_nonce_slot_ = 0;
         lifecycle_ = Lifecycle::kInitialized;
         return 0;
     }
 
-    int32_t EffectContext::RebuildEngine(uint32_t sample_rate, uint32_t channels)
+    int32_t EffectContext::BuildPreparedEngine(
+        uint32_t sample_rate,
+        uint32_t channels,
+        const echidna::dsp::config::PresetDefinition *preset,
+        PreparedEngine *prepared)
     {
+        if (prepared == nullptr)
+        {
+            return -EINVAL;
+        }
         try
         {
             echidna::dsp::DspEngineOptions options;
@@ -163,8 +170,8 @@ namespace echidna::effects::legacy
             options.lock_free_realtime_process = true;
             auto candidate = std::make_unique<echidna::dsp::DspEngine>(
                 sample_rate, channels, ECH_DSP_QUALITY_LOW_LATENCY, options);
-            if (profile_ready_.load(std::memory_order_acquire) &&
-                candidate->UpdatePreset(preset_) != ECH_DSP_STATUS_OK)
+            if (preset != nullptr &&
+                candidate->UpdatePreset(*preset) != ECH_DSP_STATUS_OK)
             {
                 return -EINVAL;
             }
@@ -175,9 +182,61 @@ namespace echidna::effects::legacy
             const size_t max_samples = kMaxFramesPerProcess * channels;
             std::vector<float> input(max_samples, 0.0f);
             std::vector<float> output(max_samples, 0.0f);
-            engine_ = std::move(candidate);
-            input_float_ = std::move(input);
-            output_float_ = std::move(output);
+            prepared->engine = std::move(candidate);
+            prepared->input = std::move(input);
+            prepared->output = std::move(output);
+            return 0;
+        }
+        catch (const std::bad_alloc &)
+        {
+            return -ENOMEM;
+        }
+        catch (...)
+        {
+            return -EINVAL;
+        }
+    }
+
+    void EffectContext::CommitPreparedEngine(PreparedEngine prepared,
+                                             bool preset_ready) noexcept
+    {
+        engine_ = std::move(prepared.engine);
+        input_float_ = std::move(prepared.input);
+        output_float_ = std::move(prepared.output);
+        engine_preset_ready_ = preset_ready;
+    }
+
+    int32_t EffectContext::RebuildEngineLocked(uint32_t sample_rate,
+                                               uint32_t channels)
+    {
+        PreparedEngine prepared;
+        const auto *preset = verified_preset_.get();
+        const int32_t status =
+            BuildPreparedEngine(sample_rate, channels, preset, &prepared);
+        if (status != 0)
+        {
+            return status;
+        }
+        CommitPreparedEngine(std::move(prepared), preset != nullptr);
+        return 0;
+    }
+
+    int32_t EffectContext::PrepareVerifiedPresetLocked(
+        const echidna::dsp::config::PresetDefinition &preset)
+    {
+        try
+        {
+            auto verified = std::make_unique<
+                echidna::dsp::config::PresetDefinition>(preset);
+            PreparedEngine prepared;
+            const int32_t status = BuildPreparedEngine(
+                config_.inputCfg.samplingRate, channels_, verified.get(), &prepared);
+            if (status != 0)
+            {
+                return status;
+            }
+            verified_preset_ = std::move(verified);
+            CommitPreparedEngine(std::move(prepared), true);
             return 0;
         }
         catch (const std::bad_alloc &)
@@ -206,7 +265,10 @@ namespace echidna::effects::legacy
         {
             return -EINVAL;
         }
-        const int32_t status = RebuildEngine(config.inputCfg.samplingRate, channels);
+        RevokeAuthorization();
+        std::scoped_lock lock(capability_mutex_);
+        const int32_t status =
+            RebuildEngineLocked(config.inputCfg.samplingRate, channels);
         if (status != 0)
         {
             return status;
@@ -254,8 +316,10 @@ namespace echidna::effects::legacy
         }
         const bool was_enabled = enabled_.load(std::memory_order_acquire);
         enabled_.store(false, std::memory_order_release);
-        const int32_t status = RebuildEngine(config_.inputCfg.samplingRate, channels_);
         RevokeAuthorization();
+        std::scoped_lock lock(capability_mutex_);
+        const int32_t status =
+            RebuildEngineLocked(config_.inputCfg.samplingRate, channels_);
         if (status != 0)
         {
             lifecycle_ = Lifecycle::kConfigured;
@@ -288,39 +352,26 @@ namespace echidna::effects::legacy
         {
             return -EBUSY;
         }
-        policy_allowed_.store(false, std::memory_order_release);
-        profile_ready_.store(false, std::memory_order_release);
+        RevokeAuthorization();
+        std::scoped_lock lock(capability_mutex_);
         if (preset == nullptr)
         {
-            preset_ = {};
+            verified_preset_.reset();
+            engine_preset_ready_ = false;
             return 0;
         }
-        try
+        const int32_t status = PrepareVerifiedPresetLocked(*preset);
+        if (status != 0)
         {
-            auto candidate = *preset;
-            if (engine_ == nullptr ||
-                engine_->UpdatePreset(candidate) != ECH_DSP_STATUS_OK ||
-                engine_->PrepareRealtime(kMaxFramesPerProcess) != ECH_DSP_STATUS_OK)
-            {
-                return -EINVAL;
-            }
-            preset_ = std::move(candidate);
-            profile_ready_.store(true, std::memory_order_release);
-            const uint64_t now = capability_verifier_.nowBoottimeMs();
-            authorization_deadline_ms_.store(
-                static_cast<uint32_t>(now + kCapabilityMaxLifetimeMs),
-                std::memory_order_release);
-            policy_allowed_.store(policy_allowed, std::memory_order_release);
-            return 0;
+            return status;
         }
-        catch (const std::bad_alloc &)
-        {
-            return -ENOMEM;
-        }
-        catch (...)
-        {
-            return -EINVAL;
-        }
+        const uint64_t now = capability_verifier_.nowBoottimeMs();
+        authorization_deadline_ms_.store(
+            static_cast<uint32_t>(now + kCapabilityMaxLifetimeMs),
+            std::memory_order_release);
+        profile_ready_.store(true, std::memory_order_release);
+        policy_allowed_.store(policy_allowed, std::memory_order_release);
+        return 0;
     }
 
     bool EffectContext::NonceSeen(const CapabilityNonce &nonce) const noexcept
@@ -400,6 +451,21 @@ namespace echidna::effects::legacy
             {
                 return kCapabilityConflictStatus;
             }
+            if (!verified_preset_)
+            {
+                RevokeAuthorization();
+                return -ENODATA;
+            }
+            if (!engine_preset_ready_)
+            {
+                const int32_t rebuild_status = RebuildEngineLocked(
+                    config_.inputCfg.samplingRate, channels_);
+                if (rebuild_status != 0)
+                {
+                    RevokeAuthorization();
+                    return rebuild_status;
+                }
+            }
             capability_issued_ms_ = claims.issued_boottime_ms;
             capability_expires_ms_ = claims.expires_boottime_ms;
             RememberNonce(claims.nonce);
@@ -415,6 +481,7 @@ namespace echidna::effects::legacy
         {
             return kCapabilityBusyStatus;
         }
+        RevokeAuthorization();
         const auto loaded =
             echidna::dsp::config::LoadPresetFromJson(claims.preset_json);
         if (!loaded.ok)
@@ -422,7 +489,7 @@ namespace echidna::effects::legacy
             RevokeAuthorization();
             return -EINVAL;
         }
-        const int32_t preset_status = SetPolicyPreset(true, &loaded.preset);
+        const int32_t preset_status = PrepareVerifiedPresetLocked(loaded.preset);
         if (preset_status != 0)
         {
             RevokeAuthorization();
@@ -438,6 +505,8 @@ namespace echidna::effects::legacy
         authorization_deadline_ms_.store(
             static_cast<uint32_t>(claims.expires_boottime_ms),
             std::memory_order_release);
+        profile_ready_.store(true, std::memory_order_release);
+        policy_allowed_.store(true, std::memory_order_release);
         return 0;
     }
 
