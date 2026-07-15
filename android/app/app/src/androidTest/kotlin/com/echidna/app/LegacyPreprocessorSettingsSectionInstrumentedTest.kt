@@ -1,6 +1,7 @@
 package com.echidna.app
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -62,14 +63,17 @@ class LegacyPreprocessorSettingsSectionInstrumentedTest {
     @Test
     fun confirmedStateIsAccessibleAndToggleRequestsAServiceUpdate() {
         val requested = AtomicBoolean(false)
+        val state = mutableStateOf(
+            LegacyPreprocessorControlState(
+                enabled = false,
+                loaded = true,
+                available = true,
+            ),
+        )
         composeRule.setContent {
             MaterialTheme {
                 LegacyPreprocessorSection(
-                    state = LegacyPreprocessorControlState(
-                        enabled = false,
-                        loaded = true,
-                        available = true,
-                    ),
+                    state = state.value,
                     onEnabledChange = requested::set,
                 )
             }
@@ -87,18 +91,13 @@ class LegacyPreprocessorSettingsSectionInstrumentedTest {
             .performClick()
         composeRule.runOnIdle { assertTrue(requested.get()) }
 
-        composeRule.setContent {
-            MaterialTheme {
-                LegacyPreprocessorSection(
-                    state = LegacyPreprocessorControlState(
-                        enabled = true,
-                        loaded = true,
-                        available = false,
-                        error = "Control service disconnected.",
-                    ),
-                    onEnabledChange = {},
-                )
-            }
+        composeRule.runOnIdle {
+            state.value = LegacyPreprocessorControlState(
+                enabled = true,
+                loaded = true,
+                available = false,
+                error = "Control service disconnected.",
+            )
         }
         composeRule.onNodeWithContentDescription(TITLE)
             .assertIsNotEnabled()
