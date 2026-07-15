@@ -261,8 +261,9 @@ internal class AndroidKeyStoreLegacyCapabilitySigner(private val context: Contex
 
 internal class LegacyCapabilityRateLimiter(
     private val windowMs: Long = 10_000L,
-    private val maxPerSession: Int = 4,
-    private val maxPendingPerUid: Int = 4,
+    private val maxPerSession: Int = 8,
+    private val maxPendingPerUid: Int = 8,
+    private val maxPendingGlobal: Int = 16,
     private val maxEntries: Int = 256,
 ) {
     private data class Key(val uid: Int, val sessionId: Int)
@@ -288,7 +289,8 @@ internal class LegacyCapabilityRateLimiter(
         val nonceKey = nonce.joinToString("") { "%02x".format(it.toInt() and 0xff) }
         if (
             nonceKey in entry.nonces || entry.pending > 0 || entry.issued.size >= maxPerSession ||
-            entries.filterKeys { it.uid == uid }.values.sumOf { it.pending } >= maxPendingPerUid
+            entries.filterKeys { it.uid == uid }.values.sumOf { it.pending } >= maxPendingPerUid ||
+            entries.values.sumOf { it.pending } >= maxPendingGlobal
         ) {
             return false
         }

@@ -1,9 +1,11 @@
 package com.echidna.control.service
 
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertArrayEquals
@@ -191,6 +193,80 @@ class LegacyPreprocessorCapabilityTest {
         limiter.release(10_000, 1)
         assertFalse(limiter.acquire(10_000, 1, ByteArray(16) { 6 }, 106L))
         assertTrue(limiter.acquire(10_000, 1, ByteArray(16) { 7 }, 20_000L))
+    }
+
+    @Test
+    fun `default limiter sustains jittered renewals while retaining rolling abuse bounds`() {
+        val limiter = LegacyCapabilityRateLimiter()
+        val startMs = 100_000L
+
+        repeat(17) { index ->
+            val nowMs = startMs + index * 2_000L + (index % 3) * 125L
+            val nonce = ByteArray(16) { byte -> (index + byte + 1).toByte() }
+            assertTrue("renewal $index rejected at $nowMs", limiter.acquire(10_000, 77, nonce, nowMs))
+            limiter.release(10_000, 77)
+        }
+
+        val burst = LegacyCapabilityRateLimiter()
+        repeat(8) { index ->
+            val nonce = ByteArray(16) { byte -> (index + byte + 33).toByte() }
+            assertTrue(burst.acquire(10_000, 88, nonce, startMs + index))
+            burst.release(10_000, 88)
+        }
+        assertFalse(burst.acquire(10_000, 88, ByteArray(16) { 99 }, startMs + 9L))
+        assertTrue(burst.acquire(10_000, 88, ByteArray(16) { 100 }, startMs + 10_001L))
+    }
+
+    @Test
+    fun `limiter enforces bounded uid and global signing concurrency`() {
+        val limiter = LegacyCapabilityRateLimiter(
+            maxPendingPerUid = 2,
+            maxPendingGlobal = 3,
+        )
+        assertTrue(limiter.acquire(10_000, 1, ByteArray(16) { 1 }, 1_000L))
+        assertTrue(limiter.acquire(10_000, 2, ByteArray(16) { 2 }, 1_000L))
+        assertFalse(limiter.acquire(10_000, 3, ByteArray(16) { 3 }, 1_000L))
+        assertTrue(limiter.acquire(10_001, 4, ByteArray(16) { 4 }, 1_000L))
+        assertFalse(limiter.acquire(10_002, 5, ByteArray(16) { 5 }, 1_000L))
+    }
+
+    @Test
+    fun `issuer sustains live overlapping renewals beyond thirty seconds with signing jitter`() {
+        val clock = AtomicLong(100_000L)
+        val jitterMs = longArrayOf(0L, 700L, 150L, 900L, 300L, 50L)
+        val renewalIndex = AtomicInteger()
+        val signer = RecordingSigner {
+            clock.addAndGet(jitterMs[renewalIndex.getAndIncrement() % jitterMs.size])
+        }
+        val executor = BoundedCapabilityExecutor()
+        try {
+            val issuer = LegacyCapabilityIssuer(
+                enabled = { true },
+                policySource = { _, _ -> policy(12L) },
+                signer = signer,
+                executor = executor,
+                boottimeMs = clock::get,
+            )
+            var priorExpiry = 0L
+            repeat(17) { index ->
+                clock.set(100_000L + index * 2_000L)
+                val nonce = ByteArray(16) { byte -> (index + byte + 1).toByte() }
+                val result = awaitResult(issuer, request(12L).copy(nonce = nonce))
+                assertEquals("renewal $index", LegacyCapabilityStatus.OK, result.status)
+                val body = ByteBuffer.wrap(result.envelope)
+                val issued = body.getLong(40)
+                val expiry = body.getLong(48)
+                assertTrue("renewal $index expired in signer queue", clock.get() < expiry)
+                if (priorExpiry > 0L) {
+                    assertTrue("renewal $index lost overlap", issued < priorExpiry)
+                }
+                assertEquals(LEGACY_CAPABILITY_LIFETIME_MS, expiry - issued)
+                priorExpiry = expiry
+            }
+            assertTrue(clock.get() >= 132_000L)
+        } finally {
+            executor.close()
+        }
     }
 
     @Test
