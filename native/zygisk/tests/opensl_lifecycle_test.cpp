@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -239,7 +240,7 @@ namespace
             48000000,
             16,
             16,
-            0,
+            0x4,
             SL_BYTEORDER_LITTLEENDIAN,
         };
         SLDataSource source{};
@@ -281,17 +282,50 @@ namespace
         return SL_RESULT_SUCCESS;
     }
 
-    int gPrepareCalls = 0;
-    uint32_t gPreparedRate = 0;
-    uint32_t gPreparedChannels = 0;
-    echidna_result_t gPrepareResult = ECHIDNA_RESULT_OK;
-
-    echidna_result_t MockPrepareStream(uint32_t sample_rate, uint32_t channels)
+    struct MockDspState
     {
-        ++gPrepareCalls;
-        gPreparedRate = sample_rate;
-        gPreparedChannels = channels;
-        return gPrepareResult;
+        std::atomic<bool> active{false};
+        std::atomic<bool> enabled{false};
+        bool gain{false};
+        uint32_t sample_rate{0};
+        uint32_t channels{0};
+        uint32_t max_frames{0};
+        uint32_t format{0};
+    };
+
+    std::array<MockDspState, 256> gDspHandles{};
+    std::atomic<uint32_t> gNextDspHandle{1};
+    int gCreateCalls = 0;
+    int gDestroyCalls = 0;
+    uint32_t gCreatedRate = 0;
+    uint32_t gCreatedChannels = 0;
+    uint32_t gCreatedFormat = 0;
+    echidna_result_t gCreateResult = ECHIDNA_RESULT_OK;
+
+    echidna_result_t MockStreamCreate(const echidna_stream_config_t *config,
+                                      echidna_stream_handle_t *handle)
+    {
+        ++gCreateCalls;
+        if (!config || !handle || gCreateResult != ECHIDNA_RESULT_OK)
+        {
+            return gCreateResult;
+        }
+        const uint32_t token = gNextDspHandle.fetch_add(1, std::memory_order_relaxed);
+        if (token >= gDspHandles.size())
+        {
+            return ECHIDNA_RESULT_NOT_AVAILABLE;
+        }
+        auto &state = gDspHandles[token];
+        state.sample_rate = config->sample_rate;
+        state.channels = config->channel_count;
+        state.max_frames = config->max_frames;
+        state.format = config->format;
+        state.active.store(true, std::memory_order_release);
+        *handle = token;
+        gCreatedRate = config->sample_rate;
+        gCreatedChannels = config->channel_count;
+        gCreatedFormat = config->format;
+        return ECHIDNA_RESULT_OK;
     }
 
     std::mutex gProcessMutex;
@@ -302,12 +336,23 @@ namespace
     int gProcessCalls = 0;
     std::vector<std::string> gEvents;
 
-    echidna_result_t MockProcessBlock(const float *input,
-                                      float *output,
-                                      uint32_t frames,
-                                      uint32_t,
-                                      uint32_t channels)
+    echidna_result_t MockStreamProcess(echidna_stream_handle_t handle,
+                                       const void *input,
+                                       void *output,
+                                       uint32_t frames,
+                                       uint32_t format)
     {
+        if (handle == 0 || handle >= gDspHandles.size() || !input || !output)
+        {
+            return ECHIDNA_RESULT_INVALID_ARGUMENT;
+        }
+        auto &state = gDspHandles[handle];
+        if (!state.active.load(std::memory_order_acquire) ||
+            !state.enabled.load(std::memory_order_acquire) ||
+            state.format != format || frames == 0 || frames > state.max_frames)
+        {
+            return ECHIDNA_RESULT_NOT_INITIALISED;
+        }
         {
             std::unique_lock lock(gProcessMutex);
             ++gProcessCalls;
@@ -320,11 +365,59 @@ namespace
                                        { return gReleaseProcess; });
             }
         }
-        const size_t samples = static_cast<size_t>(frames) * channels;
-        for (size_t i = 0; i < samples; ++i)
+        const size_t samples = static_cast<size_t>(frames) * state.channels;
+        if (format == ECHIDNA_PCM_FORMAT_SIGNED_16)
         {
-            output[i] = input[i] * 2.0f;
+            const auto *source = static_cast<const int16_t *>(input);
+            auto *destination = static_cast<int16_t *>(output);
+            for (size_t i = 0; i < samples; ++i)
+            {
+                destination[i] = state.gain
+                                     ? static_cast<int16_t>(source[i] * 2)
+                                     : source[i];
+            }
         }
+        else
+        {
+            const auto *source = static_cast<const float *>(input);
+            auto *destination = static_cast<float *>(output);
+            for (size_t i = 0; i < samples; ++i)
+            {
+                destination[i] = state.gain ? source[i] * 2.0f : source[i];
+            }
+        }
+        return ECHIDNA_RESULT_OK;
+    }
+
+    echidna_result_t MockStreamUpdate(echidna_stream_handle_t handle,
+                                      const char *profile,
+                                      size_t length,
+                                      uint64_t)
+    {
+        if (handle == 0 || handle >= gDspHandles.size() ||
+            !gDspHandles[handle].active.load(std::memory_order_acquire))
+        {
+            return ECHIDNA_RESULT_NOT_INITIALISED;
+        }
+        auto &state = gDspHandles[handle];
+        if (!profile && length == 0)
+        {
+            state.enabled.store(false, std::memory_order_release);
+            return ECHIDNA_RESULT_OK;
+        }
+        state.gain = std::string_view(profile, length) == "gain";
+        state.enabled.store(true, std::memory_order_release);
+        return ECHIDNA_RESULT_OK;
+    }
+
+    echidna_result_t MockStreamDestroy(echidna_stream_handle_t handle)
+    {
+        if (handle == 0 || handle >= gDspHandles.size())
+        {
+            return ECHIDNA_RESULT_INVALID_ARGUMENT;
+        }
+        gDspHandles[handle].active.store(false, std::memory_order_release);
+        ++gDestroyCalls;
         return ECHIDNA_RESULT_OK;
     }
 
@@ -371,6 +464,11 @@ namespace
             Check(result == SL_RESULT_SUCCESS,
                   "recursive Enqueue must preserve application result");
         }
+    }
+
+    void CountingCallback(SLAndroidSimpleBufferQueueItf, void *opaque)
+    {
+        ++*static_cast<int *>(opaque);
     }
 
     struct GuardedPcm
@@ -521,7 +619,34 @@ namespace
                   flow.recorder.vtable == &kObjectVtable,
               "ambiguous recorder contract must remain untouched");
         flow.locator.numBuffers = 8;
-        gPrepareResult = ECHIDNA_RESULT_NOT_AVAILABLE;
+        const int creates_before_unsupported = gCreateCalls;
+        flow.format.bitsPerSample = 8;
+        flow.format.containerSize = 8;
+        Check((*engine)->CreateAudioRecorder(engine,
+                                             &recorder,
+                                             &flow.source,
+                                             &flow.sink,
+                                             0,
+                                             nullptr,
+                                             nullptr) == SL_RESULT_SUCCESS &&
+                  flow.recorder.vtable == &kObjectVtable &&
+                  gCreateCalls == creates_before_unsupported,
+              "unsupported PCM8 must remain unwrapped without legacy fallback");
+        flow.format.bitsPerSample = 16;
+        flow.format.containerSize = 16;
+        flow.format.channelMask = 0;
+        Check((*engine)->CreateAudioRecorder(engine,
+                                             &recorder,
+                                             &flow.source,
+                                             &flow.sink,
+                                             0,
+                                             nullptr,
+                                             nullptr) == SL_RESULT_SUCCESS &&
+                  flow.recorder.vtable == &kObjectVtable &&
+                  gCreateCalls == creates_before_unsupported,
+              "unsupported channel masks must remain unwrapped and fail closed");
+        flow.format.channelMask = 0x4;
+        gCreateResult = ECHIDNA_RESULT_NOT_AVAILABLE;
         Check((*engine)->CreateAudioRecorder(engine,
                                              &recorder,
                                              &flow.source,
@@ -530,8 +655,8 @@ namespace
                                              nullptr,
                                              nullptr) == SL_RESULT_SUCCESS &&
                   flow.recorder.vtable == &kObjectVtable,
-              "DSP prepare failure must preserve unwrapped recorder behavior");
-        gPrepareResult = ECHIDNA_RESULT_OK;
+              "DSP handle creation failure must preserve unwrapped recorder behavior");
+        gCreateResult = ECHIDNA_RESULT_OK;
         Check((*engine)->CreateAudioRecorder(engine,
                                              &recorder,
                                              &flow.source,
@@ -540,8 +665,18 @@ namespace
                                              nullptr,
                                              nullptr) == SL_RESULT_SUCCESS &&
                   flow.recorder.vtable != &kObjectVtable &&
-                  gPreparedRate == 48000 && gPreparedChannels == 1,
-              "valid recorder creation must prepare exact stream metadata");
+                  gCreatedRate == 48000 && gCreatedChannels == 1 &&
+                  gCreatedFormat == ECHIDNA_PCM_FORMAT_SIGNED_16,
+              "valid recorder creation must bind exact stream metadata");
+
+        const int creates_before_realize = gCreateCalls;
+        flow.recorder.realize_result = kMockFailure;
+        Check((*recorder)->Realize(recorder, 0) == kMockFailure,
+              "recorder Realize failure must be forwarded without replacing its handle");
+        flow.recorder.realize_result = SL_RESULT_SUCCESS;
+        Check((*recorder)->Realize(recorder, 0) == SL_RESULT_SUCCESS &&
+                  gCreateCalls == creates_before_realize,
+              "recorder Realize success must preserve exactly one lifecycle handle");
 
         flow.recorder.get_interface_result = kMockFailure;
         SLAndroidSimpleBufferQueueItf queue = nullptr;
@@ -583,6 +718,9 @@ namespace
                   (*queue)->Enqueue(queue, b.data(), b.bytes()) == SL_RESULT_SUCCESS &&
                   (*queue)->Enqueue(queue, c.data(), c.bytes()) == SL_RESULT_SUCCESS,
               "N buffers must enqueue through wrapped queue");
+        Check(gProcessCalls == 0 && a.data()[0] == 1000 && b.data()[0] == 1000 &&
+                  c.data()[0] == 1000,
+              "Enqueue must only track recorder-owned output and never process early");
         flow.queue.trigger();
         flow.queue.trigger();
         flow.queue.trigger();
@@ -860,13 +998,36 @@ namespace
                                    { return gProcessStarted; });
         }
         auto concurrent_recorder = concurrent_flow.recorder.handle();
-        (*concurrent_recorder)->Destroy(concurrent_recorder);
+        std::atomic<bool> destroy_done{false};
+        std::thread destroy_thread([&]
+                                   {
+            (*concurrent_recorder)->Destroy(concurrent_recorder);
+            destroy_done.store(true, std::memory_order_release); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        Check(!destroy_done.load(std::memory_order_acquire),
+              "Destroy must wait for the admitted callback to quiesce");
         {
             std::lock_guard lock(gProcessMutex);
             gReleaseProcess = true;
         }
         gProcessCondition.notify_all();
+        const auto destroy_deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!destroy_done.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < destroy_deadline)
+        {
+            std::this_thread::yield();
+        }
+        if (!destroy_done.load(std::memory_order_acquire))
+        {
+            std::fprintf(stderr,
+                         "FAIL: Destroy did not quiesce within bounded timeout\n");
+            std::_Exit(1);
+        }
         callback_thread.join();
+        destroy_thread.join();
+        Check(destroy_done.load(std::memory_order_acquire),
+              "Destroy must finish after callback quiescence");
         concurrent_proxy(concurrent_queue, concurrent_context);
         Check(concurrent_state.calls == 1 && concurrent_buffer.guardsIntact(),
               "callback begun before teardown may finish once; later stale calls must stop");
@@ -874,42 +1035,148 @@ namespace
         DestroyFlow(concurrent_flow);
     }
 
+    void TestProfileRevokeAndReplacement()
+    {
+        MockFlow flow;
+        Check(WrapFlow(flow), "profile lifecycle flow must wrap");
+        auto queue = flow.queue.handle();
+        CallbackState state;
+        Check((*queue)->RegisterCallback(queue, &AppCallback, &state) ==
+                  SL_RESULT_SUCCESS,
+              "profile callback must register");
+
+        GuardedPcm revoked;
+        state.expected_buffers = {revoked.data()};
+        state.expected_first_samples = {1000};
+        const int before_revoke = gProcessCalls;
+        Check(gOpenSlStreams.publishProfile(2, false, {}, gOpenSlDspApi),
+              "OpenSL profile revoke must publish");
+        Check((*queue)->Enqueue(queue, revoked.data(), revoked.bytes()) ==
+                  SL_RESULT_SUCCESS,
+              "revoked buffer must enqueue");
+        flow.queue.trigger();
+        Check(revoked.data()[0] == 1000 && gProcessCalls == before_revoke,
+              "revocation must bypass unchanged without entering the DSP handle");
+
+        GuardedPcm pass;
+        state.expected_buffers.push_back(pass.data());
+        state.expected_first_samples.push_back(1000);
+        Check(gOpenSlStreams.publishProfile(2, true, "pass", gOpenSlDspApi),
+              "same snapshot generation may restore after a revoke");
+        Check((*queue)->Enqueue(queue, pass.data(), pass.bytes()) ==
+                  SL_RESULT_SUCCESS,
+              "replacement profile buffer must enqueue");
+        flow.queue.trigger();
+        Check(pass.data()[0] == 1000 && gProcessCalls == before_revoke + 1,
+              "pass profile must invoke exactly one unchanged DSP operation");
+
+        GuardedPcm gained;
+        state.expected_buffers.push_back(gained.data());
+        state.expected_first_samples.push_back(2000);
+        Check(gOpenSlStreams.publishProfile(3, true, "gain", gOpenSlDspApi),
+              "gain replacement must publish");
+        Check((*queue)->Enqueue(queue, gained.data(), gained.bytes()) ==
+                  SL_RESULT_SUCCESS,
+              "gain profile buffer must enqueue");
+        flow.queue.trigger();
+        Check(gained.data()[0] == 2000 && gProcessCalls == before_revoke + 2,
+              "gain replacement must mutate exactly once");
+        DestroyFlow(flow);
+    }
+
     void TestMultipleFlowIsolation()
     {
         MockFlow first_flow;
         MockFlow second_flow;
+        SLAndroidDataFormat_PCM_EX float_format{
+            SL_ANDROID_DATAFORMAT_PCM_EX,
+            2,
+            44100000,
+            32,
+            32,
+            0x3,
+            SL_BYTEORDER_LITTLEENDIAN,
+            SL_ANDROID_PCM_REPRESENTATION_FLOAT,
+        };
+        second_flow.sink.pFormat = &float_format;
         Check(WrapFlow(first_flow) && WrapFlow(second_flow),
               "multiple engines, recorders, and queues must wrap independently");
         GuardedPcm first_buffer;
-        GuardedPcm second_buffer;
         CallbackState first;
-        CallbackState second;
         first.expected_buffers = {first_buffer.data()};
         first.expected_first_samples = {2000};
-        second.expected_buffers = {second_buffer.data()};
-        second.expected_first_samples = {2000};
+        std::array<float, 4> second_buffer{0.25f, -0.5f, 0.75f, -1.0f};
+        int second_calls = 0;
         auto first_queue = first_flow.queue.handle();
         auto second_queue = second_flow.queue.handle();
         Check((*first_queue)->RegisterCallback(first_queue, &AppCallback, &first) ==
                       SL_RESULT_SUCCESS &&
-                  (*second_queue)->RegisterCallback(second_queue, &AppCallback, &second) ==
+                  (*second_queue)
+                          ->RegisterCallback(second_queue,
+                                             &CountingCallback,
+                                             &second_calls) ==
                       SL_RESULT_SUCCESS,
-              "multiple callbacks must register independently");
+              "mixed-format callbacks must register independently");
         Check((*first_queue)
                           ->Enqueue(first_queue, first_buffer.data(), first_buffer.bytes()) ==
                       SL_RESULT_SUCCESS &&
                   (*second_queue)
                           ->Enqueue(second_queue,
                                     second_buffer.data(),
-                                    second_buffer.bytes()) == SL_RESULT_SUCCESS,
-              "multiple queues must enqueue independently");
+                                    static_cast<SLuint32>(sizeof(second_buffer))) ==
+                      SL_RESULT_SUCCESS,
+              "mixed-format queues must enqueue independently");
         second_flow.queue.trigger();
         first_flow.queue.trigger();
-        Check(first.calls == 1 && second.calls == 1 && first_buffer.data()[0] == 2000 &&
-                  second_buffer.data()[0] == 2000,
-              "callbacks must transform only their owning queue buffer");
+        Check(first.calls == 1 && second_calls == 1 &&
+                  first_buffer.data()[0] == 2000 && second_buffer[0] == 0.5f &&
+                  second_buffer[1] == -1.0f,
+              "mixed PCM16/float callbacks must transform only their owning buffer");
         DestroyFlow(first_flow);
         DestroyFlow(second_flow);
+    }
+
+    void TestCallbackTokenExhaustionFailsClosed()
+    {
+        MockFlow flow;
+        Check(WrapFlow(flow), "callback-token exhaustion flow must wrap");
+        auto queue = flow.queue.handle();
+        int direct_calls = 0;
+        slAndroidSimpleBufferQueueCallback stale_proxy = nullptr;
+        void *stale_context = nullptr;
+        bool exhausted = false;
+        for (size_t attempt = 0; attempt <= kMaxCallbackTokens; ++attempt)
+        {
+            stale_proxy = flow.queue.callback;
+            stale_context = flow.queue.callback_context;
+            Check((*queue)->RegisterCallback(queue,
+                                             &CountingCallback,
+                                             &direct_calls) == SL_RESULT_SUCCESS,
+                  "callback replacement must preserve app behavior through exhaustion");
+            if (flow.queue.callback == &CountingCallback)
+            {
+                exhausted = true;
+                break;
+            }
+        }
+        Check(exhausted, "bounded callback registry must expose a direct fallback");
+        if (stale_proxy && stale_proxy != &CountingCallback)
+        {
+            stale_proxy(queue, stale_context);
+        }
+        Check(direct_calls == 0,
+              "token exhaustion must retire the previously installed proxy");
+
+        GuardedPcm buffer;
+        const int before_process = gProcessCalls;
+        Check((*queue)->Enqueue(queue, buffer.data(), buffer.bytes()) ==
+                  SL_RESULT_SUCCESS,
+              "direct fallback must preserve native Enqueue results");
+        flow.queue.trigger();
+        Check(direct_calls == 1 && gProcessCalls == before_process &&
+                  buffer.data()[0] == 1000,
+              "token exhaustion must bypass DSP without changing application audio");
+        DestroyFlow(flow);
     }
 } // namespace
 
@@ -922,8 +1189,14 @@ int main()
     gIidAndroidSimpleBufferQueue = &kAndroidQueueId;
     gIidBufferQueue = &kQueueId;
     gOriginalCreateEngine = &MockCreateEngine;
-    gTestPrepareStream = &MockPrepareStream;
-    gTestProcessBlock = &MockProcessBlock;
+    gOpenSlDspApi = {
+        &MockStreamCreate,
+        &MockStreamProcess,
+        &MockStreamUpdate,
+        &MockStreamDestroy,
+    };
+    Check(gOpenSlStreams.publishProfile(1, true, "gain", gOpenSlDspApi),
+          "initial OpenSL profile must publish");
 
     ResetProcessState();
     TestCreationAndInterfaceFailures();
@@ -934,7 +1207,11 @@ int main()
     ResetProcessState();
     TestDestroyConcurrencyAndPointerReuse();
     ResetProcessState();
+    TestProfileRevokeAndReplacement();
+    ResetProcessState();
     TestMultipleFlowIsolation();
+    ResetProcessState();
+    TestCallbackTokenExhaustionFailsClosed();
 
     if (gFailures != 0)
     {

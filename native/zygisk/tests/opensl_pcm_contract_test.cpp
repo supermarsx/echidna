@@ -26,6 +26,7 @@ int main()
                               48000000,
                               16,
                               16,
+                              0x3,
                               kOpenSlByteOrderLittleEndian,
                               0};
     const auto parsed16 = ParseOpenSlPcmContract(pcm16);
@@ -50,6 +51,7 @@ int main()
                                  96000000,
                                  32,
                                  32,
+                                 0x4,
                                  kOpenSlByteOrderLittleEndian,
                                  kOpenSlPcmRepresentationFloat};
     const auto parsed_float = ParseOpenSlPcmContract(floating);
@@ -68,6 +70,18 @@ int main()
     invalid.representation = kOpenSlPcmRepresentationUnsignedInt;
     Check(!ParseOpenSlPcmContract(invalid),
           "unsupported unsigned PCM32 must fail closed");
+    invalid = pcm16;
+    invalid.channel_mask = 0;
+    Check(!ParseOpenSlPcmContract(invalid),
+          "missing channel masks must fail closed");
+    invalid = pcm16;
+    invalid.channel_mask = 0x4;
+    Check(!ParseOpenSlPcmContract(invalid),
+          "channel-mask population must match channel count");
+    invalid = pcm16;
+    invalid.channel_mask = 0x80000003u;
+    Check(!ParseOpenSlPcmContract(invalid),
+          "unknown channel-mask bits must fail closed");
     invalid = pcm16;
     invalid.byte_order = 1;
     Check(!ParseOpenSlPcmContract(invalid),

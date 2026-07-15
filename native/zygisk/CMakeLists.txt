@@ -25,6 +25,7 @@ add_library(echidna SHARED
     src/hooks/aaudio_stream_registry.cpp
     src/hooks/aaudio_hook_manager.cpp
     src/hooks/capture_buffer_router.cpp
+    src/hooks/opensl_stream_registry.cpp
     src/hooks/opensl_hook_manager.cpp
     src/hooks/audiorecord_hook_manager.cpp
     src/hooks/audioflinger_hook_manager.cpp

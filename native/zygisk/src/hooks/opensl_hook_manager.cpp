@@ -17,24 +17,39 @@
 #define ANDROID_LOG_WARN 0
 #endif
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
-#include <string>
-#include <time.h>
+#include <thread>
 
 #include "echidna/api.h"
-#include "hooks/capture_buffer_router.h"
 #include "hooks/opensl_buffer_fifo.h"
 #include "hooks/opensl_pcm_contract.h"
+#include "hooks/opensl_stream_registry.h"
+#include "runtime/profile_sync_protocol.h"
 #include "state/shared_state.h"
 #include "utils/telemetry_accumulator.h"
 
 namespace echidna::hooks
 {
+    namespace
+    {
+        OpenSlStreamRegistry gOpenSlStreams;
+#ifdef ECHIDNA_OPENSL_TESTING
+        OpenSlDspApi gOpenSlDspApi;
+#else
+        const OpenSlDspApi gOpenSlDspApi{
+            echidna_stream_create,
+            echidna_stream_process,
+            echidna_stream_update,
+            echidna_stream_destroy,
+        };
+#endif
+    } // namespace
+
 #if defined(__ANDROID__) || defined(ECHIDNA_OPENSL_TESTING)
     namespace
     {
@@ -99,7 +114,7 @@ namespace echidna::hooks
         struct CallbackToken
         {
             std::atomic<bool> claimed{false};
-            std::atomic<bool> active{false};
+            std::atomic<uint32_t> usage{0};
             std::atomic<QueueContext *> queue{nullptr};
             QueueCallback callback{nullptr};
             void *user_data{nullptr};
@@ -110,14 +125,19 @@ namespace echidna::hooks
         std::array<QueueContext, kMaxQueues> gQueues;
         std::array<CallbackToken, kMaxCallbackTokens> gCallbackTokens;
 
-#ifdef ECHIDNA_OPENSL_TESTING
-        using PrepareStreamFn = echidna_result_t (*)(uint32_t, uint32_t);
-        PrepareStreamFn gTestPrepareStream = nullptr;
-        ProcessBlockFn gTestProcessBlock = nullptr;
-#endif
-
         static_assert(std::atomic<void *>::is_always_lock_free,
                       "OpenSL capture requires lock-free pointer atomics");
+        static_assert(std::atomic<uint32_t>::is_always_lock_free,
+                      "OpenSL callback admission requires lock-free 32-bit atomics");
+
+        constexpr uint32_t kCallbackActiveMask = 0x80000000U;
+        constexpr uint32_t kCallbackInFlightMask = 0x7FFFFFFFU;
+        thread_local CallbackToken *gCurrentCallbackToken = nullptr;
+
+        uintptr_t RecorderIdentity(SLObjectItf recorder)
+        {
+            return reinterpret_cast<uintptr_t>(recorder);
+        }
 
         ObjectContext *FindObject(SLObjectItf self)
         {
@@ -155,7 +175,7 @@ namespace echidna::hooks
             return nullptr;
         }
 
-        CallbackToken *TokenFromContext(void *opaque)
+        CallbackToken *AcquireCallbackToken(void *opaque)
         {
             if (!opaque)
             {
@@ -170,8 +190,54 @@ namespace echidna::hooks
                 return nullptr;
             }
             auto *token = reinterpret_cast<CallbackToken *>(opaque);
-            return token->active.load(std::memory_order_acquire) ? token : nullptr;
+            uint32_t usage = token->usage.load(std::memory_order_acquire);
+            while ((usage & kCallbackActiveMask) != 0)
+            {
+                if ((usage & kCallbackInFlightMask) == kCallbackInFlightMask)
+                {
+                    return nullptr;
+                }
+                if (token->usage.compare_exchange_weak(usage,
+                                                       usage + 1,
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_acquire))
+                {
+                    return token;
+                }
+            }
+            return nullptr;
         }
+
+        void ReleaseCallbackToken(CallbackToken *token)
+        {
+            if (token)
+            {
+                token->usage.fetch_sub(1, std::memory_order_acq_rel);
+            }
+        }
+
+        class CallbackInvocationGuard
+        {
+        public:
+            explicit CallbackInvocationGuard(CallbackToken *token)
+                : token_(token), previous_(gCurrentCallbackToken)
+            {
+                gCurrentCallbackToken = token;
+            }
+
+            ~CallbackInvocationGuard()
+            {
+                gCurrentCallbackToken = previous_;
+                ReleaseCallbackToken(token_);
+            }
+
+            CallbackInvocationGuard(const CallbackInvocationGuard &) = delete;
+            CallbackInvocationGuard &operator=(const CallbackInvocationGuard &) = delete;
+
+        private:
+            CallbackToken *token_;
+            CallbackToken *previous_;
+        };
 
         CallbackToken *CreateCallbackToken(QueueContext *queue,
                                            QueueCallback callback,
@@ -194,13 +260,15 @@ namespace echidna::hooks
                 token.queue.store(queue, std::memory_order_relaxed);
                 token.callback = callback;
                 token.user_data = user_data;
-                token.active.store(true, std::memory_order_release);
+                token.usage.store(kCallbackActiveMask, std::memory_order_release);
                 return &token;
             }
             return nullptr;
         }
 
-        void RetireCallbackTokens(QueueContext *queue, CallbackToken *keep = nullptr)
+        void RetireCallbackTokens(QueueContext *queue,
+                                  CallbackToken *keep = nullptr,
+                                  bool wait = false)
         {
             if (!queue)
             {
@@ -211,7 +279,27 @@ namespace echidna::hooks
                 if (&token != keep &&
                     token.queue.load(std::memory_order_acquire) == queue)
                 {
-                    token.active.store(false, std::memory_order_release);
+                    token.usage.fetch_and(~kCallbackActiveMask,
+                                          std::memory_order_acq_rel);
+                }
+            }
+            if (!wait)
+            {
+                return;
+            }
+            for (auto &token : gCallbackTokens)
+            {
+                if (&token == keep ||
+                    token.queue.load(std::memory_order_acquire) != queue)
+                {
+                    continue;
+                }
+                const uint32_t self_allowance =
+                    gCurrentCallbackToken == &token ? 1U : 0U;
+                while ((token.usage.load(std::memory_order_acquire) &
+                        kCallbackInFlightMask) > self_allowance)
+                {
+                    std::this_thread::yield();
                 }
             }
         }
@@ -233,62 +321,103 @@ namespace echidna::hooks
             return 0;
         }
 
-        bool ProcessingAllowed()
+        std::optional<echidna_stream_config_t> StreamConfig(
+            const OpenSlPcmContract &contract)
         {
-#ifdef ECHIDNA_OPENSL_TESTING
-            return true;
+            uint32_t format = 0;
+            if (contract.format == audio::PcmFormat::kSigned16)
+            {
+                format = ECHIDNA_PCM_FORMAT_SIGNED_16;
+            }
+            else if (contract.format == audio::PcmFormat::kFloat32)
+            {
+                format = ECHIDNA_PCM_FORMAT_FLOAT_32;
+            }
+            else
+            {
+                return std::nullopt;
+            }
+            if (contract.channels == 0 || contract.channels > 8)
+            {
+                return std::nullopt;
+            }
+            echidna_stream_config_t config{};
+            config.struct_size = sizeof(config);
+            config.sample_rate = contract.sample_rate;
+            config.channel_count = contract.channels;
+            config.max_frames = 32768U / contract.channels;
+            config.format = format;
+            return config;
+        }
+
+        void RecordUnroutedBlock(uint32_t frames,
+                                 utils::TelemetryBlockOutcome outcome)
+        {
+#ifndef ECHIDNA_OPENSL_TESTING
+            state::SharedState::instance().telemetry().recordBlock(
+                utils::TelemetryRoute::kOpenSl, frames, outcome);
 #else
-            return state::SharedState::instance().audioProcessingAllowed();
+            (void)frames;
+            (void)outcome;
 #endif
         }
 
-        bool ProcessBuffer(const QueueContext &queue, const OpenSlQueuedBuffer &buffer)
+        bool ProcessBuffer(const QueueContext &queue,
+                           const OpenSlQueuedBuffer &buffer)
         {
             const size_t bytes_per_sample = BytesPerSample(queue.contract.format);
             const size_t frame_bytes = bytes_per_sample * queue.contract.channels;
             if (!buffer.data || buffer.bytes == 0 || frame_bytes == 0 ||
                 buffer.bytes % frame_bytes != 0)
             {
+                RecordUnroutedBlock(0, utils::TelemetryBlockOutcome::kFailure);
+                return false;
+            }
+            const size_t frames = buffer.bytes / frame_bytes;
+            if (frames == 0 || frames > std::numeric_limits<uint32_t>::max())
+            {
+                RecordUnroutedBlock(0, utils::TelemetryBlockOutcome::kFailure);
                 return false;
             }
 #ifndef ECHIDNA_OPENSL_TESTING
             utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kOpenSl);
 #endif
-            return RouteCaptureBufferInPlace(buffer.data,
-                                             buffer.bytes,
-                                             queue.contract.format,
-                                             queue.contract.sample_rate,
-                                             queue.contract.channels,
-#ifdef ECHIDNA_OPENSL_TESTING
-                                             gTestProcessBlock);
-#else
-                                             echidna_process_block);
-#endif
-        }
-
-        echidna_result_t PrepareStream(uint32_t sample_rate, uint32_t channels)
-        {
-#ifdef ECHIDNA_OPENSL_TESTING
-            return gTestPrepareStream
-                       ? gTestPrepareStream(sample_rate, channels)
-                       : ECHIDNA_RESULT_NOT_AVAILABLE;
-#else
-            return echidna_prepare_stream(sample_rate, channels);
-#endif
+            const uint32_t frame_count = static_cast<uint32_t>(frames);
+            const OpenSlProcessResult result =
+                gOpenSlStreams.process(RecorderIdentity(queue.owner),
+                                       buffer.data,
+                                       frame_count);
+            if (result == OpenSlProcessResult::kBypassed)
+            {
+                RecordUnroutedBlock(frame_count,
+                                    utils::TelemetryBlockOutcome::kBypassed);
+            }
+            else if (result == OpenSlProcessResult::kUnavailable)
+            {
+                RecordUnroutedBlock(frame_count,
+                                    utils::TelemetryBlockOutcome::kFailure);
+            }
+            return result == OpenSlProcessResult::kProcessed;
         }
 
         void QueueCallbackProxy(SLAndroidSimpleBufferQueueItf caller, void *opaque)
         {
-            CallbackToken *token = TokenFromContext(opaque);
-            if (!token || !token->callback)
+            CallbackToken *token = AcquireCallbackToken(opaque);
+            if (!token)
             {
                 return;
             }
+            if (!token->callback)
+            {
+                ReleaseCallbackToken(token);
+                return;
+            }
+            CallbackInvocationGuard invocation(token);
             QueueContext *queue = token->queue.load(std::memory_order_acquire);
             if (queue && queue->active.load(std::memory_order_acquire))
             {
                 const auto buffer = queue->buffers.pop();
-                if (buffer && ProcessingAllowed())
+                if (buffer)
                 {
                     (void)ProcessBuffer(*queue, *buffer);
                 }
@@ -345,7 +474,7 @@ namespace echidna::hooks
                     queue->original->RegisterCallback(self, nullptr, user_data);
                 if (result == SL_RESULT_SUCCESS)
                 {
-                    RetireCallbackTokens(queue);
+                    RetireCallbackTokens(queue, nullptr, true);
                 }
                 return result;
             }
@@ -354,17 +483,25 @@ namespace echidna::hooks
             {
                 // Exhaustion preserves application behavior and disables DSP
                 // only for this subsequent callback registration.
-                return queue->original->RegisterCallback(self, callback, user_data);
+                const SLresult result =
+                    queue->original->RegisterCallback(self, callback, user_data);
+                if (result == SL_RESULT_SUCCESS)
+                {
+                    queue->buffers.disable();
+                    RetireCallbackTokens(queue, nullptr, true);
+                }
+                return result;
             }
             const SLresult result = queue->original->RegisterCallback(
                 self, &QueueCallbackProxy, token);
             if (result != SL_RESULT_SUCCESS)
             {
-                token->active.store(false, std::memory_order_release);
+                token->usage.fetch_and(~kCallbackActiveMask,
+                                       std::memory_order_acq_rel);
             }
             else
             {
-                RetireCallbackTokens(queue, token);
+                RetireCallbackTokens(queue, token, true);
             }
             return result;
         }
@@ -445,6 +582,7 @@ namespace echidna::hooks
                 descriptor.sample_rate_millihz = format->samplesPerSec;
                 descriptor.bits_per_sample = format->bitsPerSample;
                 descriptor.container_bits = format->containerSize;
+                descriptor.channel_mask = format->channelMask;
                 descriptor.byte_order = format->endianness;
             }
             else if (format_type == SL_ANDROID_DATAFORMAT_PCM_EX)
@@ -455,6 +593,7 @@ namespace echidna::hooks
                 descriptor.sample_rate_millihz = format->sampleRate;
                 descriptor.bits_per_sample = format->bitsPerSample;
                 descriptor.container_bits = format->containerSize;
+                descriptor.channel_mask = format->channelMask;
                 descriptor.byte_order = format->endianness;
                 descriptor.representation = format->representation;
             }
@@ -555,6 +694,7 @@ namespace echidna::hooks
                 return SL_RESULT_INTERNAL_ERROR;
             }
             const auto contract = ParseRecorderSink(sink);
+            const auto config = contract ? StreamConfig(*contract) : std::nullopt;
             const SLresult result = engine->original->CreateAudioRecorder(self,
                                                                           recorder,
                                                                           source,
@@ -562,12 +702,19 @@ namespace echidna::hooks
                                                                           interface_count,
                                                                           interface_ids,
                                                                           required);
-            if (result == SL_RESULT_SUCCESS && recorder && *recorder && contract)
+            if (result == SL_RESULT_SUCCESS && recorder && *recorder &&
+                contract && config)
             {
-                if (PrepareStream(contract->sample_rate, contract->channels) ==
-                    ECHIDNA_RESULT_OK)
+                const bool ready =
+                    gOpenSlStreams.open(RecorderIdentity(*recorder),
+                                        *config,
+                                        gOpenSlDspApi);
+                if (ready)
                 {
-                    (void)WrapObject(*recorder, ObjectKind::kRecorder, *contract);
+                    if (!WrapObject(*recorder, ObjectKind::kRecorder, *contract))
+                    {
+                        gOpenSlStreams.close(RecorderIdentity(*recorder));
+                    }
                 }
             }
             return result;
@@ -614,12 +761,14 @@ namespace echidna::hooks
             {
                 if (queue.active.load(std::memory_order_acquire) && queue.owner == self)
                 {
+                    queue.active.store(false, std::memory_order_release);
+                    queue.buffers.disable();
+                    RetireCallbackTokens(&queue, nullptr, true);
                     *const_cast<const SLAndroidSimpleBufferQueueItf_ **>(queue.self) =
                         queue.original;
-                    queue.active.store(false, std::memory_order_release);
-                    RetireCallbackTokens(&queue);
                 }
             }
+            gOpenSlStreams.close(RecorderIdentity(self));
             for (auto &engine : gEngines)
             {
                 if (engine.active.load(std::memory_order_acquire) && engine.owner == self)
@@ -658,6 +807,22 @@ namespace echidna::hooks
         }
     } // namespace
 #endif
+
+    bool PublishOpenSLProfile(const runtime::DecodedProfileSnapshot &snapshot)
+    {
+        const bool published = gOpenSlStreams.publishProfile(snapshot.generation,
+                                                             snapshot.nativeProcessAdmitted(),
+                                                             snapshot.preset_json,
+                                                             gOpenSlDspApi);
+        if (!published)
+        {
+            __android_log_print(ANDROID_LOG_WARN,
+                                "echidna",
+                                "OpenSL profile publication failed generation=%llu",
+                                static_cast<unsigned long long>(snapshot.generation));
+        }
+        return published;
+    }
 
 #ifndef ECHIDNA_OPENSL_TESTING
     OpenSLHookManager::OpenSLHookManager(utils::PltResolver &resolver)

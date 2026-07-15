@@ -321,8 +321,9 @@ namespace
     void OnProfileSnapshot(const echidna::runtime::DecodedProfileSnapshot &snapshot)
     {
         // Profile callbacks run on the control thread. Gate and replace every
-        // live AAudio engine before native capture admission changes.
+        // live route engine before native capture admission changes.
         (void)echidna::hooks::PublishAAudioProfile(snapshot);
+        (void)echidna::hooks::PublishOpenSLProfile(snapshot);
         auto &state = echidna::state::SharedState::instance();
         {
             std::scoped_lock lock(g_activation_mutex);

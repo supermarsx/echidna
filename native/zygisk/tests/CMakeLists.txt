@@ -98,8 +98,7 @@ target_compile_features(opensl_buffer_fifo_test PRIVATE cxx_std_20)
 
 add_executable(opensl_lifecycle_test
     opensl_lifecycle_test.cpp
-    ../src/audio/pcm_buffer_processor.cpp
-    ../src/hooks/capture_buffer_router.cpp)
+    ../src/hooks/opensl_stream_registry.cpp)
 target_include_directories(opensl_lifecycle_test
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/fake_sles
@@ -107,6 +106,16 @@ target_include_directories(opensl_lifecycle_test
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_features(opensl_lifecycle_test PRIVATE cxx_std_20)
+
+add_executable(opensl_stream_registry_test
+    opensl_stream_registry_test.cpp
+    ../src/hooks/opensl_stream_registry.cpp)
+target_include_directories(opensl_stream_registry_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(opensl_stream_registry_test PRIVATE cxx_std_20)
 
 add_executable(tinyalsa_contract_test tinyalsa_contract_test.cpp)
 target_include_directories(tinyalsa_contract_test
@@ -219,6 +228,7 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     opensl_pcm_contract_test
     opensl_buffer_fifo_test
     opensl_lifecycle_test
+    opensl_stream_registry_test
     tinyalsa_contract_test
     capture_route_reachability_test
     profile_sync_protocol_test
@@ -248,6 +258,7 @@ add_test(NAME aaudio_stream_registry_test COMMAND aaudio_stream_registry_test)
 add_test(NAME opensl_pcm_contract_test COMMAND opensl_pcm_contract_test)
 add_test(NAME opensl_buffer_fifo_test COMMAND opensl_buffer_fifo_test)
 add_test(NAME opensl_lifecycle_test COMMAND opensl_lifecycle_test)
+add_test(NAME opensl_stream_registry_test COMMAND opensl_stream_registry_test)
 add_test(NAME tinyalsa_contract_test COMMAND tinyalsa_contract_test)
 add_test(NAME capture_route_reachability_test COMMAND capture_route_reachability_test)
 add_test(NAME profile_sync_protocol_test COMMAND profile_sync_protocol_test)

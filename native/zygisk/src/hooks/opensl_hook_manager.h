@@ -9,6 +9,11 @@
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
 
+namespace echidna::runtime
+{
+    struct DecodedProfileSnapshot;
+}
+
 namespace echidna::hooks
 {
     class OpenSLHookManager : public HookManager
@@ -27,4 +32,7 @@ namespace echidna::hooks
         runtime::InlineHook hook_create_engine_;
         HookInstallInfo last_info_;
     };
+
+    /** Publishes one authenticated process snapshot to live OpenSL recorders. */
+    bool PublishOpenSLProfile(const runtime::DecodedProfileSnapshot &snapshot);
 } // namespace echidna::hooks

@@ -13,6 +13,7 @@ namespace echidna::hooks
     constexpr uint32_t kOpenSlPcmRepresentationSignedInt = 0x00000001u;
     constexpr uint32_t kOpenSlPcmRepresentationUnsignedInt = 0x00000002u;
     constexpr uint32_t kOpenSlPcmRepresentationFloat = 0x00000003u;
+    constexpr uint32_t kOpenSlSupportedChannelMask = 0x0003FFFFu;
 
     struct OpenSlPcmDescriptor
     {
@@ -21,6 +22,7 @@ namespace echidna::hooks
         uint32_t sample_rate_millihz{0};
         uint32_t bits_per_sample{0};
         uint32_t container_bits{0};
+        uint32_t channel_mask{0};
         uint32_t byte_order{0};
         uint32_t representation{0};
     };
@@ -35,9 +37,19 @@ namespace echidna::hooks
     inline std::optional<OpenSlPcmContract> ParseOpenSlPcmContract(
         const OpenSlPcmDescriptor &descriptor)
     {
+        uint32_t channel_bits = descriptor.channel_mask;
+        uint32_t channel_count = 0;
+        while (channel_bits != 0)
+        {
+            channel_count += channel_bits & 1U;
+            channel_bits >>= 1U;
+        }
         if ((descriptor.format_type != kOpenSlDataFormatPcm &&
              descriptor.format_type != kOpenSlAndroidDataFormatPcmEx) ||
             descriptor.channels == 0 || descriptor.channels > 8 ||
+            descriptor.channel_mask == 0 ||
+            (descriptor.channel_mask & ~kOpenSlSupportedChannelMask) != 0 ||
+            channel_count != descriptor.channels ||
             descriptor.sample_rate_millihz % 1000u != 0 ||
             descriptor.byte_order != kOpenSlByteOrderLittleEndian ||
             descriptor.bits_per_sample != descriptor.container_bits)
