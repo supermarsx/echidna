@@ -18,10 +18,10 @@ public final class EchidnaModule implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         try {
-            if (!moduleState.shouldInitializeFor(lpparam.packageName, lpparam.processName)) {
-                return;
-            }
             moduleState.onProcessAttached(lpparam.packageName, lpparam.processName);
+            // Policy arrives asynchronously over the profile socket. Install inert hooks now and
+            // gate every callback against ModuleState; otherwise a cold process permanently misses
+            // its only installation opportunity before the first snapshot can arrive.
             AudioRecordHook.install(lpparam.classLoader, moduleState);
         } catch (Throwable throwable) {
             XposedBridge.log(

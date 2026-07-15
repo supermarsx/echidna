@@ -5,6 +5,7 @@ import android.util.Log;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import de.robv.android.xposed.XposedBridge;
@@ -17,27 +18,76 @@ public final class ModuleState {
 
     private static final String TAG = "EchidnaModuleState";
 
-    private static final ModuleState INSTANCE = new ModuleState();
+    interface NativeController {
+        boolean initialize();
+        boolean isEngineReady();
+        void setBypass(boolean bypass);
+        void setProfile(String profile);
+        EchidnaStatus getStatus();
+    }
 
-    private final ProfileSnapshotStore snapshotStore = ProfileSnapshotStore.getInstance();
+    private static final class Holder {
+        private static final ModuleState INSTANCE = new ModuleState(
+                ProfileSnapshotStore.getInstance(),
+                new NativeController() {
+                    @Override
+                    public boolean initialize() {
+                        return NativeBridge.initialize();
+                    }
+
+                    @Override
+                    public boolean isEngineReady() {
+                        return NativeBridge.isEngineReady();
+                    }
+
+                    @Override
+                    public void setBypass(boolean bypass) {
+                        NativeBridge.setBypass(bypass);
+                    }
+
+                    @Override
+                    public void setProfile(String profile) {
+                        NativeBridge.setProfile(profile);
+                    }
+
+                    @Override
+                    public EchidnaStatus getStatus() {
+                        return NativeBridge.getStatus();
+                    }
+                },
+                true);
+    }
+
+    private final ProfileSnapshotStore snapshotStore;
+    private final NativeController nativeController;
     private final AtomicReference<AppConfig> currentConfig = new AtomicReference<>(AppConfig.disabled());
     private final AtomicReference<String> currentPackage = new AtomicReference<>("");
     private final AtomicReference<String> currentProcess = new AtomicReference<>("");
     private final AtomicBoolean bypassOverride = new AtomicBoolean(false);
     private final AtomicBoolean hooksActivated = new AtomicBoolean(false);
     private final AtomicInteger lastFramesProcessed = new AtomicInteger(0);
+    private final AtomicLong appliedSnapshotVersion = new AtomicLong(Long.MIN_VALUE);
+    private final AtomicLong policyEpoch = new AtomicLong(0L);
+    private final Object policyRefreshLock = new Object();
 
-    private ModuleState() {
+    ModuleState(
+            ProfileSnapshotStore snapshotStore,
+            NativeController nativeController,
+            boolean startReceiver) {
+        this.snapshotStore = snapshotStore;
+        this.nativeController = nativeController;
         safeNativeInitialise();
         // Begin receiving the control service's policy snapshot over the
         // ProfileSyncBridge socket. Until a snapshot arrives, resolution below
         // reads ProfileSnapshot.empty() and stays fail-closed.
-        try {
-            snapshotStore.ensureStarted();
-        } catch (Throwable throwable) {
-            XposedBridge.log(
-                    TAG + ": profile snapshot receiver unavailable; failing closed: "
-                            + Log.getStackTraceString(throwable));
+        if (startReceiver) {
+            try {
+                snapshotStore.ensureStarted();
+            } catch (Throwable throwable) {
+                XposedBridge.log(
+                        TAG + ": profile snapshot receiver unavailable; failing closed: "
+                                + Log.getStackTraceString(throwable));
+            }
         }
     }
 
@@ -53,7 +103,7 @@ public final class ModuleState {
     }
 
     public static ModuleState getInstance() {
-        return INSTANCE;
+        return Holder.INSTANCE;
     }
 
     /**
@@ -61,13 +111,7 @@ public final class ModuleState {
      * AudioRecord hooks should be installed.
      */
     public boolean shouldInitializeFor(String packageName, String processName) {
-        AppConfig config = resolveConfig(packageName, processName);
-        currentPackage.set(packageName != null ? packageName : "");
-        currentProcess.set(processName != null ? processName : "");
-        currentConfig.set(config);
-        hooksActivated.set(config.shouldHook(packageName, processName));
-        applyProfile(config.profile());
-        NativeBridge.setBypass(isBypassActive());
+        onProcessAttached(packageName, processName);
         return hooksActivated.get();
     }
 
@@ -76,27 +120,25 @@ public final class ModuleState {
      * when the cached TTL has expired.
      */
     public void onProcessAttached(String packageName, String processName) {
-        AppConfig config = currentConfig.get();
-        if (config.isExpired()) {
-            config = resolveConfig(packageName, processName);
-            currentConfig.set(config);
-            hooksActivated.set(config.shouldHook(packageName, processName));
-            applyProfile(config.profile());
-        }
-        NativeBridge.setBypass(isBypassActive());
+        currentPackage.set(packageName != null ? packageName : "");
+        currentProcess.set(processName != null ? processName : "");
+        refreshPolicyIfNeeded(true);
     }
 
     /**
      * Returns whether the hooks should process captured audio blocks.
      */
     public boolean shouldProcessAudio() {
-        return hooksActivated.get() && !isBypassActive() && NativeBridge.isEngineReady();
+        long permit = beginAudioProcessing();
+        return permit != INVALID_AUDIO_PROCESSING_PERMIT
+                && isAudioProcessingPermitCurrent(permit);
     }
 
     /**
      * Returns whether this process is explicitly allowed to hook AudioRecord.
      */
     public boolean isHookAllowed() {
+        refreshPolicyIfNeeded(false);
         return hooksActivated.get();
     }
 
@@ -105,8 +147,33 @@ public final class ModuleState {
     }
 
     public void setBypassOverride(boolean enabled) {
-        bypassOverride.set(enabled);
-        NativeBridge.setBypass(isBypassActive());
+        if (bypassOverride.getAndSet(enabled) != enabled) {
+            policyEpoch.incrementAndGet();
+        }
+        nativeController.setBypass(isBypassActive());
+    }
+
+    public static final long INVALID_AUDIO_PROCESSING_PERMIT = -1L;
+
+    /** Captures a generation token for one transactional AudioRecord post-processing callback. */
+    public long beginAudioProcessing() {
+        refreshPolicyIfNeeded(false);
+        if (!hooksActivated.get() || isBypassActive() || !nativeController.isEngineReady()) {
+            return INVALID_AUDIO_PROCESSING_PERMIT;
+        }
+        return policyEpoch.get();
+    }
+
+    /**
+     * Revalidates an in-flight callback immediately before committing its transformed bytes.
+     * Snapshot revocation or a bypass override invalidates the token and forces rollback.
+     */
+    public boolean isAudioProcessingPermitCurrent(long permit) {
+        if (permit == INVALID_AUDIO_PROCESSING_PERMIT) {
+            return false;
+        }
+        refreshPolicyIfNeeded(false);
+        return policyEpoch.get() == permit && hooksActivated.get() && !isBypassActive();
     }
 
     public void noteProcessingSuccess(int frames) {
@@ -118,7 +185,7 @@ public final class ModuleState {
     }
 
     public EchidnaStatus getNativeStatus() {
-        return NativeBridge.getStatus();
+        return nativeController.getStatus();
     }
 
     public String getActiveProfile() {
@@ -128,27 +195,61 @@ public final class ModuleState {
 
     public boolean refreshConfiguration() {
         String pkg = currentPackage.get();
-        String proc = currentProcess.get();
         if (TextUtils.isEmpty(pkg)) {
             return false;
         }
-        AppConfig config = resolveConfig(pkg, proc);
-        currentConfig.set(config);
-        hooksActivated.set(config.shouldHook(pkg, proc));
-        applyProfile(config.profile());
-        NativeBridge.setBypass(isBypassActive());
+        refreshPolicyIfNeeded(true);
         return hooksActivated.get();
+    }
+
+    /**
+     * Refreshes process policy when the receiver publishes a new snapshot generation. The hot
+     * callback path normally performs only atomic reads; JSON resolution is serialized and happens
+     * only after a generation change or TTL expiry.
+     */
+    private void refreshPolicyIfNeeded(boolean force) {
+        String pkg = currentPackage.get();
+        if (TextUtils.isEmpty(pkg)) {
+            return;
+        }
+        long observedVersion = snapshotStore.version();
+        AppConfig observedConfig = currentConfig.get();
+        if (!force
+                && appliedSnapshotVersion.get() == observedVersion
+                && !observedConfig.isExpired()) {
+            return;
+        }
+        synchronized (policyRefreshLock) {
+            observedVersion = snapshotStore.version();
+            observedConfig = currentConfig.get();
+            if (!force
+                    && appliedSnapshotVersion.get() == observedVersion
+                    && !observedConfig.isExpired()) {
+                return;
+            }
+
+            String process = currentProcess.get();
+            AppConfig resolved = resolveConfig(pkg, process);
+            currentConfig.set(resolved);
+            hooksActivated.set(resolved.shouldHook(pkg, process));
+            applyProfile(resolved.profile());
+            policyEpoch.incrementAndGet();
+            nativeController.setBypass(isBypassActive());
+            // update() publishes the snapshot before incrementing its version. If another update
+            // races this resolution, retaining the older generation forces one safe extra refresh.
+            appliedSnapshotVersion.set(observedVersion);
+        }
     }
 
     private void applyProfile(String profile) {
         if (!TextUtils.isEmpty(profile)) {
-            NativeBridge.setProfile(profile);
+            nativeController.setProfile(profile);
         }
     }
 
     private void safeNativeInitialise() {
         try {
-            NativeBridge.initialize();
+            nativeController.initialize();
         } catch (Throwable throwable) {
             XposedBridge.log(
                     TAG + ": native initialization failed; failing closed: "

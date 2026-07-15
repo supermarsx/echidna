@@ -119,29 +119,36 @@ public final class NativeBridge {
     public static boolean processByteBuffer(
             ByteBuffer buffer, int position, int length, int encoding, int sampleRate, int channelCount) {
         if (buffer == null
+                || !ByteBufferProcessor.isWritableRange(buffer, position, length)
                 || !isValidAudioRequest(byteCount(length), sampleRate, channelCount)
-                || !isValidRange(buffer.limit(), position, length)
                 || !initialize()) {
             return false;
         }
         if (!buffer.isDirect()) {
-            try {
-                byte[] scratch = new byte[length];
-                ByteBuffer duplicate = buffer.duplicate();
-                duplicate.position(position);
-                duplicate.limit(position + length);
-                duplicate.get(scratch, 0, length);
-                return safeNativeBoolean(
-                        "process heap ByteBuffer",
-                        () -> nativeProcessByteArray(scratch, 0, length, encoding, sampleRate, channelCount));
-            } catch (Throwable throwable) {
-                handleNativeFailure("copy heap ByteBuffer", throwable);
-                return false;
-            }
+            return ByteBufferProcessor.processHeapRegion(
+                    buffer,
+                    position,
+                    length,
+                    scratch -> safeNativeBoolean(
+                            "process heap ByteBuffer",
+                            () -> nativeProcessByteArray(
+                                    scratch, 0, length, encoding, sampleRate, channelCount)));
         }
         return safeNativeBoolean(
                 "process direct ByteBuffer",
                 () -> nativeProcessByteBuffer(buffer, position, length, encoding, sampleRate, channelCount));
+    }
+
+    /**
+     * Processes bytes returned by AudioRecord's direct-ByteBuffer overload. Android writes from
+     * index zero and leaves the caller's position/limit unchanged, so native receives a duplicate
+     * capacity-bounded view without mutating the app-owned cursor state.
+     */
+    public static boolean processAudioRecordByteBuffer(
+            ByteBuffer buffer, int length, int encoding, int sampleRate, int channelCount) {
+        ByteBuffer view = ByteBufferProcessor.audioRecordView(buffer, length);
+        return view != null
+                && processByteBuffer(view, 0, length, encoding, sampleRate, channelCount);
     }
 
     private static boolean ensureLibraryLoaded() {
@@ -152,7 +159,7 @@ public final class NativeBridge {
             return true;
         }
         try {
-            System.loadLibrary("echidna");
+            System.loadLibrary("echidna_shim_jni");
             LIBRARY_LOADED.set(true);
         } catch (Throwable throwable) {
             NATIVE_AVAILABLE.set(false);

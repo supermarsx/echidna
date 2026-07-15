@@ -8,7 +8,6 @@ import com.echidna.lsposed.core.ModuleState;
 import com.echidna.lsposed.core.NativeBridge;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -24,7 +23,6 @@ public final class AudioRecordHook {
     private static final String TAG = "EchidnaAudioRecord";
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
     private static final AtomicBoolean HOOK_FAILURE_LOGGED = new AtomicBoolean(false);
-    private static final byte[] ZERO_BYTES = new byte[4096];
 
     private AudioRecordHook() {
     }
@@ -166,7 +164,11 @@ public final class AudioRecordHook {
         }
     }
 
-    private abstract static class AudioRecordReadHook extends XC_MethodHook {
+    private abstract static class AudioRecordReadHook extends XC_MethodHook implements
+            AudioReadTransaction.PermitGate,
+            AudioReadTransaction.Transform,
+            AudioReadTransaction.CommitObserver,
+            AudioReadTransaction.FailureObserver {
 
         final ModuleState state;
 
@@ -193,79 +195,65 @@ public final class AudioRecordHook {
             if (samplesOrBytes <= 0) {
                 return;
             }
-            if (!state.isHookAllowed()) {
-                BufferContext context = BufferContext.from(param);
-                if (context.isValid(samplesOrBytes)) {
-                    zeroBuffer(context, samplesOrBytes);
-                }
-                param.setResult(0);
-                return;
+            Object buffer = param.args != null && param.args.length > 0 ? param.args[0] : null;
+            int offset = buffer instanceof ByteBuffer
+                    ? 0
+                    : param.args != null && param.args.length > 1 && param.args[1] instanceof Integer
+                            ? (Integer) param.args[1]
+                            : -1;
+            int preservedResult = AudioReadTransaction.execute(
+                    samplesOrBytes,
+                    buffer,
+                    offset,
+                    param,
+                    this,
+                    this,
+                    this,
+                    this);
+            // Always preserve AudioRecord's actual return value, including partial reads.
+            param.setResult(preservedResult);
+        }
+
+        @Override
+        public long begin() {
+            return state.beginAudioProcessing();
+        }
+
+        @Override
+        public boolean isCurrent(long permit) {
+            return state.isAudioProcessingPermitCurrent(permit);
+        }
+
+        @Override
+        public int apply(Object callbackContext, int returnedUnits) {
+            if (!(callbackContext instanceof MethodHookParam)) {
+                return 0;
             }
-            if (!state.shouldProcessAudio()) {
-                return;
+            BufferContext context = BufferContext.from((MethodHookParam) callbackContext);
+            if (!context.isValid(returnedUnits)) {
+                return 0;
             }
-            BufferContext context = BufferContext.from(param);
-            if (!context.isValid(samplesOrBytes)) {
-                return;
-            }
-            int frames = computeFrames(context, samplesOrBytes);
+            int frames = computeFrames(context, returnedUnits);
             if (frames <= 0) {
-                return;
+                return 0;
             }
-            if (process(context, frames, samplesOrBytes)) {
-                state.noteProcessingSuccess(frames);
-            }
+            return process(context, frames, returnedUnits) ? frames : 0;
+        }
+
+        @Override
+        public void onCommit(int frames) {
+            state.noteProcessingSuccess(frames);
+        }
+
+        @Override
+        public void onFailure(Throwable throwable) {
+            state.setBypassOverride(true);
+            logHookFailure("AudioRecord callback failed; native processing disabled", throwable);
         }
 
         abstract int computeFrames(BufferContext context, int resultUnits);
 
         abstract boolean process(BufferContext context, int frames, int resultUnits);
-
-        void zeroBuffer(BufferContext context, int resultUnits) {
-            Object buffer = context.args[0];
-            if (buffer instanceof byte[]) {
-                int offset = (Integer) context.args[1];
-                byte[] data = (byte[]) buffer;
-                int end = (int) Math.min((long) data.length, (long) offset + (long) resultUnits);
-                if (offset >= 0 && offset < end) {
-                    Arrays.fill(data, offset, end, (byte) 0);
-                }
-                return;
-            }
-            if (buffer instanceof short[]) {
-                int offset = (Integer) context.args[1];
-                short[] data = (short[]) buffer;
-                int end = (int) Math.min((long) data.length, (long) offset + (long) resultUnits);
-                if (offset >= 0 && offset < end) {
-                    Arrays.fill(data, offset, end, (short) 0);
-                }
-                return;
-            }
-            if (buffer instanceof float[]) {
-                int offset = (Integer) context.args[1];
-                float[] data = (float[]) buffer;
-                int end = (int) Math.min((long) data.length, (long) offset + (long) resultUnits);
-                if (offset >= 0 && offset < end) {
-                    Arrays.fill(data, offset, end, 0.0f);
-                }
-                return;
-            }
-            if (buffer instanceof ByteBuffer) {
-                ByteBuffer byteBuffer = (ByteBuffer) buffer;
-                int start = context.byteBufferStart(byteBuffer, resultUnits);
-                int end = start + resultUnits;
-                if (start < 0 || end > byteBuffer.limit()) {
-                    return;
-                }
-                ByteBuffer dup = byteBuffer.duplicate();
-                dup.position(start);
-                dup.limit(end);
-                while (dup.remaining() > 0) {
-                    int chunk = Math.min(dup.remaining(), ZERO_BYTES.length);
-                    dup.put(ZERO_BYTES, 0, chunk);
-                }
-            }
-        }
     }
 
     private static final class BufferContext {
@@ -320,8 +308,11 @@ public final class AudioRecordHook {
             }
             if (buffer instanceof ByteBuffer) {
                 ByteBuffer byteBuffer = (ByteBuffer) buffer;
-                int start = byteBufferStart(byteBuffer, resultUnits);
-                return start >= 0 && (long) start + (long) resultUnits <= (long) byteBuffer.limit();
+                // AudioRecord accepts direct buffers only and writes from index zero while
+                // intentionally ignoring position and limit.
+                return byteBuffer.isDirect()
+                        && !byteBuffer.isReadOnly()
+                        && resultUnits <= byteBuffer.capacity();
             }
             return false;
         }
@@ -348,15 +339,6 @@ public final class AudioRecordHook {
 
         int framesFromSamples(int samples) {
             return samples / Math.max(channelCount, 1);
-        }
-
-        int byteBufferStart(ByteBuffer byteBuffer, int resultUnits) {
-            if (byteBuffer == null || resultUnits <= 0 || resultUnits > byteBuffer.limit()) {
-                return -1;
-            }
-            int position = byteBuffer.position();
-            int start = position - resultUnits;
-            return Math.max(start, 0);
         }
     }
 
@@ -459,11 +441,8 @@ public final class AudioRecordHook {
         @Override
         boolean process(BufferContext context, int frames, int resultUnits) {
             ByteBuffer buffer = (ByteBuffer) context.args[0];
-            int position = context.byteBufferStart(buffer, resultUnits);
-            if (position < 0) return false;
-            boolean success = NativeBridge.processByteBuffer(
+            boolean success = NativeBridge.processAudioRecordByteBuffer(
                     buffer,
-                    position,
                     resultUnits,
                     context.encoding,
                     context.sampleRate,

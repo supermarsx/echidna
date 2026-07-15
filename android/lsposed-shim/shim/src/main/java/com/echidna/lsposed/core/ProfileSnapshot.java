@@ -148,9 +148,9 @@ public final class ProfileSnapshot {
     }
 
     /**
-     * Resolves the preset payload bound to {@code packageName}. Prefers the full
-     * preset JSON from {@code profiles} when the bound id is present there; falls
-     * back to the raw binding id, or empty string when there is no binding.
+     * Resolves the preset payload bound to {@code packageName}. Both a binding and
+     * its full preset JSON must be present. A dangling binding is rejected instead
+     * of being passed to native as though the id itself were a preset document.
      */
     public String resolveProfile(String packageName) {
         if (packageName == null) {
@@ -161,7 +161,7 @@ public final class ProfileSnapshot {
             return "";
         }
         String payload = profilePayloads.get(presetId);
-        return payload != null ? payload : presetId;
+        return payload != null ? payload : "";
     }
 
     /** Global gate: master enabled, not bypassed, and not inside an active panic hold. */

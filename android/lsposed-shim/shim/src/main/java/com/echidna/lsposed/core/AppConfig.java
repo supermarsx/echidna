@@ -43,10 +43,15 @@ public final class AppConfig {
             return disabled();
         }
         boolean globallyEnabled = snapshot.isGloballyEnabled();
-        boolean allowed = globallyEnabled && snapshot.isProcessAllowed(packageName, processName);
-        String profile = allowed ? snapshot.resolveProfile(packageName) : "";
+        boolean processAllowed = snapshot.isProcessAllowed(packageName, processName);
+        String profile = globallyEnabled && processAllowed
+                ? snapshot.resolveProfile(packageName)
+                : "";
+        // The snapshot contract requires both explicit process policy and a resolvable
+        // per-package preset. Never run with a stale native profile after a binding was deleted.
+        boolean allowed = globallyEnabled && processAllowed && !profile.isEmpty();
         long expiresAt = SystemClock.elapsedRealtime() + DEFAULT_TTL_MS;
-        return new AppConfig(allowed, !globallyEnabled, profile, expiresAt);
+        return new AppConfig(allowed, !allowed, allowed ? profile : "", expiresAt);
     }
 
     public boolean shouldHook(String packageName, String processName) {
