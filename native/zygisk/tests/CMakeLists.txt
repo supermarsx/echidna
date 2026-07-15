@@ -109,6 +109,13 @@ target_include_directories(capture_route_reachability_test
         ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(capture_route_reachability_test PRIVATE cxx_std_20)
 
+add_executable(profile_sync_protocol_test
+    profile_sync_protocol_test.cpp
+    ../src/runtime/profile_sync_protocol.cpp)
+target_include_directories(profile_sync_protocol_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(profile_sync_protocol_test PRIVATE cxx_std_20)
+
 if(NOT WIN32)
   add_executable(config_shared_memory_test
       config_shared_memory_test.cpp
@@ -133,7 +140,8 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     opensl_buffer_fifo_test
     opensl_lifecycle_test
     tinyalsa_contract_test
-    capture_route_reachability_test)
+    capture_route_reachability_test
+    profile_sync_protocol_test)
 if(NOT WIN32)
   list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS config_shared_memory_test)
 endif()
@@ -152,6 +160,7 @@ add_test(NAME opensl_buffer_fifo_test COMMAND opensl_buffer_fifo_test)
 add_test(NAME opensl_lifecycle_test COMMAND opensl_lifecycle_test)
 add_test(NAME tinyalsa_contract_test COMMAND tinyalsa_contract_test)
 add_test(NAME capture_route_reachability_test COMMAND capture_route_reachability_test)
+add_test(NAME profile_sync_protocol_test COMMAND profile_sync_protocol_test)
 if(NOT WIN32)
   add_test(NAME config_shared_memory_test COMMAND config_shared_memory_test)
 endif()

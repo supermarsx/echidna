@@ -38,6 +38,7 @@ add_library(echidna SHARED
     src/utils/process_utils.cpp
     src/jni/audio_bridge.cpp
     src/jni/native_bridge_runtime_zygisk.cpp
+    src/runtime/profile_sync_protocol.cpp
     src/runtime/profile_sync_server.cpp)
 
 set_target_properties(echidna PROPERTIES
