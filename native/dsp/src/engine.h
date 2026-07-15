@@ -35,6 +35,18 @@
 namespace echidna::dsp
 {
 
+    /** Internal construction controls for embedders of the DSP core. */
+    struct DspEngineOptions
+    {
+        /** Preserve the standalone engine's signed-plugin directory scan. */
+        bool load_plugins{true};
+        /**
+         * Use a preallocated, single-caller process path without mutexes.
+         * Configuration must remain quiescent while processing is enabled.
+         */
+        bool lock_free_realtime_process{false};
+    };
+
     /**
      * @brief Main DSP engine which executes the configured effects chain.
      *
@@ -56,6 +68,10 @@ namespace echidna::dsp
         DspEngine(uint32_t sample_rate,
                   uint32_t channels,
                   ech_dsp_quality_mode_t quality);
+        DspEngine(uint32_t sample_rate,
+                  uint32_t channels,
+                  ech_dsp_quality_mode_t quality,
+                  DspEngineOptions options);
         ~DspEngine();
 
         /**
@@ -89,6 +105,9 @@ namespace echidna::dsp
                                       float *output,
                                       size_t frames);
 
+        /** Internal diagnostic used to prove HAL contexts never scan plugins. */
+        bool plugin_directory_scanned() const;
+
     private:
         /**
          * @brief Internal synchronous processing implementation used by both
@@ -101,6 +120,9 @@ namespace echidna::dsp
         ech_dsp_status_t ProcessInternal(const float *input,
                                          float *output,
                                          size_t frames);
+        ech_dsp_status_t ProcessInternalUnlocked(const float *input,
+                                                 float *output,
+                                                 size_t frames);
         /**
          * @brief Ensure the internal dry/wet buffers are sized for the provided
          * number of frames.
@@ -130,6 +152,7 @@ namespace echidna::dsp
         uint32_t sample_rate_{0};
         uint32_t channels_{0};
         ech_dsp_quality_mode_t quality_mode_{ECH_DSP_QUALITY_LOW_LATENCY};
+        DspEngineOptions options_{};
 
         config::PresetDefinition preset_;
 

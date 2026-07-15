@@ -33,4 +33,5 @@ if(BUILD_TESTING AND NOT ANDROID)
 endif()
 
 add_subdirectory(dsp)
+add_subdirectory(effects/legacy)
 add_subdirectory(zygisk)

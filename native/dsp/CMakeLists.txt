@@ -10,8 +10,7 @@ if(NOT ANDROID)
   message(WARNING "Building DSP engine without Android toolchain; using host platform for smoke testing.")
 endif()
 
-set(ECHIDNA_DSP_SOURCES
-    src/api.cpp
+set(ECHIDNA_DSP_CORE_SOURCES
     src/engine.cpp
     src/config/preset_loader.cpp
     src/runtime/block_queue.cpp
@@ -27,7 +26,15 @@ set(ECHIDNA_DSP_SOURCES
     src/effects/mix_bus.cpp
     src/plugins/plugin_loader.cpp)
 
-add_library(ech_dsp SHARED ${ECHIDNA_DSP_SOURCES})
+add_library(ech_dsp_core STATIC ${ECHIDNA_DSP_CORE_SOURCES})
+set_target_properties(ech_dsp_core PROPERTIES
+    POSITION_INDEPENDENT_CODE ON)
+
+# Keep the public shared library as the singleton C ABI wrapper.  The reusable
+# core intentionally excludes src/api.cpp so consumers such as Android effect
+# contexts own independent DspEngine instances instead of sharing the singleton.
+add_library(ech_dsp SHARED src/api.cpp)
+target_link_libraries(ech_dsp PRIVATE ech_dsp_core)
 
 set_target_properties(ech_dsp PROPERTIES
     OUTPUT_NAME ech_dsp)
@@ -54,23 +61,29 @@ else()
     # ABI-aware branch — dead on a host build (ANDROID unset) but LIVE under the
     # NDK toolchain file, which sets ANDROID/ANDROID_ABI. Tag the target with its
     # ABI for on-device diagnostics; keep the output at the per-ABI build root.
-    target_compile_definitions(ech_dsp PRIVATE ECHIDNA_TARGET_ABI="${ANDROID_ABI}")
+    target_compile_definitions(ech_dsp_core PRIVATE ECHIDNA_TARGET_ABI="${ANDROID_ABI}")
     message(STATUS "Echidna DSP: Android ABI ${ANDROID_ABI} -> ${CMAKE_BINARY_DIR}/lib/libech_dsp.so")
   endif()
 endif()
+
+target_include_directories(ech_dsp_core
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+        $<INSTALL_INTERFACE:include>
+)
 
 target_include_directories(ech_dsp
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
-        $<INSTALL_INTERFACE:include>
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        $<INSTALL_INTERFACE:include>)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(arm64|aarch64)")
-  target_compile_definitions(ech_dsp PRIVATE ECHIDNA_DSP_HAS_NEON=1)
+  target_compile_definitions(ech_dsp_core PRIVATE ECHIDNA_DSP_HAS_NEON=1)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)")
-  target_compile_definitions(ech_dsp PRIVATE ECHIDNA_DSP_HAS_AVX=1)
+  target_compile_definitions(ech_dsp_core PRIVATE ECHIDNA_DSP_HAS_AVX=1)
 endif()
 
 
@@ -109,9 +122,9 @@ if(NOT _echidna_crypto_linked AND ECHIDNA_BORINGSSL_ROOT)
       PATHS "${ECHIDNA_BORINGSSL_ROOT}/lib" "${ECHIDNA_BORINGSSL_ROOT}/lib64"
       NO_DEFAULT_PATH)
   if(ECHIDNA_PREBUILT_CRYPTO)
-    target_include_directories(ech_dsp PRIVATE "${ECHIDNA_BORINGSSL_ROOT}/include")
-    target_link_libraries(ech_dsp PRIVATE ${ECHIDNA_PREBUILT_CRYPTO})
-    target_compile_definitions(ech_dsp PRIVATE ECHIDNA_HAS_BORINGSSL=1)
+    target_include_directories(ech_dsp_core PRIVATE "${ECHIDNA_BORINGSSL_ROOT}/include")
+    target_link_libraries(ech_dsp_core PRIVATE ${ECHIDNA_PREBUILT_CRYPTO})
+    target_compile_definitions(ech_dsp_core PRIVATE ECHIDNA_HAS_BORINGSSL=1)
     set(_echidna_crypto_linked ON)
     message(STATUS "Echidna DSP: plugin verify via prebuilt BoringSSL at ${ECHIDNA_BORINGSSL_ROOT}")
   else()
@@ -123,8 +136,8 @@ endif()
 if(NOT _echidna_crypto_linked)
   find_library(CRYPTO_LIB crypto)
   if(CRYPTO_LIB)
-    target_link_libraries(ech_dsp PRIVATE ${CRYPTO_LIB})
-    target_compile_definitions(ech_dsp PRIVATE ECHIDNA_HAS_BORINGSSL=1)
+    target_link_libraries(ech_dsp_core PRIVATE ${CRYPTO_LIB})
+    target_compile_definitions(ech_dsp_core PRIVATE ECHIDNA_HAS_BORINGSSL=1)
     set(_echidna_crypto_linked ON)
     message(STATUS "Echidna DSP: plugin verify via system libcrypto ${CRYPTO_LIB}")
   endif()
@@ -167,8 +180,8 @@ if(NOT _echidna_crypto_linked AND ANDROID AND ECHIDNA_FETCH_BORINGSSL)
   endif()
   FetchContent_MakeAvailable(boringssl)
   # BoringSSL exposes a target named 'crypto'.
-  target_link_libraries(ech_dsp PRIVATE crypto)
-  target_compile_definitions(ech_dsp PRIVATE ECHIDNA_HAS_BORINGSSL=1)
+  target_link_libraries(ech_dsp_core PRIVATE crypto)
+  target_compile_definitions(ech_dsp_core PRIVATE ECHIDNA_HAS_BORINGSSL=1)
   set(_echidna_crypto_linked ON)
   message(STATUS "Echidna DSP: plugin verify via FetchContent BoringSSL "
                  "(${ECHIDNA_BORINGSSL_GIT_TAG}) for ${ANDROID_ABI}")

@@ -479,6 +479,12 @@ namespace echidna::dsp::plugins
         return failures_;
     }
 
+    bool PluginLoader::directory_scanned() const
+    {
+        std::scoped_lock lock(mutex_);
+        return loaded_;
+    }
+
     /**
      * @brief Compute the signature filename for a module binary.
      */

@@ -45,18 +45,30 @@ namespace echidna::dsp
     DspEngine::DspEngine(uint32_t sample_rate,
                          uint32_t channels,
                          ech_dsp_quality_mode_t quality)
+        : DspEngine(sample_rate, channels, quality, DspEngineOptions{})
+    {
+    }
+
+    DspEngine::DspEngine(uint32_t sample_rate,
+                         uint32_t channels,
+                         ech_dsp_quality_mode_t quality,
+                         DspEngineOptions options)
         : sample_rate_(sample_rate),
           channels_(channels),
           quality_mode_(quality),
+          options_(options),
           input_queue_(8),
           output_queue_(8)
     {
-        const char *plugin_dir = std::getenv("ECHIDNA_PLUGIN_DIR");
-        if (!plugin_dir || plugin_dir[0] == '\0')
+        if (options_.load_plugins)
         {
-            plugin_dir = "/data/local/tmp/echidna/plugins";
+            const char *plugin_dir = std::getenv("ECHIDNA_PLUGIN_DIR");
+            if (!plugin_dir || plugin_dir[0] == '\0')
+            {
+                plugin_dir = "/data/local/tmp/echidna/plugins";
+            }
+            plugin_loader_.LoadFromDirectory(plugin_dir);
         }
-        plugin_loader_.LoadFromDirectory(plugin_dir);
     }
 
     /**
@@ -172,6 +184,15 @@ namespace echidna::dsp
             return ECH_DSP_STATUS_INVALID_ARGUMENT;
         }
 
+        if (options_.lock_free_realtime_process)
+        {
+            if (realtime_max_frames_ == 0 || frames > realtime_max_frames_)
+            {
+                return ECH_DSP_STATUS_INVALID_ARGUMENT;
+            }
+            return ProcessInternalUnlocked(input, output, frames);
+        }
+
         config::ProcessingMode mode;
         uint32_t block_timeout_ms;
         {
@@ -255,6 +276,22 @@ namespace echidna::dsp
         {
             return ECH_DSP_STATUS_INVALID_ARGUMENT;
         }
+        return ProcessInternalUnlocked(input, output, frames);
+    }
+
+    ech_dsp_status_t DspEngine::ProcessInternalUnlocked(const float *input,
+                                                        float *output,
+                                                        size_t frames)
+    {
+        size_t samples = 0;
+        if (!input || !output || !ComputeSampleCount(frames, channels_, &samples))
+        {
+            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+        }
+        if (realtime_max_frames_ != 0 && frames > realtime_max_frames_)
+        {
+            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+        }
         try
         {
             EnsureBuffers(frames);
@@ -275,10 +312,18 @@ namespace echidna::dsp
         autotune_.process(ctx);
         reverb_.process(ctx);
 
-        plugin_loader_.ProcessAll(ctx);
+        if (options_.load_plugins)
+        {
+            plugin_loader_.ProcessAll(ctx);
+        }
 
         mix_.process_buffers(dry_buffer_.data(), wet_buffer_.data(), output, frames);
         return ECH_DSP_STATUS_OK;
+    }
+
+    bool DspEngine::plugin_directory_scanned() const
+    {
+        return plugin_loader_.directory_scanned();
     }
 
     /**
@@ -325,8 +370,11 @@ namespace echidna::dsp
 
         mix_.prepare(sample_rate_, channels_);
 
-        plugin_loader_.PrepareAll(sample_rate_, channels_);
-        plugin_loader_.ResetAll();
+        if (options_.load_plugins)
+        {
+            plugin_loader_.PrepareAll(sample_rate_, channels_);
+            plugin_loader_.ResetAll();
+        }
     }
 
     /**

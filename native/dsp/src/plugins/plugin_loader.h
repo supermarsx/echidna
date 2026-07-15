@@ -79,6 +79,9 @@ namespace echidna::dsp::plugins
          */
         std::vector<LoadFailure> load_failures() const;
 
+        /** Return whether directory discovery has run for this loader. */
+        bool directory_scanned() const;
+
     private:
         struct ModuleHandle
         {
