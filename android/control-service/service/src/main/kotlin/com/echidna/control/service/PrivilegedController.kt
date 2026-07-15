@@ -30,7 +30,7 @@ private val STANDALONE_ZYGISK_PROBE = """
  */
 class PrivilegedController(
     private val rootExecutor: PrivilegedCommandRunner,
-    private val selinuxChecker: SelinuxCompatChecker,
+    private val selinuxChecker: SelinuxStateProbe,
 ) {
     @Volatile
     private var cachedStatus: ModuleStatus = ModuleStatus(
@@ -54,7 +54,6 @@ class PrivilegedController(
             return updateStatus(lastError = "install failed: ${result.stderr}")
         }
         Log.i(PRIV_TAG, "Requested Magisk installation from $moduleArchivePath")
-        applySelinuxTweaks()
         return refreshStatus()
     }
 
@@ -85,27 +84,6 @@ class PrivilegedController(
     }
 
     fun lastKnownStatus(): ModuleStatus = cachedStatus
-
-    fun applySelinuxTweaks(): SelinuxState {
-        val state = selinuxChecker.evaluate()
-        if (state != SelinuxState.ENFORCING_WITH_POLICY) {
-            return state
-        }
-        val policyArgs = listOf(
-            "magiskpolicy",
-            "--live",
-            "allow zygote zygote process dyntransition",
-            "allow zygote zygote binder call",
-            "allow zygote zygote binder transfer",
-        )
-        val result = rootExecutor.runCommand(policyArgs)
-        if (!result.success) {
-            Log.w(PRIV_TAG, "Failed to apply SELinux policy: ${result.stderr}")
-            return SelinuxState.ENFORCING_JAVA_ONLY
-        }
-        Log.i(PRIV_TAG, "SELinux policy patch applied successfully")
-        return SelinuxState.ENFORCING_WITH_POLICY
-    }
 
     private fun updateStatus(lastError: String? = null): ModuleStatus {
         val refreshed = cachedStatus.copy(lastError = lastError ?: cachedStatus.lastError)

@@ -51,13 +51,8 @@ class EchidnaControlService : Service() {
         audioStackProbe = AudioStackProbe(this)
         cpuArchProbe = CpuArchProbe()
         executor.execute {
-            val selinuxState = privilegedController.applySelinuxTweaks()
-            if (selinuxState == SelinuxState.ENFORCING_JAVA_ONLY) {
-                Log.w(
-                    TAG,
-                    "SELinux blocks native engine; defaulting to Java compatibility mode",
-                )
-            }
+            // Runtime policy belongs to the Magisk module's reviewed sepolicy.rule. The app must
+            // never widen zygote policy live merely because a policy tool happens to be present.
             privilegedController.refreshStatus()
         }
     }

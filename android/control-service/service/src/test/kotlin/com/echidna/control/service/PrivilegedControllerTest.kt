@@ -1,9 +1,26 @@
 package com.echidna.control.service
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PrivilegedControllerTest {
+    @Test
+    fun `install never widens live zygote policy`() {
+        val runner = RecordingInstallRunner()
+        val controller = PrivilegedController(
+            runner,
+            SelinuxStateProbe { SelinuxState.ENFORCING_WITH_POLICY },
+        )
+
+        controller.installModule("/data/local/tmp/echidna.zip")
+
+        val commandText = runner.commands.flatten().joinToString(" ")
+        assertFalse(commandText.contains("magiskpolicy"))
+        assertFalse(commandText.contains("dyntransition"))
+        assertFalse(commandText.contains("allow zygote"))
+    }
+
     @Test
     fun `reports zygisk enabled from Magisk settings`() {
         val runner = FakeCommandRunner(
@@ -25,6 +42,28 @@ class PrivilegedControllerTest {
 
         assertTrue(status.magiskModuleInstalled)
         assertTrue(status.zygiskEnabled)
+    }
+}
+
+private class RecordingInstallRunner : PrivilegedCommandRunner {
+    val commands = mutableListOf<List<String>>()
+
+    override fun runCommand(command: String): CommandResult {
+        commands += listOf(command)
+        return CommandResult(false, "", "", 1)
+    }
+
+    override fun runCommand(arguments: List<String>): CommandResult {
+        commands += arguments
+        return when {
+            arguments.take(2) == listOf("magisk", "--install-module") ->
+                CommandResult(true, "", "")
+            arguments == listOf("test", "-f", "/data/adb/modules/echidna/module.prop") ->
+                CommandResult(true, "", "")
+            arguments.take(2) == listOf("magisk", "--sqlite") ->
+                CommandResult(true, "value=1", "")
+            else -> CommandResult(false, "", "", 1)
+        }
     }
 }
 
