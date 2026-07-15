@@ -38,7 +38,8 @@ namespace echidna::effects::legacy
     public:
         EffectContext(int32_t session_id,
                       int32_t io_id,
-                      CapabilityVerifierOptions verifier_options = {});
+                      CapabilityVerifierOptions verifier_options = {},
+                      TelemetryProofKeyOptions proof_key_options = {});
         ~EffectContext();
 
         EffectContext(const EffectContext &) = delete;
@@ -127,6 +128,12 @@ namespace echidna::effects::legacy
                                       uint32_t *reply_size,
                                       void *reply_data);
         TelemetryWireSnapshot TelemetryWireState();
+        int32_t EncodeTelemetryProofForNonce(
+            const TelemetryProofNonce &requested_nonce,
+            std::array<uint8_t, kTelemetryProofValueBytes> *encoded);
+        uint16_t TelemetryFlags(uint64_t now,
+                                uint64_t generation,
+                                uint64_t expires) const noexcept;
         bool AuthorizationActive() noexcept;
         bool NonceSeen(const CapabilityNonce &nonce) const noexcept;
         void RememberNonce(const CapabilityNonce &nonce) noexcept;
@@ -147,6 +154,7 @@ namespace echidna::effects::legacy
         std::atomic<uint32_t> authorization_deadline_ms_{0};
         std::atomic<int32_t> permanent_bypass_status_{0};
         CapabilityVerifier capability_verifier_;
+        TelemetryProofSigner telemetry_proof_signer_;
         std::mutex capability_mutex_;
         bool engine_preset_ready_{false};
         uint64_t capability_generation_{0};
@@ -155,11 +163,14 @@ namespace echidna::effects::legacy
         uint32_t capability_target_uid_{0};
         std::string capability_process_;
         CapabilityHash capability_preset_hash_{};
+        CapabilityNonce active_capability_nonce_{};
+        bool has_active_capability_nonce_{false};
         std::array<CapabilityNonce, 16> accepted_nonces_{};
         size_t accepted_nonce_count_{0};
         size_t next_nonce_slot_{0};
         RealtimeCounters counters_{};
         std::atomic<uint32_t> telemetry_sequence_{0};
+        std::atomic<uint32_t> telemetry_proof_sequence_{0};
     };
 
     static_assert(std::atomic<uint32_t>::is_always_lock_free,

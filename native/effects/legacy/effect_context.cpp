@@ -45,19 +45,19 @@ namespace echidna::effects::legacy
 
         void WriteParameterReplyPrefix(void *reply_data,
                                        int32_t status,
+                                       uint32_t parameter_size,
                                        uint32_t value_size,
                                        const uint8_t *key) noexcept
         {
             auto *parameter = static_cast<effect_param_t *>(reply_data);
             parameter->status = status;
-            parameter->psize =
-                static_cast<uint32_t>(kTelemetrySnapshotParameter.size());
+            parameter->psize = parameter_size;
             parameter->vsize = value_size;
             if (key != nullptr)
             {
                 std::memcpy(parameter->data,
                             key,
-                            kTelemetrySnapshotParameter.size());
+                            parameter_size);
             }
         }
 
@@ -65,10 +65,12 @@ namespace echidna::effects::legacy
 
     EffectContext::EffectContext(int32_t session_id,
                                  int32_t io_id,
-                                 CapabilityVerifierOptions verifier_options)
+                                 CapabilityVerifierOptions verifier_options,
+                                 TelemetryProofKeyOptions proof_key_options)
         : session_id_(session_id),
           io_id_(io_id),
-          capability_verifier_(std::move(verifier_options))
+          capability_verifier_(std::move(verifier_options)),
+          telemetry_proof_signer_(std::move(proof_key_options))
     {
     }
 
@@ -157,6 +159,10 @@ namespace echidna::effects::legacy
         }
         RevokeAuthorization();
         std::scoped_lock lock(capability_mutex_);
+        // EFFECT_CMD_INIT runs on the AudioFlinger control thread. File access
+        // and SHA-256 key identification must never reach Process(). The same
+        // mutex serializes key reload against GET_PARAM signing.
+        (void)telemetry_proof_signer_.Load();
         configured_.store(false, std::memory_order_release);
         engine_.reset();
         input_float_.clear();
@@ -171,6 +177,8 @@ namespace echidna::effects::legacy
         capability_target_uid_ = 0;
         capability_process_.clear();
         capability_preset_hash_.fill(0);
+        active_capability_nonce_.fill(0);
+        has_active_capability_nonce_ = false;
         accepted_nonce_count_ = 0;
         next_nonce_slot_ = 0;
         lifecycle_ = Lifecycle::kInitialized;
@@ -493,6 +501,8 @@ namespace echidna::effects::legacy
             capability_issued_ms_ = claims.issued_boottime_ms;
             capability_expires_ms_ = claims.expires_boottime_ms;
             RememberNonce(claims.nonce);
+            active_capability_nonce_ = claims.nonce;
+            has_active_capability_nonce_ = true;
             authorization_deadline_ms_.store(
                 static_cast<uint32_t>(claims.expires_boottime_ms),
                 std::memory_order_release);
@@ -526,6 +536,8 @@ namespace echidna::effects::legacy
         capability_process_ = std::move(claims.process);
         capability_preset_hash_ = claims.preset_hash;
         RememberNonce(claims.nonce);
+        active_capability_nonce_ = claims.nonce;
+        has_active_capability_nonce_ = true;
         authorization_deadline_ms_.store(
             static_cast<uint32_t>(claims.expires_boottime_ms),
             std::memory_order_release);
@@ -755,17 +767,10 @@ namespace echidna::effects::legacy
         return 0;
     }
 
-    TelemetryWireSnapshot EffectContext::TelemetryWireState()
+    uint16_t EffectContext::TelemetryFlags(uint64_t now,
+                                           uint64_t generation,
+                                           uint64_t expires) const noexcept
     {
-        const uint64_t now = capability_verifier_.nowBoottimeMs();
-        uint64_t generation = 0;
-        uint64_t expires = 0;
-        {
-            std::scoped_lock lock(capability_mutex_);
-            generation = capability_generation_;
-            expires = capability_expires_ms_;
-        }
-
         uint16_t flags = 0;
         if (enabled_.load(std::memory_order_acquire))
         {
@@ -787,6 +792,19 @@ namespace echidna::effects::legacy
         {
             flags |= kTelemetryAuthorized;
         }
+        return flags;
+    }
+
+    TelemetryWireSnapshot EffectContext::TelemetryWireState()
+    {
+        const uint64_t now = capability_verifier_.nowBoottimeMs();
+        uint64_t generation = 0;
+        uint64_t expires = 0;
+        {
+            std::scoped_lock lock(capability_mutex_);
+            generation = capability_generation_;
+            expires = capability_expires_ms_;
+        }
 
         const uint32_t invalid =
             counters_.invalid_calls.load(std::memory_order_relaxed);
@@ -796,12 +814,60 @@ namespace echidna::effects::legacy
             session_id_,
             generation,
             ModularAdd(telemetry_sequence_.fetch_add(1, std::memory_order_relaxed), 1),
-            flags,
+            TelemetryFlags(now, generation, expires),
             counters_.process_calls.load(std::memory_order_relaxed),
             counters_.processed_frames.load(std::memory_order_relaxed),
             ModularAdd(invalid, dsp_failures),
             counters_.mutations.load(std::memory_order_relaxed),
         };
+    }
+
+    int32_t EffectContext::EncodeTelemetryProofForNonce(
+        const TelemetryProofNonce &requested_nonce,
+        std::array<uint8_t, kTelemetryProofValueBytes> *encoded)
+    {
+        if (encoded == nullptr)
+        {
+            return -EINVAL;
+        }
+
+        std::scoped_lock lock(capability_mutex_);
+        if (!telemetry_proof_signer_.available())
+        {
+            return kTelemetryProofKeyUnavailableStatus;
+        }
+        if (!has_active_capability_nonce_)
+        {
+            return kTelemetryProofNoCapabilityStatus;
+        }
+        if (active_capability_nonce_ != requested_nonce)
+        {
+            return kTelemetryProofStaleNonceStatus;
+        }
+        const uint64_t now = capability_verifier_.nowBoottimeMs();
+
+        const uint32_t invalid =
+            counters_.invalid_calls.load(std::memory_order_relaxed);
+        const uint32_t dsp_failures =
+            counters_.dsp_failures.load(std::memory_order_relaxed);
+        const TelemetryProofWireSnapshot snapshot = {
+            session_id_,
+            capability_generation_,
+            active_capability_nonce_,
+            ModularAdd(telemetry_proof_sequence_.fetch_add(
+                           1, std::memory_order_relaxed),
+                       1),
+            TelemetryFlags(now,
+                           capability_generation_,
+                           capability_expires_ms_),
+            counters_.process_calls.load(std::memory_order_relaxed),
+            counters_.processed_frames.load(std::memory_order_relaxed),
+            ModularAdd(invalid, dsp_failures),
+            counters_.mutations.load(std::memory_order_relaxed),
+        };
+        return EncodeTelemetryProof(snapshot, telemetry_proof_signer_, encoded)
+                   ? 0
+                   : kTelemetryProofKeyUnavailableStatus;
     }
 
     int32_t EffectContext::GetTelemetryParameter(uint32_t command_size,
@@ -817,17 +883,35 @@ namespace echidna::effects::legacy
         }
 
         const auto &request = *static_cast<const effect_param_t *>(command_data);
-        if (!ValidTelemetryQueryLayout(request, command_size))
+        const bool snapshot_layout =
+            ValidTelemetryQueryLayout(request, command_size);
+        const bool proof_layout =
+            ValidTelemetryProofQueryLayout(request, command_size);
+        if (!snapshot_layout && !proof_layout)
         {
             return -EINVAL;
         }
 
-        std::array<uint8_t, kTelemetrySnapshotParameter.size()> requested_key{};
-        std::memcpy(requested_key.data(), request.data, requested_key.size());
-        const bool known = requested_key == kTelemetrySnapshotParameter;
+        std::array<uint8_t, kTelemetryProofQueryBytes> requested_key{};
+        const uint32_t parameter_size = request.psize;
+        std::memcpy(requested_key.data(), request.data, parameter_size);
+        const bool snapshot_known =
+            snapshot_layout &&
+            std::equal(kTelemetrySnapshotParameter.begin(),
+                       kTelemetrySnapshotParameter.end(),
+                       requested_key.begin());
+        const bool proof_known =
+            proof_layout &&
+            std::equal(kTelemetryProofParameter.begin(),
+                       kTelemetryProofParameter.end(),
+                       requested_key.begin());
+        const bool known = snapshot_known || proof_known;
+        const uint32_t prefix_bytes =
+            static_cast<uint32_t>(sizeof(effect_param_t) + parameter_size);
         const uint32_t required = static_cast<uint32_t>(
-            known ? kTelemetrySnapshotReplyBytes
-                  : sizeof(effect_param_t) + kTelemetrySnapshotParameter.size());
+            snapshot_known ? kTelemetrySnapshotReplyBytes
+                           : proof_known ? kTelemetryProofReplyBytes
+                                         : prefix_bytes);
         const uint32_t capacity = *reply_size;
         *reply_size = required;
 
@@ -839,7 +923,7 @@ namespace echidna::effects::legacy
 
         const bool prefix_fits = capacity >= sizeof(effect_param_t);
         const bool key_fits =
-            capacity >= sizeof(effect_param_t) + kTelemetrySnapshotParameter.size();
+            capacity >= sizeof(effect_param_t) + parameter_size;
         if (!known)
         {
             if (capacity < required)
@@ -848,38 +932,82 @@ namespace echidna::effects::legacy
                 {
                     WriteParameterReplyPrefix(reply_data,
                                               -ENOSPC,
+                                              parameter_size,
                                               0,
                                               key_fits ? requested_key.data() : nullptr);
                 }
                 return -ENOSPC;
             }
             WriteParameterReplyPrefix(
-                reply_data, -EINVAL, 0, requested_key.data());
+                reply_data,
+                -EINVAL,
+                parameter_size,
+                0,
+                requested_key.data());
             return 0;
         }
 
-        if (request.vsize < kTelemetrySnapshotValueBytes ||
-            capacity < kTelemetrySnapshotReplyBytes)
+        const uint32_t value_bytes = static_cast<uint32_t>(
+            snapshot_known ? kTelemetrySnapshotValueBytes
+                           : kTelemetryProofValueBytes);
+        if (request.vsize < value_bytes || capacity < required)
         {
             if (prefix_fits)
             {
                 WriteParameterReplyPrefix(
                     reply_data,
                     -ENOSPC,
-                    static_cast<uint32_t>(kTelemetrySnapshotValueBytes),
-                    key_fits ? kTelemetrySnapshotParameter.data() : nullptr);
+                    parameter_size,
+                    value_bytes,
+                    key_fits ? requested_key.data() : nullptr);
             }
             return -ENOSPC;
         }
 
-        const auto encoded = EncodeTelemetrySnapshot(TelemetryWireState());
-        WriteParameterReplyPrefix(
-            reply_data,
-            0,
-            static_cast<uint32_t>(encoded.size()),
-            kTelemetrySnapshotParameter.data());
+        if (snapshot_known)
+        {
+            const auto encoded = EncodeTelemetrySnapshot(TelemetryWireState());
+            WriteParameterReplyPrefix(
+                reply_data,
+                0,
+                parameter_size,
+                static_cast<uint32_t>(encoded.size()),
+                requested_key.data());
+            auto *reply = static_cast<effect_param_t *>(reply_data);
+            std::memcpy(reply->data + parameter_size,
+                        encoded.data(),
+                        encoded.size());
+            return 0;
+        }
+
+        const auto write_proof_error = [&](int32_t status)
+        {
+            *reply_size = prefix_bytes;
+            WriteParameterReplyPrefix(reply_data,
+                                      status,
+                                      parameter_size,
+                                      0,
+                                      requested_key.data());
+            return 0;
+        };
+        TelemetryProofNonce requested_nonce{};
+        std::copy_n(requested_key.begin() + kTelemetryProofParameter.size(),
+                    requested_nonce.size(),
+                    requested_nonce.begin());
+        std::array<uint8_t, kTelemetryProofValueBytes> encoded{};
+        const int32_t proof_status =
+            EncodeTelemetryProofForNonce(requested_nonce, &encoded);
+        if (proof_status != 0)
+        {
+            return write_proof_error(proof_status);
+        }
+        WriteParameterReplyPrefix(reply_data,
+                                  0,
+                                  parameter_size,
+                                  static_cast<uint32_t>(encoded.size()),
+                                  requested_key.data());
         auto *reply = static_cast<effect_param_t *>(reply_data);
-        std::memcpy(reply->data + kTelemetrySnapshotParameter.size(),
+        std::memcpy(reply->data + parameter_size,
                     encoded.data(),
                     encoded.size());
         return 0;

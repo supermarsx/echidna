@@ -42,8 +42,17 @@ using echidna::effects::legacy::EffectContext;
 using echidna::effects::legacy::kTelemetryAuthorized;
 using echidna::effects::legacy::kTelemetryEnabled;
 using echidna::effects::legacy::kTelemetryExpired;
+using echidna::effects::legacy::kTelemetryProofParameter;
+using echidna::effects::legacy::kTelemetryProofQueryBytes;
+using echidna::effects::legacy::kTelemetryProofReplyBytes;
+using echidna::effects::legacy::kTelemetryProofStaleNonceStatus;
+using echidna::effects::legacy::kTelemetryProofValueBytes;
 using echidna::effects::legacy::kTelemetrySnapshotParameter;
 using echidna::effects::legacy::kTelemetrySnapshotReplyBytes;
+using echidna::effects::legacy::TelemetryProofKey;
+using echidna::effects::legacy::TelemetryProofKeyOptions;
+using echidna::effects::legacy::TelemetryProofNonce;
+using echidna::effects::legacy::TelemetryProofSigner;
 
 #define REQUIRE(condition)                                                      \
     do                                                                          \
@@ -72,6 +81,15 @@ namespace
     {
 #ifndef _WIN32
         return static_cast<uint32_t>(::geteuid());
+#else
+        return 0;
+#endif
+    }
+
+    uint32_t EffectiveGid() noexcept
+    {
+#ifndef _WIN32
+        return static_cast<uint32_t>(::getegid());
 #else
         return 0;
 #endif
@@ -298,6 +316,40 @@ namespace
         return {path.string(), TestClock, EffectiveUid()};
     }
 
+    TelemetryProofKey FixtureProofKey(uint8_t offset = 0)
+    {
+        TelemetryProofKey key{};
+        for (size_t index = 0; index < key.size(); ++index)
+        {
+            key[index] = static_cast<uint8_t>(index + offset);
+        }
+        return key;
+    }
+
+    bool WriteProofKey(const std::filesystem::path &path,
+                       const TelemetryProofKey &key)
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char *>(key.data()),
+                     static_cast<std::streamsize>(key.size()));
+        output.close();
+        if (!output)
+        {
+            return false;
+        }
+#ifndef _WIN32
+        return ::chmod(path.c_str(), 0440) == 0;
+#else
+        return true;
+#endif
+    }
+
+    TelemetryProofKeyOptions ProofOptionsFor(
+        const std::filesystem::path &path)
+    {
+        return {path.string(), EffectiveUid(), EffectiveGid(), 0440};
+    }
+
     struct ParameterBuffer
     {
         std::vector<uint32_t> words;
@@ -401,6 +453,94 @@ namespace
         telemetry->failures = ReadU32(value + 36);
         telemetry->mutations = ReadU32(value + 40);
         return ReadU32(value + 44) == 0;
+    }
+
+    struct ProofView
+    {
+        int32_t session_id{0};
+        uint64_t generation{0};
+        TelemetryProofNonce nonce{};
+        uint32_t sequence{0};
+        uint16_t flags{0};
+        uint32_t blocks{0};
+        uint32_t frames{0};
+        uint32_t failures{0};
+        uint32_t mutations{0};
+    };
+
+    int32_t ReadProof(EffectContext *context,
+                      const TelemetryProofNonce &nonce,
+                      const TelemetryProofSigner &signer,
+                      ProofView *proof)
+    {
+        if (context == nullptr || proof == nullptr)
+        {
+            return std::numeric_limits<int32_t>::min();
+        }
+        static_assert(kTelemetryProofReplyBytes % sizeof(uint32_t) == 0);
+        std::array<uint32_t,
+                   kTelemetryProofReplyBytes / sizeof(uint32_t)>
+            storage{};
+        auto *parameter = reinterpret_cast<effect_param_t *>(storage.data());
+        parameter->psize = static_cast<uint32_t>(kTelemetryProofQueryBytes);
+        parameter->vsize = static_cast<uint32_t>(kTelemetryProofValueBytes);
+        std::memcpy(parameter->data,
+                    kTelemetryProofParameter.data(),
+                    kTelemetryProofParameter.size());
+        std::memcpy(parameter->data + kTelemetryProofParameter.size(),
+                    nonce.data(),
+                    nonce.size());
+        uint32_t reply_size = kTelemetryProofReplyBytes;
+        if (context->Command(EFFECT_CMD_GET_PARAM,
+                             sizeof(effect_param_t) + kTelemetryProofQueryBytes,
+                             parameter,
+                             &reply_size,
+                             parameter) != 0)
+        {
+            return std::numeric_limits<int32_t>::min();
+        }
+        if (parameter->status != 0)
+        {
+            return reply_size == sizeof(effect_param_t) +
+                                     kTelemetryProofQueryBytes &&
+                           parameter->psize == kTelemetryProofQueryBytes &&
+                           parameter->vsize == 0
+                       ? parameter->status
+                       : std::numeric_limits<int32_t>::min();
+        }
+        if (reply_size != kTelemetryProofReplyBytes ||
+            parameter->psize != kTelemetryProofQueryBytes ||
+            parameter->vsize != kTelemetryProofValueBytes ||
+            std::memcmp(parameter->data,
+                        kTelemetryProofParameter.data(),
+                        kTelemetryProofParameter.size()) != 0 ||
+            std::memcmp(parameter->data + kTelemetryProofParameter.size(),
+                        nonce.data(),
+                        nonce.size()) != 0)
+        {
+            return std::numeric_limits<int32_t>::min();
+        }
+        const auto *value = reinterpret_cast<const uint8_t *>(parameter->data) +
+                            kTelemetryProofQueryBytes;
+        std::array<uint8_t, kTelemetryProofValueBytes> encoded{};
+        std::copy_n(value, encoded.size(), encoded.begin());
+        if (!signer.Verify(encoded) || std::memcmp(value, "ECHT", 4) != 0 ||
+            ReadU16(value + 4) != 2 || ReadU16(value + 6) != 2 ||
+            ReadU16(value + 8) != kTelemetryProofValueBytes ||
+            ReadU32(value + 76) != 0)
+        {
+            return std::numeric_limits<int32_t>::min();
+        }
+        proof->flags = ReadU16(value + 10);
+        proof->session_id = static_cast<int32_t>(ReadU32(value + 12));
+        proof->generation = ReadU64(value + 16);
+        std::copy_n(value + 24, proof->nonce.size(), proof->nonce.begin());
+        proof->sequence = ReadU32(value + 40);
+        proof->blocks = ReadU32(value + 44);
+        proof->frames = ReadU32(value + 48);
+        proof->failures = ReadU32(value + 52);
+        proof->mutations = ReadU32(value + 56);
+        return 0;
     }
 
     bool Prepare(EffectContext *context)
@@ -677,6 +817,153 @@ namespace
                 snapshot.frames == cumulative.frames &&
                 snapshot.failures == cumulative.failures &&
                 snapshot.mutations == cumulative.mutations);
+        return true;
+    }
+
+    bool TestAuthenticatedProofTracksCapabilityIncarnationsAndAudio()
+    {
+        g_now_ms = 800000;
+        SigningKey controller;
+        REQUIRE(controller.valid());
+        ScopedPath controller_path(UniquePath("proof-controller"));
+        ScopedPath proof_key_path(UniquePath("proof-hmac"));
+        REQUIRE(controller.WriteSpki(controller_path.get()));
+        REQUIRE(WriteProofKey(proof_key_path.get(), FixtureProofKey()));
+
+        TelemetryProofSigner proof_verifier(ProofOptionsFor(proof_key_path.get()));
+        REQUIRE(proof_verifier.Load());
+        EffectContext context(kSessionId,
+                              19,
+                              OptionsFor(controller_path.get()),
+                              ProofOptionsFor(proof_key_path.get()));
+        REQUIRE(Prepare(&context));
+        // INIT owns all trust-file I/O. Proof reads continue from the frozen
+        // in-memory key and never reopen the path during GET_PARAM.
+        REQUIRE(std::filesystem::remove(proof_key_path.get()));
+
+        ClaimsSpec initial;
+        initial.generation = 31;
+        initial.issued_ms = 799990;
+        initial.expires_ms = 801000;
+        REQUIRE(context.ApplyCapability(
+                    BytesView(BuildEnvelope(controller, initial))) == 0);
+
+        ProofView proof;
+        REQUIRE(ReadProof(&context,
+                          initial.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.session_id == kSessionId);
+        REQUIRE(proof.generation == initial.generation);
+        REQUIRE(proof.nonce == initial.nonce);
+        REQUIRE(proof.sequence == 1);
+        REQUIRE(proof.flags == kTelemetryAuthorized);
+        REQUIRE(proof.blocks == 0 && proof.frames == 0 && proof.failures == 0 &&
+                proof.mutations == 0);
+
+        TelemetryView legacy;
+        REQUIRE(ReadTelemetry(&context, &legacy));
+        REQUIRE(legacy.sequence == 1);
+        REQUIRE(context.Enable() == 0);
+        REQUIRE(OutputDiffers(&context, true));
+        REQUIRE(context.Process(nullptr, nullptr) == -EINVAL);
+        REQUIRE(ReadProof(&context,
+                          initial.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 2);
+        REQUIRE(proof.flags == (kTelemetryEnabled | kTelemetryAuthorized));
+        REQUIRE(proof.blocks == 2 && proof.frames == 8 && proof.failures == 1 &&
+                proof.mutations == 1);
+
+        TelemetryProofNonce wrong_nonce = initial.nonce;
+        wrong_nonce[15] ^= 0x80;
+        REQUIRE(ReadProof(&context,
+                          wrong_nonce,
+                          proof_verifier,
+                          &proof) == kTelemetryProofStaleNonceStatus);
+        REQUIRE(ReadProof(&context,
+                          initial.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 3);
+
+        ClaimsSpec renewal = initial;
+        renewal.nonce[0] = 71;
+        renewal.issued_ms = 800010;
+        renewal.expires_ms = 802000;
+        REQUIRE(context.ApplyCapability(
+                    BytesView(BuildEnvelope(controller, renewal))) == 0);
+        REQUIRE(ReadProof(&context,
+                          initial.nonce,
+                          proof_verifier,
+                          &proof) == kTelemetryProofStaleNonceStatus);
+        REQUIRE(ReadProof(&context,
+                          renewal.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 4);
+        REQUIRE(proof.generation == renewal.generation);
+        REQUIRE(proof.nonce == renewal.nonce);
+        REQUIRE(proof.flags == (kTelemetryEnabled | kTelemetryAuthorized));
+
+        g_now_ms = renewal.expires_ms;
+        REQUIRE(ReadProof(&context,
+                          renewal.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 5);
+        REQUIRE(proof.flags == (kTelemetryEnabled | kTelemetryExpired));
+        REQUIRE(context.Reset() == 0);
+        REQUIRE(ReadProof(&context,
+                          renewal.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 6);
+        REQUIRE(proof.flags == (kTelemetryEnabled | kTelemetryExpired));
+        REQUIRE(proof.blocks == 2 && proof.frames == 8 && proof.failures == 1 &&
+                proof.mutations == 1);
+
+        REQUIRE(context.Disable() == 0);
+        REQUIRE(ReadProof(&context,
+                          renewal.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 7);
+        REQUIRE(proof.flags == kTelemetryExpired);
+
+        ClaimsSpec higher = renewal;
+        higher.generation = 32;
+        higher.nonce[0] = 72;
+        higher.issued_ms = g_now_ms;
+        higher.expires_ms = 803000;
+        REQUIRE(context.ApplyCapability(
+                    BytesView(BuildEnvelope(controller, higher))) == 0);
+        REQUIRE(ReadProof(&context,
+                          renewal.nonce,
+                          proof_verifier,
+                          &proof) == kTelemetryProofStaleNonceStatus);
+        REQUIRE(ReadProof(&context,
+                          higher.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 8);
+        REQUIRE(proof.generation == higher.generation);
+        REQUIRE(proof.flags == kTelemetryAuthorized);
+        REQUIRE(context.Enable() == 0);
+        REQUIRE(OutputDiffers(&context, true));
+        REQUIRE(ReadProof(&context,
+                          higher.nonce,
+                          proof_verifier,
+                          &proof) == 0);
+        REQUIRE(proof.sequence == 9);
+        REQUIRE(proof.blocks == 3 && proof.frames == 16 && proof.failures == 1 &&
+                proof.mutations == 2);
+        REQUIRE(ReadTelemetry(&context, &legacy));
+        REQUIRE(legacy.sequence == 2);
+        REQUIRE(legacy.blocks == proof.blocks && legacy.frames == proof.frames &&
+                legacy.failures == proof.failures &&
+                legacy.mutations == proof.mutations);
         return true;
     }
 
@@ -1026,6 +1313,7 @@ int main()
     CHECK_TRUE(TestCanonicalVerificationAndAudio());
     CHECK_TRUE(TestVerifiedPresetSurvivesReauthorizationLifecycle());
     CHECK_TRUE(TestSignedTelemetryStateAndCumulativeCounters());
+    CHECK_TRUE(TestAuthenticatedProofTracksCapabilityIncarnationsAndAudio());
     CHECK_TRUE(TestCanonicalBodyFixture());
     CHECK_TRUE(TestStateTransitionsAndRevoke());
     CHECK_TRUE(TestVerifierRejections());
