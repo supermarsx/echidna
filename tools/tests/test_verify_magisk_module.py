@@ -31,6 +31,13 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             with self.assertRaisesRegex(verifier.VerificationError, "pre-generated"):
                 verifier.verify_magisk_zip(path, self.dynamic_reader)
 
+    def test_rejects_pre_generated_inert_registry(self) -> None:
+        with self.archive(
+            {"registration/next-boot/config/vendor/etc/audio_effects.xml": b"<xml/>"}
+        ) as path:
+            with self.assertRaisesRegex(verifier.VerificationError, "pre-generated"):
+                verifier.verify_magisk_zip(path, self.dynamic_reader)
+
     def test_rejects_auto_apply_content(self) -> None:
         with self.archive(
             {"common/effect-registration.sh": self.registration() + b"\n<preprocess>"}
@@ -61,11 +68,25 @@ class VerifyMagiskModuleTest(unittest.TestCase):
         entries: dict[str, tuple[bytes, int]] = {
             "module.prop": (b"id=echidna\n", 0o644),
             "customize.sh": (b"#!/system/bin/sh\n$MODDIR/system/vendor\n", 0o755),
-            "post-fs-data.sh": (b"#!/system/bin/sh\n", 0o755),
-            "service.sh": (b"#!/system/bin/sh\nstaged-next-boot\n", 0o755),
+            "post-fs-data.sh": (
+                b"#!/system/bin/sh\n"
+                b"discard_stale_preprocessor_activation\n"
+                b"marker=\"$(manual_disable_marker)\"\n"
+                b"activate_preprocessor_registration\n"
+                b"arm_boot_watchdog\n",
+                0o755,
+            ),
+            "service.sh": (
+                b"#!/system/bin/sh\n"
+                b"cleanup_preprocessor_activation\n"
+                b"stage_preprocessor_registration\n"
+                b"staged-next-boot\n",
+                0o755,
+            ),
             "sepolicy.rule": (b"", 0o644),
             "common/trust-bootstrap.sh": (b"#!/system/bin/sh\n", 0o755),
             "common/effect-registration.sh": (self.registration(), 0o755),
+            "common/effect-activation.sh": (self.activation(), 0o755),
             "common/echidna-trust-helper.jar": (self.helper_jar(), 0o444),
             "common/release-cert-sha256": (b"ab" * 32 + b"\n", 0o444),
             "common/trust-mode": (b"production\n", 0o444),
@@ -89,6 +110,20 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             + "$MODDIR/system/vendor\n"
             + "Stable-AIDL-only\n"
             + "staged-next-boot\n"
+            + "registration/next-boot\n"
+            + "state-v2\n"
+            + "lshal list -ip\n"
+        ).encode("utf-8")
+
+    @staticmethod
+    def activation() -> bytes:
+        return (
+            "#!/system/bin/sh\n"
+            "cleanup_transient_configs\n"
+            "current_fingerprint=fixture\n"
+            "fingerprint/source/config/library/key\n"
+            "cp \"$inert_config\" \"$config_temporary\"\n"
+            "approved-for-magisk-mount\n"
         ).encode("utf-8")
 
     @staticmethod

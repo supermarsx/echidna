@@ -438,10 +438,14 @@ AudioFlinger are explicitly unsupported (`unsupported_injection_boundary`), not 
 more testing. See the route table above and [Architecture](architecture.md#data-plane-audio-capture-to-dsp).
 
 The legacy input preprocessor is an official Android effect-ABI boundary, not a private HAL hook.
-The module ships it in inert per-ABI staging and can create a same-partition system/vendor registry
-overlay after signer, factory, config, ABI, ELF, and source-hash checks. Stable-AIDL-only and active
-ODM configurations fail closed. Registration adds no `preprocess`/`pre_processing` application;
-session attachment, device enablement, linker/label proof, and enforced-SELinux audio proof remain.
+The module ships it in inert per-ABI staging. Late-start may prepare a same-partition system/vendor
+registry outside the auto-mounted tree only after a registered `lshal` factory PID and its
+`/proc` maps/ELF identity pass. On the next boot, `post-fs-data` removes stale backing and validates
+fingerprint, stock config, registry, library, key, and metadata before exposing the transient config
+to Magisk's later mount phase. Any mismatch leaves the stock config active; Stable-AIDL-only,
+ambiguous-PID, and active-ODM configurations fail closed. Registration adds no
+`preprocess`/`pre_processing` application; session attachment, device enablement, linker/label proof,
+and enforced-SELinux audio proof remain.
 
 ## Status: verified vs. needs a device
 

@@ -15,6 +15,7 @@ CONFIG_BIN="$TMP_DIR/echidna_config.bin"
 TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
 TRUST_BOOTSTRAP="$MODDIR/common/trust-bootstrap.sh"
 EFFECT_REGISTRATION="$MODDIR/common/effect-registration.sh"
+EFFECT_ACTIVATION="$MODDIR/common/effect-activation.sh"
 
 log() {
     echo "[echidna][service] $1"
@@ -110,11 +111,24 @@ stage_preprocessor_registration() {
     fi
 }
 
+cleanup_preprocessor_activation() {
+    if [ ! -x "$EFFECT_ACTIVATION" ]; then
+        log "Effect activation helper missing; unable to clean transient backing"
+        return 0
+    fi
+    if ! "$EFFECT_ACTIVATION" "$MODDIR" cleanup; then
+        log "Effect activation backing cleanup failed; next boot will retry fail-closed"
+    fi
+}
+
 marker="$(manual_disable_marker 2>/dev/null || true)"
 if [ -n "$marker" ]; then
     engage_failsafe "manual disable marker present at $marker"
 fi
 clear_boot_watchdog
+# The current mount remains active, but its module-tree backing must not survive
+# into another boot without fresh post-fs-data validation.
+cleanup_preprocessor_activation
 prepare_runtime_dir
 install_library
 bootstrap_preprocessor_trust

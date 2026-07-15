@@ -139,10 +139,11 @@ for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib
   `libechidna.so` to the JNI search path, and prepares `/data/local/tmp/echidna` (plugin directory
   plus pre-sized config/telemetry region files). It applies dedicated region types and narrow app
   read/write grants matching `sepolicy.rule`. It does not grant zygote transitions or binder access.
-- **`service.sh`** marks late-start as reached, clears the watchdog, recreates safe runtime
-  permissions, stages `libechidna.so`, and invokes trust then effect registration nonfatally. Failure
-  leaves the legacy preprocessor unregistered or identity-bypassed; it never blocks boot, widens
-  SELinux, replaces a live key, or restarts audioserver.
+- **`service.sh`** marks late-start as reached, clears the watchdog, removes transient effect-config
+  backing left after Magisk's mount phase, recreates safe runtime permissions, stages
+  `libechidna.so`, and invokes trust then inert effect staging nonfatally. Failure leaves the legacy
+  preprocessor unregistered or identity-bypassed; it never blocks boot, widens SELinux, replaces a
+  live key, or restarts audioserver.
 
 The helper supports API 26–33 only. It verifies the current PackageManager signer, user-0
 UID/dataDir, and app-owned P-256 SPKI before staging a root-owned read-only copy under
@@ -153,9 +154,13 @@ copies the same verified key to the module overlay for
 ## Default-off legacy effect registration
 
 `common/effect-registration.sh` does not use the SDK level as an eligibility shortcut. It requires
-runtime evidence for a legacy HIDL `IEffectsFactory/default`, rejects Stable-AIDL-only factories and
-ambiguous HIDL+AIDL discovery, and proves the factory host bitness/ABI. Android 14 is eligible when
-it still exposes that legacy HIDL factory. A Stable-AIDL-only Android 14 device is not.
+registered-service PID evidence from `lshal list -ip` for a legacy HIDL
+`IEffectsFactory/default`. It rejects Stable-AIDL-only factories, HIDL+AIDL discovery, and multiple
+registered factory PIDs. The selected PID is tied to a stable `/proc/<pid>/stat` start time, a
+verified `/proc/<pid>/exe` target and executable map, and matching ELF class/machine. This supports
+generic and vendor-cohosted audio-service names without trusting process command-line text. Android
+14 is eligible when it still registers that legacy HIDL factory. A Stable-AIDL-only Android 14
+device is not.
 
 The config search follows the platform order: ODM, API 30+ vendor-SKU, vendor, then system XML;
 legacy vendor/system `.conf` is used only when no XML is readable. An active ODM config is rejected
@@ -166,25 +171,41 @@ equivalent supported ODM module path. The selected system/vendor source is merge
 - the type UUID remains library-descriptor evidence, as required by the legacy effect ABI;
 - every existing vendor registry/processing entry is retained;
 - malformed, duplicate, conflicting, or ambiguous input is rejected;
+- processing instructions, CDATA, entity references, and other unsupported DOM nodes are rejected
+  instead of being silently dropped;
 - no XML `preprocess` or legacy `pre_processing` application is created.
 
 The module-owned Dex helper validates root ownership/no-follow reads, strict UTF-8, ELF class and
-machine, the AELI marker, and P-256 SPKI. It then atomically stages the registry, matching
-`lib(64)/soundfx` library, and exact system key overlay before committing metadata. Metadata records
-source/overlay/library/key SHA-256 values, source path, format, partition, ABI/bitness, build
-fingerprint, both UUIDs, and `auto_apply=false`. Repeated staging must match every tracked output.
-Fingerprint or source drift exits separately and places the module `disable` marker for the next
-boot without deleting or rewriting the suspect overlay in the running boot.
+machine, the AELI marker, and P-256 SPKI. It atomically stages the generated registry outside the
+auto-mounted tree under `registration/next-boot/config/`, plus the matching `lib(64)/soundfx`
+library and exact system key, before committing `state-v2` metadata. Metadata records
+source/overlay/library/key SHA-256 values, exact inert/transient paths, source path, format,
+partition, ABI/bitness, build fingerprint, both UUIDs, and `auto_apply=false`. Repeated staging must
+match every tracked output.
 
-The release ZIP itself contains no active `audio_effects.xml`, `audio_effects.conf`, or controller
-SPKI. `tools/verify_magisk_module.py` checks all three preprocessor ELFs for ABI, SONAME, AELI export,
-exact DT_NEEDED set, archive modes/layout, exact registration constants, and the absence of
-auto-apply or hot audioserver restart tokens.
+Magisk documents module `post-fs-data.sh` as blocking and running before module files are mounted.
+Echidna uses that ordering as the activation boundary: it first removes all stale or interrupted
+config backing, then validates current fingerprint, stock source hash, metadata ownership/mode, and
+the config/library/key paths and hashes. Only a fully verified registry is copied to the exact
+transient `system`/`system/vendor` module path for Magisk's subsequent mount. Any mismatch or copy
+failure removes both partial and transient files, so the stock config remains active for that boot.
+The late service removes the transient backing after the mount phase and may prepare only inert
+state for another boot. A mounted library or key is inert without registry registration. Fingerprint,
+source, or tracked-output drift creates `registration/restage-required`; it does not disable the
+whole module, and early activation remains off until an explicit reinstall/restage. Legacy v1 state
+also requires restaging.
+
+The release ZIP itself contains no generated active or inert `audio_effects.xml`/
+`audio_effects.conf`, or controller SPKI. `tools/verify_magisk_module.py` checks all three
+preprocessor ELFs for ABI, SONAME, AELI export, exact DT_NEEDED set, archive modes/layout, early
+activation ordering, exact registration constants, and the absence of command-line host discovery,
+auto-apply, or hot audioserver restart tokens.
 
 This is still device-gated. The repository has not yet proved a real device's active HIDL host and
-config, magic-mount file labels/linker namespace, factory descriptor, process maps, AVC-free load,
-or rollback observation. No session attachment or effect enablement exists, so registration alone
-does not transform capture audio.
+config, post-fs/mount ordering, magic-mount file labels/linker namespace, factory descriptor,
+process maps, or AVC-free load. Host fixtures cover activation rollback and first-OTA refusal, but
+no session attachment or effect enablement exists, so registration alone does not transform capture
+audio.
 
 Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
 `echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem

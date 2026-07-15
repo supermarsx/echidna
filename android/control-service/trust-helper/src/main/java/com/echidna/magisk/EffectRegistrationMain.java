@@ -50,24 +50,25 @@ public final class EffectRegistrationMain {
         SpkiPolicy.verifyP256(key);
 
         String sourceHash = sha256(source);
+        refuseUntrackedOutput(options.transientConfig);
         ExistingState existing = readExistingState(options);
         if (existing != null) {
             if (!options.fingerprint.equals(existing.fingerprint)) {
-                throw new DriftException("build fingerprint changed since overlay staging");
+                throw new DriftException("build fingerprint changed since inert staging");
             }
             if (!sourceHash.equals(existing.sourceHash)
                     && !sourceHash.equals(existing.overlayHash)) {
                 throw new DriftException("active effect configuration no longer matches source hash");
             }
-            requireDigest(options.configOutput, existing.overlayHash, MAX_CONFIG_BYTES);
+            requireDigest(options.inertConfig, existing.overlayHash, MAX_CONFIG_BYTES);
             requireDigest(options.libraryOutput, existing.libraryHash, MAX_LIBRARY_BYTES);
             requireDigest(options.activeKey, existing.keyHash, MAX_KEY_BYTES);
-            System.out.println("ECHIDNA_EFFECT_REGISTRATION_V1");
+            System.out.println("ECHIDNA_EFFECT_REGISTRATION_V2");
             System.out.println("status=already-staged");
             System.out.println("reboot_required=true");
             return;
         }
-        refuseUntrackedOutput(options.configOutput);
+        refuseUntrackedOutput(options.inertConfig);
         refuseUntrackedOutput(options.libraryOutput);
         refuseUntrackedOutput(options.activeKey);
 
@@ -86,11 +87,11 @@ public final class EffectRegistrationMain {
         boolean wroteLibrary = false;
         boolean wroteKey = false;
         try {
-            ensureRootDirectory(new File(options.configOutput).getParentFile(), 0755);
+            ensureRootDirectory(new File(options.inertConfig).getParentFile(), 0755);
             ensureRootDirectory(new File(options.libraryOutput).getParentFile(), 0755);
             ensureRootDirectory(new File(options.activeKey).getParentFile(), 0755);
             ensureRootDirectory(new File(options.metadata).getParentFile(), 0700);
-            writeAtomic(options.configOutput, overlay, 0644);
+            writeAtomic(options.inertConfig, overlay, 0644);
             wroteConfig = true;
             writeAtomic(options.libraryOutput, library, 0644);
             wroteLibrary = true;
@@ -100,7 +101,7 @@ public final class EffectRegistrationMain {
             writeAtomic(options.metadata, metadata.getBytes(StandardCharsets.US_ASCII), 0444);
         } catch (Throwable failure) {
             if (wroteConfig) {
-                new File(options.configOutput).delete();
+                new File(options.inertConfig).delete();
             }
             if (wroteLibrary) {
                 new File(options.libraryOutput).delete();
@@ -111,7 +112,7 @@ public final class EffectRegistrationMain {
             throw failure;
         }
 
-        System.out.println("ECHIDNA_EFFECT_REGISTRATION_V1");
+        System.out.println("ECHIDNA_EFFECT_REGISTRATION_V2");
         System.out.println("status=staged-next-boot");
         System.out.println("source_sha256=" + sourceHash);
         System.out.println("overlay_sha256=" + overlayHash);
@@ -140,9 +141,10 @@ public final class EffectRegistrationMain {
                 throw new SecurityException("registration metadata is malformed or duplicated");
             }
         }
-        requireMetadata(values, "version", "1");
+        requireMetadata(values, "version", "2");
         requireMetadata(values, "source_path", options.source);
-        requireMetadata(values, "config_output", options.configOutput);
+        requireMetadata(values, "inert_config", options.inertConfig);
+        requireMetadata(values, "transient_config", options.transientConfig);
         requireMetadata(values, "library_output", options.libraryOutput);
         requireMetadata(values, "active_key", options.activeKey);
         requireMetadata(values, "partition", options.partition);
@@ -167,9 +169,10 @@ public final class EffectRegistrationMain {
             String overlayHash,
             String libraryHash,
             String keyHash) {
-        return "version=1\n"
+        return "version=2\n"
                 + "source_path=" + options.source + "\n"
-                + "config_output=" + options.configOutput + "\n"
+                + "inert_config=" + options.inertConfig + "\n"
+                + "transient_config=" + options.transientConfig + "\n"
                 + "library_output=" + options.libraryOutput + "\n"
                 + "active_key=" + options.activeKey + "\n"
                 + "partition=" + options.partition + "\n"
@@ -409,7 +412,8 @@ public final class EffectRegistrationMain {
         final int bits;
         final String abi;
         final String librarySource;
-        final String configOutput;
+        final String inertConfig;
+        final String transientConfig;
         final String libraryOutput;
         final String metadata;
         final String pendingKey;
@@ -432,7 +436,8 @@ public final class EffectRegistrationMain {
                 throw new IllegalArgumentException("ABI does not match effect host bitness");
             }
             librarySource = absolute(values, "--library-source");
-            configOutput = absolute(values, "--config-output");
+            inertConfig = absolute(values, "--inert-config");
+            transientConfig = absolute(values, "--transient-config");
             libraryOutput = absolute(values, "--library-output");
             metadata = absolute(values, "--metadata");
             pendingKey = absolute(values, "--pending-key");
@@ -453,19 +458,34 @@ public final class EffectRegistrationMain {
             String sourceSuffix = source.substring(("/" + partition).length());
             String overlayPartition = "system".equals(partition)
                     ? "/system" : "/system/vendor";
-            if (!configOutput.endsWith(overlayPartition + sourceSuffix)
-                    || !libraryOutput.endsWith(overlayPartition + "/lib"
-                            + (bits == 64 ? "64" : "") + "/soundfx/"
+            String metadataSuffix = "/registration/next-boot/state-v2";
+            if (!metadata.endsWith(metadataSuffix)) {
+                throw new IllegalArgumentException("metadata path violates module contract");
+            }
+            String moduleRoot = metadata.substring(0, metadata.length() - metadataSuffix.length());
+            String expectedInert = moduleRoot + "/registration/next-boot/config/"
+                    + partition + sourceSuffix;
+            String expectedTransient = moduleRoot + overlayPartition + sourceSuffix;
+            String expectedLibrary = moduleRoot + overlayPartition + "/lib"
+                    + (bits == 64 ? "64" : "") + "/soundfx/"
+                    + EffectConfigMerger.LIBRARY_FILE;
+            if (moduleRoot.isEmpty()
+                    || !inertConfig.equals(expectedInert)
+                    || !transientConfig.equals(expectedTransient)
+                    || !libraryOutput.equals(expectedLibrary)
+                    || !librarySource.equals(moduleRoot + "/preproc/" + abi + "/"
                             + EffectConfigMerger.LIBRARY_FILE)
-                    || !activeKey.endsWith(
-                            "/system/etc/echidna/preprocessor_controller_p256.spki")) {
+                    || !pendingKey.equals(moduleRoot
+                            + "/trust/next-boot/preprocessor_controller_p256.spki")
+                    || !activeKey.equals(moduleRoot
+                            + "/system/etc/echidna/preprocessor_controller_p256.spki")) {
                 throw new IllegalArgumentException("registration output path violates module contract");
             }
         }
 
         static Options parse(String[] arguments) throws Exception {
-            if (arguments.length != 24) {
-                throw new IllegalArgumentException("effect registration expects 12 option/value pairs");
+            if (arguments.length != 26) {
+                throw new IllegalArgumentException("effect registration expects 13 option/value pairs");
             }
             Map<String, String> values = new HashMap<>();
             for (int index = 0; index < arguments.length; index += 2) {
@@ -475,8 +495,9 @@ public final class EffectRegistrationMain {
                 }
             }
             String[] expected = {"--source", "--format", "--partition", "--bits", "--abi",
-                    "--library-source", "--config-output", "--library-output", "--metadata",
-                    "--pending-key", "--active-key", "--fingerprint"};
+                    "--library-source", "--inert-config", "--transient-config",
+                    "--library-output", "--metadata", "--pending-key", "--active-key",
+                    "--fingerprint"};
             if (values.size() != expected.length || !values.keySet().containsAll(Arrays.asList(expected))) {
                 throw new IllegalArgumentException("unknown or missing effect registration option");
             }
@@ -485,7 +506,8 @@ public final class EffectRegistrationMain {
 
         private static String absolute(Map<String, String> values, String key) {
             String value = required(values, key);
-            if (!value.startsWith("/") || value.contains("/../") || value.endsWith("/..")) {
+            if (!value.startsWith("/") || value.contains("//") || value.contains("/./")
+                    || value.endsWith("/.") || value.contains("/../") || value.endsWith("/..")) {
                 throw new IllegalArgumentException(key + " must be an absolute normalized path");
             }
             return value;

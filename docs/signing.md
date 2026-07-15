@@ -92,10 +92,13 @@ rotation is refused.
 
 The packaging concern ships the effect inertly and, only after an eligible legacy-HIDL registry is
 proved, copies the verified pending key into the module overlay at
-`/system/etc/echidna/preprocessor_controller_p256.spki` for the next boot. The late service never
-restarts audioserver or silently rotates an active key. Any trust or registration error leaves the
-preprocessor unregistered or identity-bypassed and records recovery details under
-`/data/adb/echidna/trust/status.txt`.
+`/system/etc/echidna/preprocessor_controller_p256.spki` for the next boot. The generated registry
+remains outside the auto-mounted tree until early `post-fs-data` revalidates the current fingerprint,
+stock source, config, library, key, and metadata; without that registry the library/key are inert.
+The late service never restarts audioserver or silently rotates an active key. Any trust or
+registration error leaves the preprocessor unregistered or identity-bypassed and records recovery
+details under `/data/adb/echidna/trust/status.txt` and
+`/data/adb/echidna/effect-registration/`.
 
 ## Signing-certificate migration
 

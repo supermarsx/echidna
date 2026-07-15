@@ -98,6 +98,7 @@ public final class EffectConfigMerger {
                 new ByteArrayInputStream(source.getBytes(StandardCharsets.UTF_8)));
         input.setEncoding("UTF-8");
         Document document = factory.newDocumentBuilder().parse(input);
+        validateSupportedNodes(document);
         Element root = document.getDocumentElement();
         if (root == null || !"audio_effects_conf".equals(localName(root))) {
             throw new IllegalArgumentException("XML root must be audio_effects_conf");
@@ -255,10 +256,64 @@ public final class EffectConfigMerger {
         return node.getLocalName() == null ? node.getNodeName() : node.getLocalName();
     }
 
+    private static void validateSupportedNodes(Document document) {
+        int elements = 0;
+        NodeList children = document.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            Node child = children.item(index);
+            switch (child.getNodeType()) {
+                case Node.ELEMENT_NODE:
+                    elements++;
+                    validateElementNodes((Element) child);
+                    break;
+                case Node.COMMENT_NODE:
+                    break;
+                case Node.TEXT_NODE:
+                    if (!child.getNodeValue().trim().isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "non-whitespace text outside XML root is unsupported");
+                    }
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "unsupported XML document node type: " + child.getNodeType());
+            }
+        }
+        if (elements != 1) {
+            throw new IllegalArgumentException("XML document must contain exactly one root element");
+        }
+    }
+
+    private static void validateElementNodes(Element element) {
+        NodeList children = element.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            Node child = children.item(index);
+            switch (child.getNodeType()) {
+                case Node.ELEMENT_NODE:
+                    validateElementNodes((Element) child);
+                    break;
+                case Node.COMMENT_NODE:
+                case Node.TEXT_NODE:
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "unsupported XML node type under " + localName(element)
+                                    + ": " + child.getNodeType());
+            }
+        }
+    }
+
     private static String serialize(Document document) {
         StringWriter output = new StringWriter();
         output.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-        writeNode(document.getDocumentElement(), output, 0);
+        NodeList children = document.getChildNodes();
+        for (int index = 0; index < children.getLength(); index++) {
+            Node child = children.item(index);
+            if (child.getNodeType() == Node.ELEMENT_NODE
+                    || child.getNodeType() == Node.COMMENT_NODE) {
+                writeNode(child, output, 0);
+            }
+        }
         return output.toString();
     }
 
@@ -269,7 +324,8 @@ public final class EffectConfigMerger {
             return;
         }
         if (node.getNodeType() != Node.ELEMENT_NODE) {
-            return;
+            throw new IllegalArgumentException(
+                    "unsupported XML serialization node type: " + node.getNodeType());
         }
         Element element = (Element) node;
         indent(output, depth);

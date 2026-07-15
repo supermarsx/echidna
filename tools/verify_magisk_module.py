@@ -80,6 +80,7 @@ def verify_magisk_zip(
             "sepolicy.rule",
             "common/trust-bootstrap.sh",
             "common/effect-registration.sh",
+            "common/effect-activation.sh",
             "common/echidna-trust-helper.jar",
             "common/release-cert-sha256",
             "common/trust-mode",
@@ -111,7 +112,8 @@ def verify_magisk_zip(
             )
         active_registry = sorted(
             name for name in names
-            if name.startswith("system/")
+            if (name.startswith("system/")
+                or name.startswith("registration/next-boot/config/"))
             and Path(name).name in {"audio_effects.xml", "audio_effects.conf"}
         )
         if active_registry:
@@ -128,15 +130,18 @@ def verify_magisk_zip(
             "service.sh",
             "common/trust-bootstrap.sh",
             "common/effect-registration.sh",
+            "common/effect-activation.sh",
         ):
             verify_mode(archive.getinfo(script), 0o755, script)
         for abi in ABIS:
             verify_preprocessor(archive, abi, dynamic_reader)
 
         registration = read_required(archive, "common/effect-registration.sh").decode("utf-8")
+        activation = read_required(archive, "common/effect-activation.sh").decode("utf-8")
+        post_fs = read_required(archive, "post-fs-data.sh").decode("utf-8")
         service = read_required(archive, "service.sh").decode("utf-8")
         customize = read_required(archive, "customize.sh").decode("utf-8")
-        combined = "\n".join((registration, service, customize))
+        combined = "\n".join((registration, activation, post_fs, service, customize))
         for token in (
             TYPE_UUID,
             IMPLEMENTATION_UUID,
@@ -144,6 +149,12 @@ def verify_magisk_zip(
             "$MODDIR/system/vendor",
             "Stable-AIDL-only",
             "staged-next-boot",
+            "registration/next-boot",
+            "state-v2",
+            "lshal list -ip",
+            "approved-for-magisk-mount",
+            "cleanup_transient_configs",
+            "fingerprint/source/config/library/key",
         ):
             if token not in combined:
                 raise VerificationError(f"Magisk registration contract is missing {token!r}")
@@ -152,9 +163,31 @@ def verify_magisk_zip(
             "setprop ctl.restart",
             "<preprocess",
             "pre_processing {",
+            "/cmdline",
+            "ECHIDNA_EFFECT_HOST_BITS",
         ):
             if forbidden in combined:
                 raise VerificationError(f"Magisk registration contains forbidden hot/auto-apply token {forbidden!r}")
+
+        cleanup = activation.find("cleanup_transient_configs")
+        fingerprint = activation.find("current_fingerprint=")
+        copy = activation.find('cp "$inert_config"')
+        if cleanup < 0 or fingerprint < 0 or copy < 0 or not cleanup < fingerprint < copy:
+            raise VerificationError(
+                "effect activation must remove stale backing, then verify fingerprint, then copy"
+            )
+        discard_call = post_fs.rfind("\ndiscard_stale_preprocessor_activation\n")
+        marker_call = post_fs.rfind('\nmarker="$(manual_disable_marker')
+        activate_call = post_fs.rfind("\nactivate_preprocessor_registration\n")
+        watchdog_call = post_fs.rfind("\narm_boot_watchdog\n")
+        cleanup_call = service.rfind("\ncleanup_preprocessor_activation\n")
+        staging_call = service.rfind("\nstage_preprocessor_registration\n")
+        if discard_call < 0 or marker_call < 0 or discard_call > marker_call:
+            raise VerificationError("post-fs-data must discard stale registration before markers")
+        if activate_call < 0 or watchdog_call < 0 or activate_call > watchdog_call:
+            raise VerificationError("post-fs-data must validate registration before later boot work")
+        if cleanup_call < 0 or staging_call < 0 or cleanup_call > staging_call:
+            raise VerificationError("late service must clean activation backing before restaging")
 
         helper = read_required(archive, "common/echidna-trust-helper.jar")
         with zipfile.ZipFile(io.BytesIO(helper)) as helper_archive:

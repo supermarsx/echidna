@@ -13,6 +13,7 @@ public final class EffectConfigMergerFixtureTest {
         api33XmlIsIdempotent();
         allSupportedSdkFixturesAcceptXmlAndConf();
         rejectsMalformedAmbiguousDuplicateAndConflictingInputs();
+        rejectsUnsupportedXmlNodesAndPreservesComments();
         System.out.println(
                 "effect config fixtures: API26/API28/API30/API33/idempotence/conflict PASS");
     }
@@ -159,6 +160,30 @@ public final class EffectConfigMergerFixtureTest {
                         + "  apply echidna_preprocessor\n}\n",
                 EffectConfigMerger.Format.LEGACY_CONF,
                 "/system/lib/soundfx/libechidna_preproc.so"));
+    }
+
+    private static void rejectsUnsupportedXmlNodesAndPreservesComments() throws Exception {
+        rejects(() -> EffectConfigMerger.merge(
+                "<?unsupported before?><audio_effects_conf><libraries/><effects/>"
+                        + "</audio_effects_conf>",
+                EffectConfigMerger.Format.XML,
+                null));
+        rejects(() -> EffectConfigMerger.merge(
+                "<audio_effects_conf><libraries><?unsupported inside?></libraries><effects/>"
+                        + "</audio_effects_conf>",
+                EffectConfigMerger.Format.XML,
+                null));
+        rejects(() -> EffectConfigMerger.merge(
+                "<audio_effects_conf><libraries><![CDATA[discarded]]></libraries><effects/>"
+                        + "</audio_effects_conf>",
+                EffectConfigMerger.Format.XML,
+                null));
+        String withComments = "<!--before--><audio_effects_conf><libraries/><effects/>"
+                + "</audio_effects_conf><!--after-->";
+        EffectConfigMerger.Result merged = EffectConfigMerger.merge(
+                withComments, EffectConfigMerger.Format.XML, null);
+        require(merged.contents.contains("<!--before-->"));
+        require(merged.contents.contains("<!--after-->"));
     }
 
     private static void require(boolean condition) {

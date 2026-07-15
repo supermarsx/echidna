@@ -106,6 +106,8 @@ command -v unzip >/dev/null 2>&1 || die "unzip is required to validate the trust
   || die "missing trust bootstrap at ${TEMPLATE_DIR}/common/trust-bootstrap.sh"
 [[ -f "${TEMPLATE_DIR}/common/effect-registration.sh" ]] \
   || die "missing effect registration at ${TEMPLATE_DIR}/common/effect-registration.sh"
+[[ -f "${TEMPLATE_DIR}/common/effect-activation.sh" ]] \
+  || die "missing effect activation at ${TEMPLATE_DIR}/common/effect-activation.sh"
 [[ -f "${ROOT_DIR}/license.md" ]] || die "missing repository license at ${ROOT_DIR}/license.md"
 [[ -f "${ROOT_DIR}/tools/create_module_zip.py" ]] \
   || die "missing deterministic ZIP builder at ${ROOT_DIR}/tools/create_module_zip.py"
@@ -143,6 +145,8 @@ cp "${TEMPLATE_DIR}/common/zygisk-status.sh" "${OUT_DIR}/common/zygisk-status.sh
 cp "${TEMPLATE_DIR}/common/trust-bootstrap.sh" "${OUT_DIR}/common/trust-bootstrap.sh"
 cp "${TEMPLATE_DIR}/common/effect-registration.sh" \
   "${OUT_DIR}/common/effect-registration.sh"
+cp "${TEMPLATE_DIR}/common/effect-activation.sh" \
+  "${OUT_DIR}/common/effect-activation.sh"
 cp "${TRUST_HELPER_JAR}" "${OUT_DIR}/common/echidna-trust-helper.jar"
 printf '%s\n' "${RELEASE_CERT_DIGEST}" > "${OUT_DIR}/common/release-cert-sha256"
 printf '%s\n' "${TRUST_MODE}" > "${OUT_DIR}/common/trust-mode"
@@ -152,7 +156,8 @@ chmod 0755 "${OUT_DIR}/customize.sh" "${OUT_DIR}/post-fs-data.sh" \
 chmod 0644 "${OUT_DIR}/LICENSE.md"
 chmod 0644 "${OUT_DIR}/common/zygisk-status.sh"
 chmod 0755 "${OUT_DIR}/common/trust-bootstrap.sh" \
-  "${OUT_DIR}/common/effect-registration.sh"
+  "${OUT_DIR}/common/effect-registration.sh" \
+  "${OUT_DIR}/common/effect-activation.sh"
 chmod 0444 "${OUT_DIR}/common/echidna-trust-helper.jar" \
   "${OUT_DIR}/common/release-cert-sha256" "${OUT_DIR}/common/trust-mode"
 
@@ -188,6 +193,7 @@ python3 "${ROOT_DIR}/tools/create_module_zip.py" \
   --executable META-INF/com/google/android/update-binary \
   --executable common/trust-bootstrap.sh \
   --executable common/effect-registration.sh \
+  --executable common/effect-activation.sh \
   --read-only common/echidna-trust-helper.jar \
   --read-only common/release-cert-sha256 \
   --read-only common/trust-mode

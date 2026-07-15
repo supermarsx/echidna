@@ -23,6 +23,7 @@ CONFIG_BIN="$TMP_DIR/echidna_config.bin"
 TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
 REGION_BYTES=65536
 ZYGISK_STATUS_HELPER="$MODDIR/common/zygisk-status.sh"
+EFFECT_ACTIVATION="$MODDIR/common/effect-activation.sh"
 
 log() {
     echo "[echidna][post-fs] $1"
@@ -206,10 +207,35 @@ report_status() {
     fi
 }
 
+activate_preprocessor_registration() {
+    if [ ! -x "$EFFECT_ACTIVATION" ]; then
+        log "Effect activation helper missing; stock registry remains active"
+        return 0
+    fi
+    if ! "$EFFECT_ACTIVATION" "$MODDIR" activate; then
+        log "Effect registration was not activated; stock registry remains active"
+    fi
+}
+
+discard_stale_preprocessor_activation() {
+    if [ ! -x "$EFFECT_ACTIVATION" ]; then
+        engage_failsafe "effect activation helper missing; stale registration cannot be excluded"
+    fi
+    if ! "$EFFECT_ACTIVATION" "$MODDIR" cleanup >/dev/null 2>&1; then
+        engage_failsafe "unable to remove stale effect activation before module mounts"
+    fi
+}
+
+# Always discard crash/prior-boot backing before considering disable markers or
+# current-boot inputs. A disabled module must never retain a mountable registry.
+discard_stale_preprocessor_activation
 marker="$(manual_disable_marker 2>/dev/null || true)"
 if [ -n "$marker" ]; then
     engage_failsafe "manual disable marker present at $marker"
 fi
+# Magisk invokes this script before mounting module files. Registration is only
+# exposed after the helper validates current-boot stock and staged artifacts.
+activate_preprocessor_registration
 arm_boot_watchdog
 bootstrap
 prepare_tmp

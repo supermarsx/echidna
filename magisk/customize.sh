@@ -33,6 +33,7 @@ WARNINGS=0
 ZYGISK_STATUS_HELPER="$MODPATH/common/zygisk-status.sh"
 TRUST_BOOTSTRAP_HELPER="$MODPATH/common/trust-bootstrap.sh"
 EFFECT_REGISTRATION_HELPER="$MODPATH/common/effect-registration.sh"
+EFFECT_ACTIVATION_HELPER="$MODPATH/common/effect-activation.sh"
 TRUST_DEX_HELPER="$MODPATH/common/echidna-trust-helper.jar"
 TRUST_DIGEST="$MODPATH/common/release-cert-sha256"
 TRUST_MODE="$MODPATH/common/trust-mode"
@@ -252,6 +253,7 @@ require_payload "$MODPATH/service.sh"
 require_payload "$ZYGISK_STATUS_HELPER"
 require_payload "$TRUST_BOOTSTRAP_HELPER"
 require_payload "$EFFECT_REGISTRATION_HELPER"
+require_payload "$EFFECT_ACTIVATION_HELPER"
 require_payload "$TRUST_DEX_HELPER"
 require_payload "$TRUST_DIGEST"
 require_payload "$TRUST_MODE"
@@ -309,6 +311,7 @@ set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$TRUST_BOOTSTRAP_HELPER" 0 0 0755
 set_perm "$EFFECT_REGISTRATION_HELPER" 0 0 0755
+set_perm "$EFFECT_ACTIVATION_HELPER" 0 0 0755
 set_perm "$TRUST_DEX_HELPER" 0 0 0644
 set_perm "$TRUST_DIGEST" 0 0 0444
 set_perm "$TRUST_MODE" 0 0 0444
