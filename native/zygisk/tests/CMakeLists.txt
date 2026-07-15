@@ -65,9 +65,12 @@ target_compile_features(audiohal_contract_test PRIVATE cxx_std_20)
 add_executable(aaudio_callback_registry_test
     aaudio_callback_registry_test.cpp
     ../src/hooks/aaudio_callback_registry.cpp)
+target_link_libraries(aaudio_callback_registry_test PRIVATE Threads::Threads)
 target_include_directories(aaudio_callback_registry_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(aaudio_callback_registry_test PRIVATE cxx_std_20)
+target_compile_definitions(aaudio_callback_registry_test
+    PRIVATE ECHIDNA_AAUDIO_REGISTRY_TESTING=1)
 
 add_executable(opensl_pcm_contract_test opensl_pcm_contract_test.cpp)
 target_include_directories(opensl_pcm_contract_test

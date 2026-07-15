@@ -3,25 +3,153 @@
 namespace echidna::hooks
 {
 
-    static_assert(std::atomic<void *>::is_always_lock_free,
-                  "AAudio callback registry requires lock-free pointer atomics");
-    static_assert(std::atomic<AAudioDataCallback>::is_always_lock_free,
-                  "AAudio callback registry requires lock-free callback atomics");
+    static_assert(std::atomic<uint32_t>::is_always_lock_free,
+                  "AAudio callback registry requires lock-free 32-bit atomics");
+    static_assert(sizeof(uintptr_t) >= sizeof(uint32_t),
+                  "AAudio callback tokens require at least 32-bit uintptr_t");
+    static_assert(AAudioCallbackRegistry::kMaxRegistrations == 256,
+                  "AAudio callback token layout reserves exactly eight slot bits");
 
-    AAudioCallbackRegistry::Context *AAudioCallbackRegistry::contextFor(void *proxy_context)
+    AAudioCallbackRegistry::MaintenanceGuard::MaintenanceGuard(
+        AAudioCallbackRegistry &registry)
+        : registry_(registry)
     {
-        if (!proxy_context)
+        registry_.lockMaintenance();
+    }
+
+    AAudioCallbackRegistry::MaintenanceGuard::~MaintenanceGuard()
+    {
+        registry_.unlockMaintenance();
+    }
+
+    void AAudioCallbackRegistry::lockMaintenance()
+    {
+        uint32_t expected = 0;
+        while (!maintenance_gate_.compare_exchange_weak(expected,
+                                                        1,
+                                                        std::memory_order_acquire,
+                                                        std::memory_order_relaxed))
+        {
+            expected = 0;
+        }
+    }
+
+    void AAudioCallbackRegistry::unlockMaintenance()
+    {
+        maintenance_gate_.store(0, std::memory_order_release);
+    }
+
+    void *AAudioCallbackRegistry::tokenFor(size_t slot, uint32_t generation) const
+    {
+        if (slot >= kMaxRegistrations || generation == 0 ||
+            generation > kMaxGeneration)
         {
             return nullptr;
         }
-        const uintptr_t address = reinterpret_cast<uintptr_t>(proxy_context);
-        const uintptr_t begin = reinterpret_cast<uintptr_t>(contexts_.data());
-        const uintptr_t end = begin + sizeof(contexts_);
-        if (address < begin || address >= end || ((address - begin) % sizeof(Context)) != 0)
+        const uintptr_t token =
+            (static_cast<uintptr_t>(generation) << kTokenGenerationShift) |
+            static_cast<uintptr_t>(slot);
+        return reinterpret_cast<void *>(token);
+    }
+
+    AAudioCallbackRegistry::Context *AAudioCallbackRegistry::contextFor(
+        void *proxy_context,
+        uint32_t *generation)
+    {
+        if (!proxy_context || !generation)
         {
             return nullptr;
         }
-        return reinterpret_cast<Context *>(proxy_context);
+        const uintptr_t token = reinterpret_cast<uintptr_t>(proxy_context);
+        const uintptr_t token_generation = token >> kTokenGenerationShift;
+        if (token_generation == 0 || token_generation > kMaxGeneration)
+        {
+            return nullptr;
+        }
+        const size_t slot = static_cast<size_t>(token & 0xFFU);
+        if (slot >= contexts_.size())
+        {
+            return nullptr;
+        }
+        *generation = static_cast<uint32_t>(token_generation);
+        return &contexts_[slot];
+    }
+
+    void AAudioCallbackRegistry::finishRetirementLocked(Context &context)
+    {
+        if (!context.allocated)
+        {
+            return;
+        }
+        const uint32_t usage = context.usage.load(std::memory_order_acquire);
+        if ((usage & kActiveMask) != 0 || (usage & kInvocationMask) != 0)
+        {
+            return;
+        }
+
+        context.callback = nullptr;
+        context.user_data = nullptr;
+        context.builder = nullptr;
+        context.streams.fill(nullptr);
+        context.stream_overflow = false;
+        context.allocated = false;
+
+        if (context.generation.load(std::memory_order_relaxed) >= kMaxGeneration)
+        {
+            // Never publish generation zero or allow an old token to become
+            // current again after the 24-bit portable generation space ends.
+            context.usage.store(kExhaustedMask, std::memory_order_release);
+        }
+        else
+        {
+            context.usage.store(0, std::memory_order_release);
+        }
+    }
+
+    void AAudioCallbackRegistry::tryRetireLocked(Context &context)
+    {
+        if (!context.allocated || context.builder || context.stream_overflow)
+        {
+            return;
+        }
+        for (void *stream : context.streams)
+        {
+            if (stream)
+            {
+                return;
+            }
+        }
+
+        uint32_t usage = context.usage.load(std::memory_order_acquire);
+        while ((usage & kActiveMask) != 0 &&
+               !context.usage.compare_exchange_weak(
+                   usage,
+                   usage & ~kActiveMask,
+                   std::memory_order_acq_rel,
+                   std::memory_order_acquire))
+        {
+        }
+
+        // Clearing active and retaining the count in the same atomic word
+        // prevents new entrants. Reuse is allowed only after an acquire
+        // recheck observes every in-flight callback has released its count.
+        if ((context.usage.load(std::memory_order_acquire) & kInvocationMask) == 0)
+        {
+            finishRetirementLocked(context);
+        }
+    }
+
+    void AAudioCallbackRegistry::retireBuilderLocked(void *builder)
+    {
+        for (auto &context : contexts_)
+        {
+            if (!context.allocated || context.builder != builder)
+            {
+                continue;
+            }
+            context.builder = nullptr;
+            tryRetireLocked(context);
+        }
     }
 
     void *AAudioCallbackRegistry::registerCallback(void *builder,
@@ -32,60 +160,76 @@ namespace echidna::hooks
         {
             return nullptr;
         }
-        retireBuilder(builder);
+
+        MaintenanceGuard guard(*this);
+        retireBuilderLocked(builder);
         for (auto &context : contexts_)
         {
-            bool expected = false;
-            if (!context.claimed.compare_exchange_strong(expected,
-                                                         true,
-                                                         std::memory_order_acq_rel,
-                                                         std::memory_order_relaxed))
+            finishRetirementLocked(context);
+        }
+
+        for (size_t slot = 0; slot < contexts_.size(); ++slot)
+        {
+            Context &context = contexts_[slot];
+            if (context.allocated)
             {
                 continue;
             }
-            context.invocations.store(0, std::memory_order_relaxed);
-            context.builder.store(builder, std::memory_order_relaxed);
-            context.callback.store(callback, std::memory_order_relaxed);
-            context.user_data.store(user_data, std::memory_order_relaxed);
-            context.stream_overflow.store(false, std::memory_order_relaxed);
-            for (auto &stream : context.streams)
+            const uint32_t usage = context.usage.load(std::memory_order_acquire);
+            if (usage == kExhaustedMask)
             {
-                stream.store(nullptr, std::memory_order_relaxed);
+                continue;
             }
-            context.active.store(true, std::memory_order_release);
-            return &context;
+            if (usage != 0)
+            {
+                continue;
+            }
+
+            const uint32_t previous_generation =
+                context.generation.load(std::memory_order_relaxed);
+            if (previous_generation >= kMaxGeneration)
+            {
+                context.usage.store(kExhaustedMask, std::memory_order_release);
+                continue;
+            }
+            const uint32_t generation = previous_generation + 1;
+            context.allocated = true;
+            context.callback = callback;
+            context.user_data = user_data;
+            context.builder = builder;
+            context.streams.fill(nullptr);
+            context.stream_overflow = false;
+            context.generation.store(generation, std::memory_order_relaxed);
+            context.usage.store(kActiveMask, std::memory_order_release);
+            return tokenFor(slot, generation);
         }
         return nullptr;
     }
 
-    void AAudioCallbackRegistry::attachStream(Context &context, void *stream)
+    void AAudioCallbackRegistry::attachStreamLocked(Context &context, void *stream)
     {
         if (!stream)
         {
             return;
         }
-        for (auto &entry : context.streams)
+        for (void *entry : context.streams)
         {
-            if (entry.load(std::memory_order_acquire) == stream)
+            if (entry == stream)
             {
                 return;
             }
         }
-        for (auto &entry : context.streams)
+        for (void *&entry : context.streams)
         {
-            void *expected = nullptr;
-            if (entry.compare_exchange_strong(expected,
-                                              stream,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_relaxed) ||
-                expected == stream)
+            if (!entry)
             {
+                entry = stream;
                 return;
             }
         }
-        // Keep this context permanently retired after its known streams close;
-        // an untracked stream may still legally reference the proxy context.
-        context.stream_overflow.store(true, std::memory_order_release);
+        // An untracked stream can retain this token indefinitely, so fail
+        // closed by never recycling this slot rather than risk stale dispatch.
+        context.stream_overflow = true;
     }
 
     bool AAudioCallbackRegistry::attachOpenedStream(void *builder, void *stream)
@@ -94,12 +238,13 @@ namespace echidna::hooks
         {
             return false;
         }
+        MaintenanceGuard guard(*this);
         for (auto &context : contexts_)
         {
-            if (context.active.load(std::memory_order_acquire) &&
-                context.builder.load(std::memory_order_acquire) == builder)
+            if (context.allocated && context.builder == builder &&
+                (context.usage.load(std::memory_order_acquire) & kActiveMask) != 0)
             {
-                attachStream(context, stream);
+                attachStreamLocked(context, stream);
                 return true;
             }
         }
@@ -110,67 +255,74 @@ namespace echidna::hooks
                                                  void *stream,
                                                  AAudioCallbackTarget *target)
     {
-        Context *context = contextFor(proxy_context);
-        if (!context || !target || !context->active.load(std::memory_order_acquire))
+        (void)stream;
+        if (!target)
         {
             return false;
         }
-        context->invocations.fetch_add(1, std::memory_order_acq_rel);
-        if (!context->active.load(std::memory_order_acquire))
+        target->callback = nullptr;
+        target->user_data = nullptr;
+
+        uint32_t token_generation = 0;
+        Context *context = contextFor(proxy_context, &token_generation);
+        if (!context)
         {
-            context->invocations.fetch_sub(1, std::memory_order_acq_rel);
             return false;
         }
-        attachStream(*context, stream);
-        target->callback = context->callback.load(std::memory_order_acquire);
-        target->user_data = context->user_data.load(std::memory_order_acquire);
-        if (!target->callback)
+
+        uint32_t usage = context->usage.load(std::memory_order_acquire);
+        while ((usage & kActiveMask) != 0)
         {
-            endInvocation(proxy_context);
-            return false;
+            if ((usage & kInvocationMask) == kInvocationMask)
+            {
+                return false;
+            }
+            if (context->usage.compare_exchange_weak(usage,
+                                                     usage + 1,
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_acquire))
+            {
+                if (context->generation.load(std::memory_order_acquire) !=
+                    token_generation)
+                {
+                    context->usage.fetch_sub(1, std::memory_order_acq_rel);
+                    return false;
+                }
+                target->callback = context->callback;
+                target->user_data = context->user_data;
+                if (!target->callback)
+                {
+                    context->usage.fetch_sub(1, std::memory_order_acq_rel);
+                    target->user_data = nullptr;
+                    return false;
+                }
+                return true;
+            }
         }
-        return true;
+        return false;
     }
 
     void AAudioCallbackRegistry::endInvocation(void *proxy_context)
     {
-        Context *context = contextFor(proxy_context);
-        if (!context)
+        uint32_t token_generation = 0;
+        Context *context = contextFor(proxy_context, &token_generation);
+        if (!context ||
+            context->generation.load(std::memory_order_acquire) != token_generation)
         {
             return;
         }
-        const uint32_t previous =
-            context->invocations.fetch_sub(1, std::memory_order_acq_rel);
-        (void)previous;
-    }
 
-    void AAudioCallbackRegistry::tryRetire(Context &context)
-    {
-        if (!context.active.load(std::memory_order_acquire) ||
-            context.builder.load(std::memory_order_acquire) != nullptr ||
-            context.stream_overflow.load(std::memory_order_acquire))
+        uint32_t usage = context->usage.load(std::memory_order_acquire);
+        while ((usage & kInvocationMask) != 0)
         {
-            return;
-        }
-        for (const auto &stream : context.streams)
-        {
-            if (stream.load(std::memory_order_acquire) != nullptr)
+            if (context->usage.compare_exchange_weak(usage,
+                                                     usage - 1,
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_acquire))
             {
                 return;
             }
         }
-        bool expected = true;
-        if (!context.active.compare_exchange_strong(expected,
-                                                    false,
-                                                    std::memory_order_acq_rel,
-                                                    std::memory_order_relaxed))
-        {
-            return;
-        }
-        // Context addresses are never reused, and callback/user_data remain
-        // immutable after publication. An invocation which won the race with
-        // retirement can therefore finish safely without waiting here. New
-        // invocations fail the active check above.
     }
 
     void AAudioCallbackRegistry::retireBuilder(void *builder)
@@ -179,16 +331,8 @@ namespace echidna::hooks
         {
             return;
         }
-        for (auto &context : contexts_)
-        {
-            if (!context.active.load(std::memory_order_acquire) ||
-                context.builder.load(std::memory_order_acquire) != builder)
-            {
-                continue;
-            }
-            context.builder.store(nullptr, std::memory_order_release);
-            tryRetire(context);
-        }
+        MaintenanceGuard guard(*this);
+        retireBuilderLocked(builder);
     }
 
     void AAudioCallbackRegistry::closeStream(void *stream)
@@ -197,22 +341,42 @@ namespace echidna::hooks
         {
             return;
         }
+        MaintenanceGuard guard(*this);
         for (auto &context : contexts_)
         {
-            if (!context.active.load(std::memory_order_acquire))
+            if (!context.allocated)
             {
                 continue;
             }
-            for (auto &entry : context.streams)
+            for (void *&entry : context.streams)
             {
-                void *expected = stream;
-                (void)entry.compare_exchange_strong(expected,
-                                                    nullptr,
-                                                    std::memory_order_acq_rel,
-                                                    std::memory_order_relaxed);
+                if (entry == stream)
+                {
+                    entry = nullptr;
+                }
             }
-            tryRetire(context);
+            tryRetireLocked(context);
         }
     }
+
+#if defined(ECHIDNA_AAUDIO_REGISTRY_TESTING)
+    bool AAudioCallbackRegistry::setGenerationForTesting(size_t slot,
+                                                         uint32_t generation)
+    {
+        if (slot >= contexts_.size() || generation > kMaxGeneration)
+        {
+            return false;
+        }
+        MaintenanceGuard guard(*this);
+        Context &context = contexts_[slot];
+        finishRetirementLocked(context);
+        if (context.allocated || context.usage.load(std::memory_order_acquire) != 0)
+        {
+            return false;
+        }
+        context.generation.store(generation, std::memory_order_relaxed);
+        return true;
+    }
+#endif
 
 } // namespace echidna::hooks
