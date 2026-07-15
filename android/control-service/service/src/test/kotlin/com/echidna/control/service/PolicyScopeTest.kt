@@ -122,7 +122,18 @@ class PolicyScopeTest {
 
     @Test
     fun `capability policy is current scoped and control gated`() {
-        assertTrue(PublishedPolicyRegistry.publish(envelope(11L).toString()))
+        assertTrue(PublishedPolicyRegistry.publish(envelope(10L).toString()))
+        assertNull(
+            PublishedPolicyRegistry.capabilityForProcess(
+                "com.example.recorder",
+                "com.example.recorder",
+                nowEpochMs = 1_000L,
+            ),
+        )
+
+        val lsposedOwned = envelope(11L)
+        lsposedOwned.getJSONObject("captureOwners").put("com.example.recorder", "lsposed")
+        assertTrue(PublishedPolicyRegistry.publish(lsposedOwned.toString()))
         val current = PublishedPolicyRegistry.capabilityForProcess(
             "com.example.recorder",
             "com.example.recorder",

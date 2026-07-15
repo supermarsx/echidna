@@ -56,9 +56,10 @@ internal object PublishedPolicyRegistry {
         if (processName.substringBefore(':') != packageName) return@let null
         val envelope = published.envelope
         val allowed = envelope.whitelist[processName] ?: envelope.whitelist[packageName] ?: false
+        val owner = envelope.captureOwners[processName] ?: envelope.captureOwners[packageName]
         val control = envelope.control
         if (
-            !allowed || !control.masterEnabled || control.bypass ||
+            !allowed || owner != "lsposed" || !control.masterEnabled || control.bypass ||
             (control.panicUntilEpochMs > 0L && control.panicUntilEpochMs > nowEpochMs)
         ) {
             return@let null
