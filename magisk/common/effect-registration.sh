@@ -177,6 +177,24 @@ select_config() {
     echo "missing|||"
 }
 
+parse_config_selection() {
+    candidate="$1"
+    eligibility="${candidate%%\|*}"
+    [ "$eligibility" != "$candidate" ] || return 1
+    remainder="${candidate#*\|}"
+    partition="${remainder%%\|*}"
+    [ "$partition" != "$remainder" ] || return 1
+    remainder="${remainder#*\|}"
+    format="${remainder%%\|*}"
+    [ "$format" != "$remainder" ] || return 1
+    source_config="${remainder#*\|}"
+    [ "$source_config" != "$remainder" ] || return 1
+    case "$source_config" in
+        *'|'*) return 1 ;;
+    esac
+    return 0
+}
+
 for required in "$HELPER" "$PENDING_KEY"; do
     if [ ! -f "$required" ] || [ -L "$required" ]; then
         fail_closed "required verified payload is missing or unsafe: $required"
@@ -203,7 +221,7 @@ if printf '%s\n' "$evidence" \
     has_aidl=true
 fi
 factory_pids="$(printf '%s\n' "$evidence" | awk '
-    $1 ~ /^android[.]hardware[.]audio[.]effect@[2-7][.][0-9]+::IEffectsFactory[/]default$/ \
+    $1 ~ /^android[.]hardware[.]audio[.]effect@[2-7][.][0-9]+::IEffectsFactory\/default$/ \
             && $2 ~ /^[0-9]+$/ && !seen[$2]++ { print $2 }
 ')"
 factory_count="$(printf '%s\n' "$factory_pids" | awk 'NF { count++ } END { print count + 0 }')"
@@ -241,12 +259,14 @@ if ! device_supports_abi "$abi"; then
 fi
 
 selection="$(select_config)"
-eligibility="${selection%%|*}"
-remainder="${selection#*|}"
-partition="${remainder%%|*}"
-remainder="${remainder#*|}"
-format="${remainder%%|*}"
-source_config="${remainder#*|}"
+if [ "${ECHIDNA_TEST_CONFIG_SELECTION+x}" = x ] \
+        && [ "${ECHIDNA_TEST_ALLOW_PROC_EXE:-0}" = 1 ]; then
+    selection="$ECHIDNA_TEST_CONFIG_SELECTION"
+fi
+if ! parse_config_selection "$selection"; then
+    fail_closed "effect config selection is malformed"
+    exit 1
+fi
 case "$eligibility" in
     supported) ;;
     unsupported)

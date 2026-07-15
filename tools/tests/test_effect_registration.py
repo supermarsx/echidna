@@ -127,6 +127,42 @@ class EffectRegistrationTest(unittest.TestCase):
         self.assertIn("--abi armeabi-v7a", arguments)
         self.assertIn("/system/lib/soundfx/libechidna_preproc.so", arguments)
 
+    def test_android_mksh_selection_delimiters_are_escaped(self) -> None:
+        source = REGISTRATION.read_text(encoding="utf-8")
+        self.assertNotIn("%%|*", source)
+        self.assertNotIn("#*|", source)
+        self.assertIn('${candidate%%\\|*}', source)
+        self.assertIn('${candidate#*\\|}', source)
+
+    def test_empty_config_selection_fails_closed(self) -> None:
+        self.write_config("vendor/etc/audio_effects.xml")
+        result = self.run_registration(extra={"ECHIDNA_TEST_CONFIG_SELECTION": ""})
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.arguments.exists())
+        self.assertIn("effect config selection is malformed", result.stdout)
+
+    def test_malformed_config_selections_fail_closed(self) -> None:
+        self.write_config("vendor/etc/audio_effects.xml")
+        malformed = (
+            "supported|vendor|xml",
+            "supported|vendor|xml|/vendor/etc/audio_effects.xml|unexpected",
+        )
+        for selection in malformed:
+            with self.subTest(selection=selection):
+                self.arguments.unlink(missing_ok=True)
+                result = self.run_registration(
+                    extra={"ECHIDNA_TEST_CONFIG_SELECTION": selection}
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(self.arguments.exists())
+                self.assertIn("effect config selection is malformed", result.stdout)
+
+    def test_missing_config_selection_retains_specific_failure(self) -> None:
+        result = self.run_registration()
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.arguments.exists())
+        self.assertIn("no readable audio_effects.xml", result.stdout)
+
     def test_stable_aidl_only_fails_closed_without_calling_helper(self) -> None:
         self.evidence.write_text(
             "android.hardware.audio.effect.IFactory/default: "
