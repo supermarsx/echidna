@@ -66,6 +66,59 @@ The analyzer intentionally accepts incomplete dumps. A missing symbol is a warni
 not a failure. Many vendor builds strip symbols; in that case the next step is
 device-side map/log collection rather than inventing offsets.
 
+## Hook Probe Reports
+
+Use the hook probe report tool when a dump should become a support issue or a
+reviewable device-database entry:
+
+```sh
+python tools/build_hook_probe_report.py out/audio-hal-analysis.json \
+  --diagnostics out/echidna-diagnostics.json \
+  --output out/hook-probe-report.json
+```
+
+The optional diagnostics file is the companion app's diagnostic-internals export.
+It is opt-in gated and intentionally omits raw package names, preset IDs, device
+names, and per-sample timestamps. The report tool combines that runtime evidence
+with static analyzer candidates and emits:
+
+| Field | Meaning |
+| --- | --- |
+| `deviceKey` | Stable hash of device identity fields, without raw model strings. |
+| `libraryEvidence` | Library role/scope/surface evidence plus identity hashes. |
+| `runtimeEvidence` | Sanitized hook attempts, successes, callback count, and action codes. |
+| `deviceDatabaseEntry` | Review-gated entry shape for future internal support data. |
+| `githubIssue` | Privacy-safe issue title/body that can be pasted into GitHub. |
+
+The database entry includes an empty `offsetProfiles` list by default. Populate
+offset profiles only after the same device key, active ABI, library identity hash,
+and live hook telemetry are all confirmed. An unreviewed report must never make
+the runtime hook path apply offsets automatically.
+
+## Public Symbol Baseline
+
+The native hook list must start with public or dump-observed symbols before any
+per-build offsets are considered:
+
+- AAudio: hook `AAudioStreamBuilder_setDataCallback` for callback registration,
+  plus `AAudioStream_read` / `AAudioStream_write` for blocking paths. The AAudio
+  data callback is a registered function pointer, not a public exported symbol.
+- OpenSL ES: hook recorder callback registration / buffer queue paths when the
+  target process maps `libOpenSLES.so`.
+- Native AudioRecord: hook exported JNI bridge names or C++ `AudioRecord::read`
+  symbols only when present in the process map for that build.
+- tinyalsa: hook `pcm_read` and `pcm_mmap_read` byte-count APIs; hook
+  `pcm_readi` only as a frame-count API when the vendor tinyalsa exposes it.
+- Legacy HAL: `audio_stream_in.read` is a function pointer inside a HAL stream,
+  so static evidence is useful but needs live service/process proof.
+
+Offsets from the internet are not portable support. MediaTek HyperOS/MTK, Samsung
+Exynos, Qualcomm-derived Samsung builds, OnePlus/Oppo, and Tensor images must be
+treated as separate build fingerprints. Add an offset profile only when it is tied
+to a device model, SoC, Android build fingerprint, library build ID/hash, and live
+Echidna telemetry proving the hook path. Otherwise prefer runtime symbol discovery
+and report the result as exploratory.
+
 ## Samsung Workflow
 
 Samsung needs two lanes because Exynos and Snapdragon builds differ even when the
@@ -115,6 +168,9 @@ are usually `libaudioclient.so`, `libtinyalsa.so`, and `audio.primary.*.so`.
 MediaTek-like dumps are identified from `mt...`, `mtk`, or `mediatek` props and
 paths. Expect more vendor-specific names and fewer stable exported symbols. Audio
 policy and mixer path files matter because route names vary heavily by build.
+Dimensity/MT6897 HyperOS builds fall into this lane: collect the dump and process
+maps first, then decide whether the app process, `audioserver`, or a vendor audio
+service owns the usable capture surface.
 
 ### Google Tensor
 

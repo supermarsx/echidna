@@ -158,6 +158,10 @@ release path that the rooted-emulator probe did not cover:
    should show samples, and **Engine** should read *Installed / active* instead of *Not Installed*.
    The **Compatibility Wizard** should then report Magisk **installed** + Zygisk **enabled** — the
    inverse of the unrooted state captured on the emulator.
+8. **Export diagnostics for support.** In **Diagnostics -> Logs & safety**, enable telemetry export
+   and use **Export diagnostic internals**. The bundle is sanitized and includes action codes such
+   as `configure_whitelist` when no target apps are enabled. Combine it with a static HAL analyzer
+   report through `tools/build_hook_probe_report.py` before filing a hook-support issue.
 
 ---
 
