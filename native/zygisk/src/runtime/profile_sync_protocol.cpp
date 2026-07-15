@@ -828,7 +828,11 @@ namespace echidna::runtime
         const JsonValue *master_enabled = RequireMember(*control, "masterEnabled", error);
         const JsonValue *bypass = RequireMember(*control, "bypass", error);
         const JsonValue *panic_until = RequireMember(*control, "panicUntilEpochMs", error);
-        if (master_enabled == nullptr || bypass == nullptr || panic_until == nullptr)
+        const JsonValue *sidetone = RequireMember(*control, "sidetoneEnabled", error);
+        const JsonValue *gain = RequireMember(*control, "sidetoneGainDb", error);
+        const JsonValue *mode = RequireMember(*control, "engineMode", error);
+        if (master_enabled == nullptr || bypass == nullptr || panic_until == nullptr ||
+            sidetone == nullptr || gain == nullptr || mode == nullptr)
         {
             return false;
         }
@@ -842,36 +846,25 @@ namespace echidna::runtime
             return SetError(error,
                             "panicUntilEpochMs must be a non-negative signed 64-bit integer");
         }
-        if (const JsonValue *sidetone = FindMember(*control, "sidetoneEnabled"))
+        if (sidetone->type != JsonType::kBool)
         {
-            if (sidetone->type != JsonType::kBool)
-            {
-                return SetError(error, "sidetoneEnabled must be a boolean");
-            }
+            return SetError(error, "sidetoneEnabled must be a boolean");
         }
-        if (const JsonValue *gain = FindMember(*control, "sidetoneGainDb"))
+        if (!IsFiniteNumber(*gain))
         {
-            if (!IsFiniteNumber(*gain))
-            {
-                return SetError(error, "sidetoneGainDb must be finite");
-            }
+            return SetError(error, "sidetoneGainDb must be finite");
         }
-        std::string engine_mode = "native_first";
-        if (const JsonValue *mode = FindMember(*control, "engineMode"))
+        if (mode->type != JsonType::kString ||
+            (mode->text != "native_first" && mode->text != "low_latency" &&
+             mode->text != "compatibility"))
         {
-            if (mode->type != JsonType::kString ||
-                (mode->text != "native_first" && mode->text != "low_latency" &&
-                 mode->text != "compatibility"))
-            {
-                return SetError(error, "engineMode is invalid");
-            }
-            engine_mode = mode->text;
+            return SetError(error, "engineMode is invalid");
         }
 
         snapshot->global_hooks_enabled =
             master_enabled->bool_value && !bypass->bool_value &&
             (panic_until_ms == 0 || now_epoch_ms >= panic_until_ms) &&
-            engine_mode != "compatibility";
+            mode->text != "compatibility";
 
         if (const JsonValue *allowed = ResolveExactThenBase(*whitelist, process_name))
         {

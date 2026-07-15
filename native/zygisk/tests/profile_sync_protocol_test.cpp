@@ -74,7 +74,9 @@ namespace
             R"("defaultProfileId":"default","appBindings":{},)"
             R"("whitelist":{"com.example.app":true,"com.example.app:capture":false},)"
             R"("captureOwners":{"com.example.app":"zygisk"},)"
-            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0}})";
+            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
+            R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
+            R"("engineMode":"native_first"}})";
         echidna::runtime::DecodedProfileSnapshot snapshot;
         std::string error;
         CHECK(Decode(exact_deny, "com.example.app:capture", &snapshot, &error), error);
@@ -88,7 +90,9 @@ namespace
             R"("whitelist":{"com.example.app":true},)"
             R"("captureOwners":{"com.example.app":"zygisk",)"
             R"("com.example.app:capture":"lsposed"},)"
-            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0}})";
+            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
+            R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
+            R"("engineMode":"native_first"}})";
         CHECK(Decode(owner_override, "com.example.app:capture", &snapshot, &error), error);
         CHECK(snapshot.process_whitelisted, "owner override must not alter whitelist");
         CHECK(snapshot.capture_owner == echidna::runtime::CaptureOwner::kLsposed,
@@ -100,7 +104,9 @@ namespace
             R"("profiles":{"default":{"modules":[],"engine":{}}},)"
             R"("defaultProfileId":"default","appBindings":{},)"
             R"("whitelist":{"com.example.app":true},"captureOwners":{},)"
-            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0}})";
+            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
+            R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
+            R"("engineMode":"native_first"}})";
         CHECK(Decode(no_owner, "com.example.app", &snapshot, &error), error);
         CHECK(!snapshot.nativeProcessAdmitted(), "absent owner must fail closed");
     }
@@ -113,7 +119,9 @@ namespace
             R"("defaultProfileId":"default","appBindings":{},)"
             R"("whitelist":{"com.example.app":true},)"
             R"("captureOwners":{"com.example.app":"zygisk"},)"
-            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":2000}})";
+            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":2000,)"
+            R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
+            R"("engineMode":"native_first"}})";
         echidna::runtime::DecodedProfileSnapshot snapshot;
         std::string error;
         CHECK(Decode(panic, "com.example.app", &snapshot, &error, 1999), error);
@@ -126,7 +134,11 @@ namespace
             "\"panicUntilEpochMs\":2000";
         compatibility.replace(compatibility.find(old_control),
                               old_control.size(),
-                              "\"panicUntilEpochMs\":0,\"engineMode\":\"compatibility\"");
+                              "\"panicUntilEpochMs\":0");
+        const std::string native_mode = "\"engineMode\":\"native_first\"";
+        compatibility.replace(compatibility.find(native_mode),
+                              native_mode.size(),
+                              "\"engineMode\":\"compatibility\"");
         CHECK(Decode(compatibility, "com.example.app", &snapshot, &error), error);
         CHECK(!snapshot.global_hooks_enabled, "compatibility mode must disable native hooks");
     }
@@ -199,6 +211,12 @@ namespace
         const size_t control_end = unknown_control.rfind("}}");
         unknown_control.insert(control_end, ",\"hooksEnabled\":true");
         ExpectRejected(std::move(unknown_control), "unknown field");
+
+        std::string missing_engine_mode = Envelope();
+        const std::string engine_field = ",\"engineMode\":\"native_first\"";
+        missing_engine_mode.erase(missing_engine_mode.find(engine_field),
+                                  engine_field.size());
+        ExpectRejected(std::move(missing_engine_mode), "engineMode");
     }
 
     void TestSizeAndCountBounds()
@@ -213,7 +231,9 @@ namespace
         large_preset +=
             R"("}},"defaultProfileId":"default","appBindings":{},)"
             R"("whitelist":{},"captureOwners":{},)"
-            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0}})";
+            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
+            R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
+            R"("engineMode":"native_first"}})";
         ExpectRejected(std::move(large_preset), "256 KiB");
 
         std::string too_many =
@@ -230,7 +250,9 @@ namespace
         }
         too_many +=
             R"(},"captureOwners":{},)"
-            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0}})";
+            R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
+            R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
+            R"("engineMode":"native_first"}})";
         ExpectRejected(std::move(too_many), "whitelist");
     }
 
