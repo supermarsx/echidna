@@ -7,13 +7,51 @@ import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.util.Log
 import com.echidna.control.bridge.EchidnaNative
-import kotlin.math.min
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+
+internal const val PROCESS_RESULT_OK = 0
+internal const val PROCESS_RESULT_INVALID_ARGUMENT = -2
+
+/**
+ * Validates Binder-owned arrays before JNI and commits output only after complete native success.
+ * This prevents truncated output and keeps caller buffers unchanged on failure.
+ */
+internal fun processBlockValidated(
+    input: FloatArray,
+    output: FloatArray?,
+    frames: Int,
+    sampleRate: Int,
+    channelCount: Int,
+    nativeProcessor: (FloatArray, FloatArray?, Int, Int, Int) -> Int,
+): Int {
+    if (frames <= 0 || sampleRate <= 0 || channelCount <= 0) {
+        return PROCESS_RESULT_INVALID_ARGUMENT
+    }
+    val requiredSamples = frames.toLong() * channelCount.toLong()
+    if (
+        requiredSamples <= 0L ||
+        requiredSamples > Int.MAX_VALUE.toLong() ||
+        input.size.toLong() < requiredSamples ||
+        (output != null && output.size.toLong() < requiredSamples)
+    ) {
+        return PROCESS_RESULT_INVALID_ARGUMENT
+    }
+
+    val sampleCount = requiredSamples.toInt()
+    val transactionalOutput = output?.let { FloatArray(sampleCount) }
+    val result = nativeProcessor(input, transactionalOutput, frames, sampleRate, channelCount)
+    if (result == PROCESS_RESULT_OK && output != null && transactionalOutput != null) {
+        for (index in 0 until sampleCount) {
+            output[index] = transactionalOutput[index]
+        }
+    }
+    return result
+}
 
 /**
  * Exposes binder entry points for the companion app while dispatching privileged work
@@ -264,35 +302,20 @@ class EchidnaControlService : Service() {
             frames: Int,
             sampleRate: Int,
             channelCount: Int
-        ): Int {
-            if (frames <= 0 || sampleRate <= 0 || channelCount <= 0) {
-                return -2
-            }
-            val requiredSamples = frames.toLong() * channelCount.toLong()
-            if (
-                requiredSamples <= 0L ||
-                requiredSamples > Int.MAX_VALUE ||
-                input.size.toLong() < requiredSamples
-            ) {
-                return -2
-            }
-            return safeBinder("process block", -1) {
-                val sampleCount = requiredSamples.toInt()
-                val tempOutput = output?.let { FloatArray(sampleCount) }
-                val result = EchidnaNative.processBlock(
-                    input,
-                    tempOutput,
-                    frames,
-                    sampleRate,
-                    channelCount,
+        ): Int = safeBinder("process block", -1) {
+            processBlockValidated(input, output, frames, sampleRate, channelCount) {
+                    validatedInput,
+                    validatedOutput,
+                    validatedFrames,
+                    validatedSampleRate,
+                    validatedChannelCount ->
+                EchidnaNative.processBlock(
+                    validatedInput,
+                    validatedOutput,
+                    validatedFrames,
+                    validatedSampleRate,
+                    validatedChannelCount,
                 )
-                if (output != null && tempOutput != null) {
-                    val limit = min(output.size, sampleCount)
-                    for (index in 0 until limit) {
-                        output[index] = tempOutput[index]
-                    }
-                }
-                result
             }
         }
 
