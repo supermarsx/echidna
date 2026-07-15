@@ -12,6 +12,7 @@ internal data class PersistedPresetStore(
     val appBindings: Map<String, String>? = null,
     /** Null means a legacy store whose service-owned whitelist must be adopted once. */
     val whitelist: Map<String, Boolean>? = null,
+    val panicUntilEpochMs: Long = 0L,
 )
 
 /** Version-tolerant codec for the app-owned preset selection store. */
@@ -45,6 +46,7 @@ internal object PresetStoreCodec {
             }
             root.put("whitelist", whitelistJson)
         }
+        root.put("panicUntilEpochMs", store.panicUntilEpochMs.coerceAtLeast(0L))
         return root.toString()
     }
 
@@ -94,6 +96,13 @@ internal object PresetStoreCodec {
         } else {
             null
         }
-        return PersistedPresetStore(presets, active, default, appBindings, whitelist)
+        return PersistedPresetStore(
+            presets,
+            active,
+            default,
+            appBindings,
+            whitelist,
+            root.optLong("panicUntilEpochMs", 0L).coerceAtLeast(0L),
+        )
     }
 }

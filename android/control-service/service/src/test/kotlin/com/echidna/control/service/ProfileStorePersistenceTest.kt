@@ -19,6 +19,7 @@ class ProfileStorePersistenceTest {
 
     @Before
     fun setUp() {
+        PublishedPolicyRegistry.resetForTests()
         tempDir = kotlin.io.path.createTempDirectory("profile-store-persistence").toFile()
     }
 
@@ -31,7 +32,7 @@ class ProfileStorePersistenceTest {
     fun `non-active binding survives cold restart and bound edits stay current`() {
         val firstBridge = PayloadBridge()
         val first = ProfileStore(tempDir, firstBridge)
-        assertTrue(first.synchronizeProfilesAndBindings(syncState(boundName = "Bound v1")))
+        assertTrue(first.synchronizePolicyState(syncState(boundName = "Bound v1")))
         first.close()
         assertTrue(first.awaitClosed())
 
@@ -41,7 +42,7 @@ class ProfileStorePersistenceTest {
         assertTrue(restarted.getWhitelist().getValue("com.example.recorder"))
         assertTrue(restarted.resolveProfilePayload("bound")!!.contains("Bound v1"))
 
-        assertTrue(restarted.synchronizeProfilesAndBindings(syncState(boundName = "Bound v2")))
+        assertTrue(restarted.synchronizePolicyState(syncState(boundName = "Bound v2")))
         restarted.close()
         assertTrue(restarted.awaitClosed())
 
@@ -65,9 +66,9 @@ class ProfileStorePersistenceTest {
         val bridge = PayloadBridge()
         val store = ProfileStore(tempDir, bridge, executor)
 
-        assertTrue(store.synchronizeProfilesAndBindings(syncState(boundName = "Bound v1")))
-        assertTrue(store.synchronizeProfilesAndBindings(syncState(boundName = "Bound v2")))
-        assertTrue(store.synchronizeProfilesAndBindings(syncState(includeBound = false)))
+        assertTrue(store.synchronizePolicyState(syncState(boundName = "Bound v1")))
+        assertTrue(store.synchronizePolicyState(syncState(boundName = "Bound v2")))
+        assertTrue(store.synchronizePolicyState(syncState(includeBound = false)))
         unblock.countDown()
         store.close()
         assertTrue(store.awaitClosed())
@@ -83,7 +84,7 @@ class ProfileStorePersistenceTest {
         val bridge = PayloadBridge()
         val store = ProfileStore(tempDir, bridge)
         repeat(100) { index ->
-            assertTrue(store.synchronizeProfilesAndBindings(syncState(boundName = "Bound $index")))
+            assertTrue(store.synchronizePolicyState(syncState(boundName = "Bound $index")))
         }
 
         val closeStartedAt = System.nanoTime()
@@ -101,6 +102,7 @@ class ProfileStorePersistenceTest {
     @Test
     fun `panic deadline survives restart then clears without changing base controls`() {
         val first = ProfileStore(tempDir, PayloadBridge())
+        assertTrue(first.synchronizePolicyState(syncState()))
         first.panic(1_000L)
         first.close()
         assertTrue(first.awaitClosed())
@@ -148,7 +150,7 @@ class ProfileStorePersistenceTest {
         assertTrue(blockerStarted.await(1, TimeUnit.SECONDS))
         val bridge = PayloadBridge()
         val store = ProfileStore(tempDir, bridge, executor)
-        assertTrue(store.synchronizeProfilesAndBindings(syncState()))
+        assertTrue(store.synchronizePolicyState(syncState()))
         val lifecycleThread = Thread.currentThread().name
 
         val startedAt = System.nanoTime()
@@ -187,9 +189,22 @@ class ProfileStorePersistenceTest {
             bindings.put("com.example.recorder", "bound")
         }
         return JSONObject()
+            .put("schemaVersion", POLICY_SCHEMA_VERSION)
             .put("profiles", profiles)
+            .put("defaultProfileId", "active")
             .put("appBindings", bindings)
             .put("whitelist", JSONObject().put("com.example.recorder", true))
+            .put("captureOwners", JSONObject().put("com.example.recorder", "zygisk"))
+            .put(
+                "control",
+                JSONObject()
+                    .put("masterEnabled", true)
+                    .put("bypass", false)
+                    .put("panicUntilEpochMs", 0L)
+                    .put("sidetoneEnabled", false)
+                    .put("sidetoneGainDb", 0.0)
+                    .put("engineMode", "native_first"),
+            )
             .toString()
     }
 

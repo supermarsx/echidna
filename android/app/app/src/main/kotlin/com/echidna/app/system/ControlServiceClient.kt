@@ -32,15 +32,7 @@ import kotlinx.coroutines.launch
  * replay only the newest preset/control state after an asynchronous bind or service restart.
  */
 data class ControlServiceSyncSnapshot(
-    val profileId: String,
-    val profileJson: String,
-    val profileBindingStateJson: String?,
-    val masterEnabled: Boolean,
-    val bypass: Boolean,
-    val sidetoneEnabled: Boolean,
-    val sidetoneGainDb: Float,
-    val engineMode: String,
-    val latencyMode: String,
+    val policyStateJson: String?,
     val telemetryOptIn: Boolean,
 )
 
@@ -378,15 +370,11 @@ class ControlServiceClient(private val context: Context) {
             if (appliedGeneration == generation && appliedVersion == pending.version) return
             try {
                 val snapshot = pending.snapshot
-                snapshot.profileBindingStateJson?.let {
-                    connectedService.synchronizeProfilesAndBindings(it)
+                snapshot.policyStateJson?.let {
+                    check(connectedService.synchronizePolicyState(it)) {
+                        "control service rejected v2 policy state"
+                    }
                 }
-                connectedService.pushProfileSnapshot(snapshot.profileId, snapshot.profileJson)
-                connectedService.setMasterEnabled(snapshot.masterEnabled)
-                connectedService.setBypass(snapshot.bypass)
-                connectedService.setSidetone(snapshot.sidetoneEnabled, snapshot.sidetoneGainDb)
-                connectedService.setEngineMode(snapshot.engineMode)
-                connectedService.setLatencyModeOverride(snapshot.profileId, snapshot.latencyMode)
                 connectedService.setTelemetryOptIn(snapshot.telemetryOptIn)
                 appliedGeneration = generation
                 appliedVersion = pending.version

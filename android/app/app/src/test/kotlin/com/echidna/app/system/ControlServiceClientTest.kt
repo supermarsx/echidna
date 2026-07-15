@@ -60,7 +60,7 @@ class ControlServiceClientTest {
         Thread.sleep(100)
         assertFalse(client.isBound())
         assertEquals(0, service.registerCalls.get())
-        assertTrue(service.profileIds.isEmpty())
+        assertTrue(service.policyStates.isEmpty())
     }
 
     @Test
@@ -76,16 +76,15 @@ class ControlServiceClientTest {
         assertTrue(client.bind())
 
         context.connectCurrent(service)
-        assertTrue(await { service.profileIds.size == 1 })
-        assertEquals(listOf("preset-3"), service.profileIds)
-        assertEquals(1, service.profileBindingStates.size)
-        assertTrue(service.profileBindingStates.single().contains("preset-3"))
-        assertEquals(listOf(true), service.masterValues)
+        assertTrue(await { service.policyStates.size == 1 })
+        val applied = JSONObject(service.policyStates.single())
+        assertTrue(applied.getJSONObject("profiles").has("preset-3"))
+        assertTrue(applied.getJSONObject("control").getBoolean("masterEnabled"))
         assertNotEquals(callbackThread, service.syncThreadIds.single())
 
         context.connectCurrent(service)
         Thread.sleep(100)
-        assertEquals("duplicate onServiceConnected must not replay", 1, service.profileIds.size)
+        assertEquals("duplicate onServiceConnected must not replay", 1, service.policyStates.size)
     }
 
     @Test
@@ -96,7 +95,7 @@ class ControlServiceClientTest {
         client.synchronize(snapshot("initial"))
         assertTrue(client.bind())
         context.connectCurrent(first)
-        assertTrue(await { first.profileIds == listOf("initial") })
+        assertTrue(await { first.policyStates.singleOrNull()?.contains("initial") == true })
 
         context.disconnectCurrent()
         client.synchronize(snapshot("stale"))
@@ -104,17 +103,15 @@ class ControlServiceClientTest {
         val replacement = RecordingControlService()
         context.connectCurrent(replacement)
 
-        assertTrue(await { replacement.profileIds.size == 1 })
-        assertEquals(listOf("current"), replacement.profileIds)
-        assertEquals(1, replacement.profileBindingStates.size)
-        assertTrue(replacement.profileBindingStates.single().contains("current"))
+        assertTrue(await { replacement.policyStates.size == 1 })
+        assertTrue(replacement.policyStates.single().contains("current"))
     }
 
     @Test
     fun `binder death during replay rebinds and preserves current state`() {
         val context = RecordingBindingContext()
         val client = client(context)
-        val dying = RecordingControlService(dieOnProfilePush = true)
+        val dying = RecordingControlService(dieOnPolicySync = true)
         client.synchronize(snapshot("survivor"))
         assertTrue(client.bind())
 
@@ -123,10 +120,8 @@ class ControlServiceClientTest {
 
         val replacement = RecordingControlService()
         context.connectCurrent(replacement)
-        assertTrue(await { replacement.profileIds.size == 1 })
-        assertEquals(listOf("survivor"), replacement.profileIds)
-        assertEquals(1, replacement.profileBindingStates.size)
-        assertTrue(replacement.profileBindingStates.single().contains("survivor"))
+        assertTrue(await { replacement.policyStates.size == 1 })
+        assertTrue(replacement.policyStates.single().contains("survivor"))
         assertEquals(1, context.unbindCalls.get())
     }
 
@@ -138,7 +133,7 @@ class ControlServiceClientTest {
         client.synchronize(snapshot("policy", whitelistEnabled = true))
         assertTrue(client.bind())
         context.connectCurrent(first)
-        assertTrue(await { first.profileBindingStates.size == 1 })
+        assertTrue(await { first.policyStates.size == 1 })
 
         context.disconnectCurrent()
         client.synchronize(snapshot("policy", whitelistEnabled = false))
@@ -146,8 +141,8 @@ class ControlServiceClientTest {
         val replacement = RecordingControlService()
         context.connectCurrent(replacement)
 
-        assertTrue(await { replacement.profileBindingStates.size == 1 })
-        val replayed = JSONObject(replacement.profileBindingStates.single())
+        assertTrue(await { replacement.policyStates.size == 1 })
+        val replayed = JSONObject(replacement.policyStates.single())
         assertTrue(replayed.getJSONObject("whitelist").getBoolean("com.example.recorder"))
         assertEquals("policy", replayed.getJSONObject("appBindings").getString("com.example.recorder"))
     }
@@ -160,19 +155,22 @@ class ControlServiceClientTest {
         masterEnabled: Boolean = true,
         whitelistEnabled: Boolean = true,
     ): ControlServiceSyncSnapshot = ControlServiceSyncSnapshot(
-        profileId = presetId,
-        profileJson = """{"name":"$presetId","engine":{},"modules":[]}""",
-        profileBindingStateJson = """{
+        policyStateJson = """{
+            "schemaVersion":2,
             "profiles":{"$presetId":{"name":"$presetId","engine":{},"modules":[]}},
+            "defaultProfileId":"$presetId",
             "appBindings":{"com.example.recorder":"$presetId"},
-            "whitelist":{"com.example.recorder":$whitelistEnabled}
+            "whitelist":{"com.example.recorder":$whitelistEnabled},
+            "captureOwners":{"com.example.recorder":"zygisk"},
+            "control":{
+                "masterEnabled":$masterEnabled,
+                "bypass":false,
+                "panicUntilEpochMs":0,
+                "sidetoneEnabled":false,
+                "sidetoneGainDb":-24.0,
+                "engineMode":"native_first"
+            }
         }""".trimIndent(),
-        masterEnabled = masterEnabled,
-        bypass = false,
-        sidetoneEnabled = false,
-        sidetoneGainDb = -24f,
-        engineMode = "native_first",
-        latencyMode = "LL",
         telemetryOptIn = false,
     )
 
@@ -230,12 +228,10 @@ private class RecordingBindingContext : ContextWrapper(
 }
 
 private class RecordingControlService(
-    private val dieOnProfilePush: Boolean = false,
+    private val dieOnPolicySync: Boolean = false,
 ) : IEchidnaControlService.Stub() {
     val registerCalls = AtomicInteger(0)
-    val profileIds = CopyOnWriteArrayList<String>()
-    val profileBindingStates = CopyOnWriteArrayList<String>()
-    val masterValues = CopyOnWriteArrayList<Boolean>()
+    val policyStates = CopyOnWriteArrayList<String>()
     val syncThreadIds = CopyOnWriteArrayList<Long>()
 
     override fun registerTelemetryListener(listener: IEchidnaTelemetryListener?) {
@@ -243,17 +239,14 @@ private class RecordingControlService(
     }
 
     override fun pushProfileSnapshot(profileId: String?, profileJson: String?) {
-        if (dieOnProfilePush) throw DeadObjectException()
+        // Legacy binder path is intentionally unused by complete policy replay.
+    }
+
+    override fun synchronizePolicyState(stateJson: String?): Boolean {
+        if (dieOnPolicySync) throw DeadObjectException()
         syncThreadIds += Thread.currentThread().id
-        profileIds += profileId.orEmpty()
-    }
-
-    override fun synchronizeProfilesAndBindings(stateJson: String?) {
-        profileBindingStates += stateJson.orEmpty()
-    }
-
-    override fun setMasterEnabled(enabled: Boolean) {
-        masterValues += enabled
+        policyStates += stateJson.orEmpty()
+        return true
     }
 
     override fun installModule(archivePath: String?) = Unit
@@ -273,6 +266,7 @@ private class RecordingControlService(
     override fun setProfile(profile: String?) = Unit
     override fun setLatencyModeOverride(profileId: String?, latencyMode: String?) = Unit
     override fun setAppPresetBinding(packageName: String?, presetId: String?) = Unit
+    override fun setMasterEnabled(enabled: Boolean) = Unit
     override fun setBypass(bypass: Boolean) = Unit
     override fun triggerPanic(holdMs: Long) = Unit
     override fun setSidetone(enabled: Boolean, gainDb: Float) = Unit

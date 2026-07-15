@@ -2,8 +2,8 @@ package com.echidna.control.service
 
 import java.io.File
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import org.junit.After
@@ -14,16 +14,11 @@ import org.junit.Test
 
 private const val VALID_PROFILE_ID = "p1"
 private const val VALID_PROFILE_JSON = """{
-    "profiles": {
-        "p1": {
-            "name": "Test",
-            "engine": {"latencyMode": "LL", "blockMs": 10},
-            "modules": [
-                {"id":"mix","wet":50,"outGain":0.0}
-            ]
-        }
-    },
-    "whitelist": {"com.example.app": true}
+    "name": "Test",
+    "engine": {"latencyMode": "LL", "blockMs": 10},
+    "modules": [
+        {"id":"mix","wet":50,"outGain":0.0}
+    ]
 }"""
 
 class ProfileStoreTest {
@@ -34,6 +29,7 @@ class ProfileStoreTest {
 
     @Before
     fun setUp() {
+        PublishedPolicyRegistry.resetForTests()
         tempDir = kotlin.io.path.createTempDirectory("profiles").toFile()
         executor = Executors.newSingleThreadExecutor()
         syncBridge = RecordingSyncBridge()
@@ -67,6 +63,8 @@ class ProfileStoreTest {
 
     @Test
     fun `whitelist updates are persisted and pushed`() {
+        store.saveProfile(VALID_PROFILE_ID, VALID_PROFILE_JSON)
+        assertTrue(syncBridge.awaitPush())
         store.updateWhitelist("com.test.app", true)
         assertTrue(syncBridge.awaitPush())
         val payload = syncBridge.lastPayload()
@@ -79,16 +77,16 @@ class ProfileStoreTest {
 }
 
 private class RecordingSyncBridge : ProfileSyncChannel {
-    private val latch = CountDownLatch(1)
+    private val permits = Semaphore(0)
     @Volatile private var payload: String? = null
 
     override fun pushProfiles(json: String) {
         payload = json
-        latch.countDown()
+        permits.release()
     }
 
     fun lastPayload(): String? = payload
 
     fun awaitPush(timeoutMs: Long = 1000): Boolean =
-        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        permits.tryAcquire(1, timeoutMs, TimeUnit.MILLISECONDS)
 }

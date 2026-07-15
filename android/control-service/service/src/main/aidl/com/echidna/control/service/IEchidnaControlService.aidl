@@ -28,9 +28,9 @@ interface IEchidnaControlService {
     void pushProfileSnapshot(String profileId, String profileJson);
     void setLatencyModeOverride(String profileId, String latencyMode);
     void setAppPresetBinding(String packageName, String presetId);
-    // Atomically replaces the app-owned profile definitions + binding map. JSON schema:
-    // {"profiles":{presetId:presetJson},"appBindings":{packageName:presetId}}.
-    void synchronizeProfilesAndBindings(String stateJson);
+    // Atomically replaces the complete app-owned v2 policy. The service owns and persists the
+    // monotonic generation used by native/shim readers.
+    boolean synchronizePolicyState(String stateJson);
     // Global engine controls; each mutation is persisted and pushed via the
     // ProfileSyncBridge snapshot ("control" object) for the native/shim path.
     void setMasterEnabled(boolean enabled);

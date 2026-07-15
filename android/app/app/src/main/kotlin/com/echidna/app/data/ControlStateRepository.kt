@@ -287,8 +287,8 @@ object ControlStateRepository {
                 }
             }
             scope.launch {
-                activePreset.collect { preset ->
-                    pushPresetToService(preset)
+                activePreset.collect {
+                    pushPresetToService()
                 }
             }
         }
@@ -351,7 +351,8 @@ object ControlStateRepository {
             else -> now + holdMs
         }
         _panicUntilEpochMs.value = deadline
-        _engineStatus.value = _engineStatus.value.copy(active = false)
+        _engineStatus.value = _engineStatus.value.copy(active = engineActive())
+        persistPresets()
         if (::serviceClient.isInitialized) {
             scope.launch { serviceClient.triggerPanic(holdMs) }
         }
@@ -364,6 +365,7 @@ object ControlStateRepository {
                 }
                 if (_panicUntilEpochMs.value == deadline) {
                     _panicUntilEpochMs.value = 0L
+                    persistPresets()
                     _engineStatus.value = _engineStatus.value.copy(active = engineActive())
                 }
             }
@@ -375,7 +377,7 @@ object ControlStateRepository {
             _activePresetId.value = presetId
             persistPresets()
             _presets.value.firstOrNull { it.id == presetId }?.let { updatePresetWarnings(it) }
-            _presets.value.firstOrNull { it.id == presetId }?.let { pushPresetToService(it) }
+            if (_presets.value.any { it.id == presetId }) pushPresetToService()
         }
     }
 
@@ -386,7 +388,7 @@ object ControlStateRepository {
             val next = list[(idx + 1) % list.size]
             _activePresetId.value = next.id
             persistPresets()
-            pushPresetToService(next)
+            pushPresetToService()
         }
     }
 
@@ -451,6 +453,7 @@ object ControlStateRepository {
             _defaultPresetId.value = id
             commitSettingsChange()
             persistPresets()
+            synchronizeServiceState()
         }
     }
 
@@ -705,6 +708,7 @@ object ControlStateRepository {
                 } else {
                     null
                 },
+                panicUntilEpochMs = _panicUntilEpochMs.value,
             )
         )
         presetStateWriter.submit(payload)
@@ -730,6 +734,7 @@ object ControlStateRepository {
             whitelistAuthoritative = true
             _whitelistBindings.value = _whitelistBindings.value.copy(whitelist = whitelist)
         }
+        _panicUntilEpochMs.value = restored.panicUntilEpochMs
     }
 
     private fun commitSettingsChange(clearActiveProfile: Boolean = true) {
@@ -986,6 +991,7 @@ object ControlStateRepository {
     }
 
     private fun applyControlState(state: ControlState) {
+        val panicChanged = _panicUntilEpochMs.value != state.panicUntilEpochMs
         _masterEnabled.value = state.masterEnabled
         _bypass.value = state.bypass
         _panicUntilEpochMs.value = state.panicUntilEpochMs
@@ -996,6 +1002,9 @@ object ControlStateRepository {
             _sidetoneLevel.value = state.sidetoneGainDb
         }
         _engineStatus.value = _engineStatus.value.copy(active = engineActive())
+        if (panicChanged) {
+            persistPresets()
+        }
         refreshSettingsState()
     }
 
@@ -1164,41 +1173,56 @@ object ControlStateRepository {
         _presetWarnings.value = PresetValidator.evaluate(preset)
     }
 
-    private fun pushPresetToService(preset: Preset) {
+    private fun pushPresetToService() {
         if (!::serviceClient.isInitialized) return
-        synchronizeServiceState(preset)
+        synchronizeServiceState()
     }
 
     /**
      * Queues one coherent app-owned state value. The client retains only the newest value until
      * the asynchronous bind succeeds, then replays it once after each service reconnection.
      */
-    private fun synchronizeServiceState(
-        preset: Preset = _presets.value.firstOrNull { it.id == _activePresetId.value }
-            ?: _presets.value.first(),
-    ) {
+    private fun synchronizeServiceState() {
         if (!::serviceClient.isInitialized) return
+        val policyStateJson = if (appBindingsAuthoritative && whitelistAuthoritative) {
+            val captureOwner = if (_dspEngineMode.value == DspEngineMode.COMPATIBILITY) {
+                "lsposed"
+            } else {
+                "zygisk"
+            }
+            val captureOwners = _whitelistBindings.value.whitelist
+                .filterValues { enabled -> enabled }
+                .keys
+                .associateWith { captureOwner }
+            runCatching {
+                ProfileBindingSyncCodec.encode(
+                    presets = _presets.value,
+                    defaultProfileId = _defaultPresetId.value,
+                    appBindings = _whitelistBindings.value.appBindings,
+                    whitelist = _whitelistBindings.value.whitelist,
+                    captureOwners = captureOwners,
+                    control = PolicyControlState(
+                        masterEnabled = _masterEnabled.value,
+                        bypass = _bypass.value,
+                        panicUntilEpochMs = _panicUntilEpochMs.value,
+                        sidetoneEnabled = _sidetoneEnabled.value,
+                        sidetoneGainDb = _sidetoneLevel.value,
+                        engineMode = _dspEngineMode.value.id,
+                    ),
+                )
+            }.getOrElse { exception ->
+                _engineStatus.value = _engineStatus.value.copy(
+                    active = false,
+                    lastError = "Policy rejected: ${exception.message ?: "invalid state"}",
+                )
+                return
+            }
+        } else {
+            null
+        }
         serviceClient.synchronize(
             ControlServiceSyncSnapshot(
-                profileId = preset.id,
-                profileJson = PresetSerializer.toJson(preset),
-                profileBindingStateJson = if (
-                    appBindingsAuthoritative && whitelistAuthoritative
-                ) {
-                    ProfileBindingSyncCodec.encode(
-                        presets = _presets.value,
-                        appBindings = _whitelistBindings.value.appBindings,
-                        whitelist = _whitelistBindings.value.whitelist,
-                    )
-                } else {
-                    null
-                },
-                masterEnabled = _masterEnabled.value,
-                bypass = _bypass.value,
-                sidetoneEnabled = _sidetoneEnabled.value,
-                sidetoneGainDb = _sidetoneLevel.value,
-                engineMode = _dspEngineMode.value.id,
-                latencyMode = PresetSerializer.latencyModeString(_latencyMode.value),
+                policyStateJson = policyStateJson,
                 telemetryOptIn = _telemetryOptIn.value,
             )
         )

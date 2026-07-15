@@ -80,7 +80,7 @@ class EchidnaControlService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        syncBridge = ProfileSyncBridge()
+        syncBridge = ProfileSyncBridge(applicationContext)
         profileStore = ProfileStore(File(filesDir, "profiles"), syncBridge)
         val rootExecutor = RootCommandExecutor()
         val selinuxChecker = SelinuxCompatChecker(rootExecutor)
@@ -242,10 +242,10 @@ class EchidnaControlService : Service() {
             }
         }
 
-        override fun synchronizeProfilesAndBindings(stateJson: String?) {
-            if (stateJson.isNullOrBlank()) return
-            safeBinder("synchronize profiles and bindings", Unit) {
-                profileStore.synchronizeProfilesAndBindings(stateJson)
+        override fun synchronizePolicyState(stateJson: String?): Boolean {
+            if (stateJson.isNullOrBlank()) return false
+            return safeBinder("synchronize v2 policy", false) {
+                profileStore.synchronizePolicyState(stateJson)
             }
         }
 

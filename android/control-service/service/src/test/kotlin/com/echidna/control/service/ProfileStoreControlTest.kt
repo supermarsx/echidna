@@ -33,6 +33,7 @@ class ProfileStoreControlTest {
 
     @Before
     fun setUp() {
+        PublishedPolicyRegistry.resetForTests()
         tempDir = kotlin.io.path.createTempDirectory("profiles-control").toFile()
         executor = Executors.newSingleThreadExecutor()
         syncBridge = CountingSyncBridge()
@@ -53,13 +54,43 @@ class ProfileStoreControlTest {
         return JSONObject(syncBridge.lastPayload()!!)
     }
 
+    private fun seedProfile(id: String = "p1") {
+        store.saveProfile(id, PRESET_JSON)
+        awaitNextSnapshot()
+    }
+
+    private fun policyRequest(
+        bindingId: String = "p1",
+        whitelistName: String = "com.example.app",
+    ): JSONObject = JSONObject()
+        .put("schemaVersion", POLICY_SCHEMA_VERSION)
+        .put("profiles", JSONObject().put("p1", JSONObject(PRESET_JSON)))
+        .put("defaultProfileId", "p1")
+        .put("appBindings", JSONObject().put("com.example.app", bindingId))
+        .put("whitelist", JSONObject().put(whitelistName, true))
+        .put("captureOwners", JSONObject().put(whitelistName, "zygisk"))
+        .put(
+            "control",
+            JSONObject()
+                .put("masterEnabled", true)
+                .put("bypass", false)
+                .put("panicUntilEpochMs", 0L)
+                .put("sidetoneEnabled", false)
+                .put("sidetoneGainDb", 0.0)
+                .put("engineMode", "native_first"),
+        )
+
     @Test
-    fun `snapshot always carries the four top-level sections`() {
+    fun `snapshot always carries the complete versioned v2 policy`() {
         store.saveProfile("p1", PRESET_JSON)
         val snapshot = awaitNextSnapshot()
+        assertEquals(POLICY_SCHEMA_VERSION, snapshot.getInt("schemaVersion"))
+        assertTrue(snapshot.getLong("generation") > 0L)
         assertTrue(snapshot.has("profiles"))
+        assertEquals("p1", snapshot.getString("defaultProfileId"))
         assertTrue(snapshot.has("whitelist"))
         assertTrue(snapshot.has("appBindings"))
+        assertTrue(snapshot.has("captureOwners"))
         assertTrue(snapshot.has("control"))
     }
 
@@ -76,6 +107,7 @@ class ProfileStoreControlTest {
 
     @Test
     fun `setMasterEnabled and setBypass propagate into the control object`() {
+        seedProfile()
         store.setMasterEnabled(false)
         assertFalse(awaitNextSnapshot().getJSONObject("control").getBoolean("masterEnabled"))
         store.setBypass(true)
@@ -88,6 +120,7 @@ class ProfileStoreControlTest {
 
     @Test
     fun `panic preserves base controls and records a future expiry`() {
+        seedProfile()
         val before = System.currentTimeMillis()
         store.panic(60_000L)
         val control = awaitNextSnapshot().getJSONObject("control")
@@ -98,6 +131,7 @@ class ProfileStoreControlTest {
 
     @Test
     fun `panic expires and republishes recovered base controls`() {
+        seedProfile()
         store.panic(250L)
         val engaged = awaitNextSnapshot().getJSONObject("control")
         assertTrue(engaged.getLong("panicUntilEpochMs") > 0L)
@@ -110,6 +144,7 @@ class ProfileStoreControlTest {
 
     @Test
     fun `sidetone settings are published`() {
+        seedProfile()
         store.setSidetone(true, -18.0)
         val control = awaitNextSnapshot().getJSONObject("control")
         assertTrue(control.getBoolean("sidetoneEnabled"))
@@ -118,6 +153,7 @@ class ProfileStoreControlTest {
 
     @Test
     fun `engine mode is published, read back and sanitized`() {
+        seedProfile()
         store.setEngineMode("compatibility")
         val compatibility = awaitNextSnapshot().getJSONObject("control")
         assertEquals("compatibility", compatibility.getString("engineMode"))
@@ -146,9 +182,16 @@ class ProfileStoreControlTest {
 
     @Test
     fun `whitelist is fail-closed by default and honours explicit entries`() {
+        seedProfile()
         store.updateWhitelist("com.allowed.app", true)
         val whitelist = awaitNextSnapshot().getJSONObject("whitelist")
         assertTrue(whitelist.getBoolean("com.allowed.app"))
+        assertEquals(
+            "zygisk",
+            JSONObject(syncBridge.lastPayload()!!)
+                .getJSONObject("captureOwners")
+                .getString("com.allowed.app"),
+        )
         // A process that was never whitelisted is absent — the shim treats absence as not-hooked.
         assertFalse("unknown process must be absent (fail-closed)", whitelist.has("com.unknown.app"))
 
@@ -167,16 +210,12 @@ class ProfileStoreControlTest {
 
     @Test
     fun `atomic profile binding sync rejects dangling ids without changing state`() {
-        val valid = JSONObject()
-            .put("profiles", JSONObject().put("p1", JSONObject(PRESET_JSON)))
-            .put("appBindings", JSONObject().put("com.example.app", "p1"))
-            .put("whitelist", JSONObject().put("com.example.app", true))
-        assertTrue(store.synchronizeProfilesAndBindings(valid.toString()))
+        val valid = policyRequest()
+        assertTrue(store.synchronizePolicyState(valid.toString()))
         awaitNextSnapshot()
 
-        val dangling = JSONObject(valid.toString())
-        dangling.getJSONObject("appBindings").put("com.example.app", "deleted")
-        assertFalse(store.synchronizeProfilesAndBindings(dangling.toString()))
+        val dangling = policyRequest(bindingId = "deleted")
+        assertFalse(store.synchronizePolicyState(dangling.toString()))
         assertFalse(syncBridge.awaitPush(timeoutMs = 200))
         assertEquals("p1", store.getAppBindings()["com.example.app"])
         assertTrue(store.getWhitelist().getValue("com.example.app"))
@@ -184,16 +223,14 @@ class ProfileStoreControlTest {
 
     @Test
     fun `atomic policy sync replaces stale whitelist entries`() {
-        val first = JSONObject()
-            .put("profiles", JSONObject().put("p1", JSONObject(PRESET_JSON)))
+        val first = policyRequest(whitelistName = "com.example.old")
             .put("appBindings", JSONObject())
-            .put("whitelist", JSONObject().put("com.example.old", true))
-        assertTrue(store.synchronizeProfilesAndBindings(first.toString()))
+        assertTrue(store.synchronizePolicyState(first.toString()))
         awaitNextSnapshot()
 
-        val newest = JSONObject(first.toString())
-            .put("whitelist", JSONObject().put("com.example.new", true))
-        assertTrue(store.synchronizeProfilesAndBindings(newest.toString()))
+        val newest = policyRequest(whitelistName = "com.example.new")
+            .put("appBindings", JSONObject())
+        assertTrue(store.synchronizePolicyState(newest.toString()))
         val snapshot = awaitNextSnapshot()
 
         assertFalse(snapshot.getJSONObject("whitelist").has("com.example.old"))
@@ -204,6 +241,8 @@ class ProfileStoreControlTest {
     fun `deleting a profile also removes every binding to it`() {
         store.saveProfile("bound", PRESET_JSON)
         awaitNextSnapshot()
+        store.saveProfile("fallback", PRESET_JSON)
+        awaitNextSnapshot()
         store.setAppBinding("com.example.app", "bound")
         awaitNextSnapshot()
 
@@ -213,6 +252,17 @@ class ProfileStoreControlTest {
         assertFalse(deleted.getJSONObject("profiles").has("bound"))
         assertFalse(deleted.getJSONObject("appBindings").has("com.example.app"))
         assertNull(store.getAppBindings()["com.example.app"])
+    }
+
+    @Test
+    fun `identical complete policy replay is idempotent`() {
+        val request = policyRequest().toString()
+        assertTrue(store.synchronizePolicyState(request))
+        val first = awaitNextSnapshot()
+
+        assertTrue(store.synchronizePolicyState(request))
+        assertFalse(syncBridge.awaitPush(timeoutMs = 200))
+        assertEquals(1L, first.getLong("generation"))
     }
 }
 

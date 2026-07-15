@@ -50,6 +50,7 @@ class PresetStatePersistenceTest {
                 first.id,
                 mapOf("com.example.recorder" to selected.id),
                 mapOf("com.example.recorder" to true),
+                123_456L,
             )
         )
         writeAtomicUtf8(file, encoded)
@@ -62,6 +63,7 @@ class PresetStatePersistenceTest {
         assertEquals(first.id, restarted.defaultPresetId)
         assertEquals(selected.id, restarted.appBindings?.get("com.example.recorder"))
         assertTrue(restarted.whitelist?.get("com.example.recorder") == true)
+        assertEquals(123_456L, restarted.panicUntilEpochMs)
     }
 
     @Test

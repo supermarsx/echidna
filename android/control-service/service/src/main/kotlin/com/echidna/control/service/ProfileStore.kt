@@ -15,8 +15,8 @@ import org.json.JSONException
 import org.json.JSONObject
 
 private const val STORE_TAG = "EchidnaProfileStore"
-private const val MAX_PROCESS_NAME_LENGTH = 128
-private const val MAX_PROFILE_STORE_BYTES = 10L * 1024L * 1024L
+private const val MAX_PROCESS_NAME_LENGTH = 255
+private const val MAX_PROFILE_COUNT = 256
 private const val ENGINE_MODE_NATIVE_FIRST = "native_first"
 private const val ENGINE_MODE_LOW_LATENCY = "low_latency"
 private const val ENGINE_MODE_COMPATIBILITY = "compatibility"
@@ -41,6 +41,10 @@ class ProfileStore(
     private val profiles = mutableMapOf<String, JSONObject>()
     private val whitelist = mutableMapOf<String, Boolean>()
     private val appBindings = mutableMapOf<String, String>()
+    private val captureOwners = mutableMapOf<String, String>()
+    private var defaultProfileId = ""
+    private var generation = 0L
+    private var lastAppPayload: String? = null
     private val flushLock = Any()
     private var pendingSnapshot: String? = null
     private var flushScheduled = false
@@ -74,13 +78,17 @@ class ProfileStore(
     }
 
     fun saveProfile(id: String, profileJson: String) {
+        if (!isValidProfileId(id)) {
+            Log.w(STORE_TAG, "Rejected invalid profile id: $id")
+            return
+        }
         val parsed = try {
             JSONObject(profileJson)
         } catch (e: JSONException) {
             Log.w(STORE_TAG, "Rejected invalid profile JSON", e)
             return
         }
-        if (profileJson.toByteArray(StandardCharsets.UTF_8).size > 512 * 1024) {
+        if (profileJson.toByteArray(StandardCharsets.UTF_8).size > MAX_POLICY_PRESET_BYTES) {
             Log.w(STORE_TAG, "Rejected profile JSON: too large")
             return
         }
@@ -89,17 +97,20 @@ class ProfileStore(
             return
         }
         val snapshot = lock.write {
+            if (!profiles.containsKey(id) && profiles.size >= MAX_PROFILE_COUNT) return@write null
             profiles[id] = parsed
-            buildSnapshotLocked()
+            if (defaultProfileId !in profiles) defaultProfileId = id
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     fun deleteProfile(id: String) {
         val snapshot = lock.write {
             if (profiles.remove(id) != null) {
                 appBindings.entries.removeAll { (_, presetId) -> presetId == id }
-                buildSnapshotLocked()
+                if (defaultProfileId == id) defaultProfileId = profiles.keys.firstOrNull().orEmpty()
+                buildMutatedSnapshotLocked()
             } else {
                 null
             }
@@ -113,10 +124,21 @@ class ProfileStore(
             return
         }
         val snapshot = lock.write {
+            if (!whitelist.containsKey(processName) && whitelist.size >= MAX_PROFILE_COUNT) {
+                return@write null
+            }
             whitelist[processName] = enabled
-            buildSnapshotLocked()
+            if (enabled) {
+                captureOwners.putIfAbsent(
+                    processName,
+                    if (engineMode == ENGINE_MODE_COMPATIBILITY) "lsposed" else "zygisk",
+                )
+            } else {
+                captureOwners.remove(processName)
+            }
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     fun close() {
@@ -164,24 +186,26 @@ class ProfileStore(
             val profile = profiles[profileId] ?: return
             profile.put("latencyOverride", latencyMode)
             profiles[profileId] = profile
-            buildSnapshotLocked()
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     fun setAppBinding(packageName: String, presetId: String) {
-        if (!isValidProcessName(packageName)) {
+        if (!isValidPackageName(packageName)) {
             Log.w(STORE_TAG, "Rejected invalid package name: $packageName")
             return
         }
         val snapshot = lock.write {
             if (presetId.isBlank()) {
-                if (appBindings.remove(packageName) == null) null else buildSnapshotLocked()
+                if (appBindings.remove(packageName) == null) null else buildMutatedSnapshotLocked()
             } else if (!profiles.containsKey(presetId)) {
+                null
+            } else if (!appBindings.containsKey(packageName) && appBindings.size >= MAX_PROFILE_COUNT) {
                 null
             } else {
                 appBindings[packageName] = presetId
-                buildSnapshotLocked()
+                buildMutatedSnapshotLocked()
             }
         }
         if (snapshot == null) {
@@ -193,68 +217,42 @@ class ProfileStore(
         scheduleFlush(snapshot)
     }
 
-    /** Atomically replaces all app-owned profiles, bindings, and whitelist policy. */
-    fun synchronizeProfilesAndBindings(stateJson: String): Boolean {
-        if (stateJson.toByteArray(StandardCharsets.UTF_8).size > MAX_PROFILE_STORE_BYTES) {
-            Log.w(STORE_TAG, "Rejected profile/binding state: too large")
+    /** Atomically applies one complete v2 policy under a service-owned generation. */
+    fun synchronizePolicyState(stateJson: String): Boolean {
+        val next = PolicyEnvelopeCodec.parseRequest(stateJson) ?: run {
+            Log.w(STORE_TAG, "Rejected invalid v2 policy request")
             return false
         }
-        val root = try {
-            JSONObject(stateJson)
-        } catch (exception: JSONException) {
-            Log.w(STORE_TAG, "Rejected invalid profile/binding state JSON", exception)
-            return false
-        }
-        val profileJson = root.optJSONObject("profiles") ?: return false
-        val bindingJson = root.optJSONObject("appBindings") ?: return false
-        val whitelistJson = root.optJSONObject("whitelist") ?: return false
-        val nextProfiles = linkedMapOf<String, JSONObject>()
-        val profileKeys = profileJson.keys()
-        while (profileKeys.hasNext()) {
-            val id = profileKeys.next()
-            val preset = profileJson.optJSONObject(id) ?: return false
-            if (id.isBlank() || id.length > MAX_PROFILE_ID_LENGTH || !isStructuredPreset(preset)) {
-                return false
-            }
-            nextProfiles[id] = preset
-        }
-        if (nextProfiles.isEmpty()) return false
-
-        val nextBindings = linkedMapOf<String, String>()
-        val bindingKeys = bindingJson.keys()
-        while (bindingKeys.hasNext()) {
-            val packageName = bindingKeys.next()
-            val presetId = bindingJson.optString(packageName)
-            if (!isValidProcessName(packageName) || !nextProfiles.containsKey(presetId)) {
-                Log.w(STORE_TAG, "Rejected dangling or invalid app binding: $packageName")
-                return false
-            }
-            nextBindings[packageName] = presetId
-        }
-
-        val nextWhitelist = linkedMapOf<String, Boolean>()
-        val whitelistKeys = whitelistJson.keys()
-        while (whitelistKeys.hasNext()) {
-            val processName = whitelistKeys.next()
-            val enabled = whitelistJson.opt(processName)
-            if (!isValidProcessName(processName) || enabled !is Boolean) {
-                Log.w(STORE_TAG, "Rejected invalid whitelist entry: $processName")
-                return false
-            }
-            nextWhitelist[processName] = enabled
-        }
-
-        val snapshot = lock.write {
+        var snapshot: String? = null
+        val accepted = lock.write {
+            if (lastAppPayload == stateJson) return@write true
+            val nextGeneration = nextGenerationLocked() ?: return@write false
+            val encoded = PolicyEnvelopeCodec.encode(next, nextGeneration) ?: return@write false
             profiles.clear()
-            profiles.putAll(nextProfiles)
+            profiles.putAll(next.profiles)
+            defaultProfileId = next.defaultProfileId
             appBindings.clear()
-            appBindings.putAll(nextBindings)
+            appBindings.putAll(next.appBindings)
             whitelist.clear()
-            whitelist.putAll(nextWhitelist)
-            buildSnapshotLocked()
+            whitelist.putAll(next.whitelist)
+            captureOwners.clear()
+            captureOwners.putAll(next.captureOwners)
+            masterEnabled = next.control.masterEnabled
+            bypass = next.control.bypass
+            panicUntilEpochMs = next.control.panicUntilEpochMs
+            sidetoneEnabled = next.control.sidetoneEnabled
+            sidetoneGainDb = next.control.sidetoneGainDb
+            engineMode = next.control.engineMode
+            generation = nextGeneration
+            lastAppPayload = stateJson
+            snapshot = encoded
+            true
         }
-        scheduleFlush(snapshot)
-        return true
+        snapshot?.let {
+            schedulePanicExpiry(lock.read { panicUntilEpochMs })
+            scheduleFlush(it)
+        }
+        return accepted
     }
 
     fun getAppBindings(): Map<String, String> = lock.read {
@@ -285,17 +283,17 @@ class ProfileStore(
     fun setMasterEnabled(enabled: Boolean) {
         val snapshot = lock.write {
             masterEnabled = enabled
-            buildSnapshotLocked()
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     fun setBypass(enabled: Boolean) {
         val snapshot = lock.write {
             bypass = enabled
-            buildSnapshotLocked()
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     /**
@@ -311,27 +309,29 @@ class ProfileStore(
         }
         val snapshot = lock.write {
             panicUntilEpochMs = deadline
-            buildSnapshotLocked()
+            buildMutatedSnapshotLocked()
         }
         schedulePanicExpiry(deadline)
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     fun setSidetone(enabled: Boolean, gainDb: Double) {
         val snapshot = lock.write {
             sidetoneEnabled = enabled
             sidetoneGainDb = gainDb
-            buildSnapshotLocked()
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     fun setEngineMode(mode: String) {
         val snapshot = lock.write {
             engineMode = sanitizeEngineMode(mode)
-            buildSnapshotLocked()
+            val owner = if (engineMode == ENGINE_MODE_COMPATIBILITY) "lsposed" else "zygisk"
+            whitelist.filterValues { it }.keys.forEach { captureOwners[it] = owner }
+            buildMutatedSnapshotLocked()
         }
-        scheduleFlush(snapshot)
+        snapshot?.let(::scheduleFlush)
     }
 
     private fun controlStateJsonLocked(): JSONObject {
@@ -345,22 +345,47 @@ class ProfileStore(
         return control
     }
 
-    private fun buildSnapshotLocked(): String {
-        val json = JSONObject()
-        val profilesJson = JSONObject()
-        profiles.forEach { (id, entry) -> profilesJson.put(id, entry) }
-        json.put("profiles", profilesJson)
-        val whitelistJson = JSONObject()
-        whitelist.forEach { (process, allowed) -> whitelistJson.put(process, allowed) }
-        json.put("whitelist", whitelistJson)
-        val bindingsJson = JSONObject()
-        appBindings.forEach { (pkg, presetId) -> bindingsJson.put(pkg, presetId) }
-        json.put("appBindings", bindingsJson)
-        json.put("control", controlStateJsonLocked())
-        return json.toString()
+    private fun buildMutatedSnapshotLocked(): String? {
+        val nextGeneration = nextGenerationLocked() ?: return null
+        val envelope = currentEnvelopeLocked() ?: return null
+        val snapshot = PolicyEnvelopeCodec.encode(envelope, nextGeneration) ?: return null
+        generation = nextGeneration
+        lastAppPayload = null
+        return snapshot
     }
 
+    private fun buildSnapshotLocked(): String? {
+        val envelope = currentEnvelopeLocked() ?: return null
+        return PolicyEnvelopeCodec.encode(envelope, generation)
+    }
+
+    private fun currentEnvelopeLocked(): PolicyEnvelope? {
+        if (profiles.isEmpty() || defaultProfileId !in profiles) return null
+        return PolicyEnvelope(
+            profiles = LinkedHashMap(profiles),
+            defaultProfileId = defaultProfileId,
+            appBindings = LinkedHashMap(appBindings),
+            whitelist = LinkedHashMap(whitelist),
+            captureOwners = LinkedHashMap(captureOwners),
+            control = PolicyControl(
+                masterEnabled = masterEnabled,
+                bypass = bypass,
+                panicUntilEpochMs = panicUntilEpochMs,
+                sidetoneEnabled = sidetoneEnabled,
+                sidetoneGainDb = sidetoneGainDb,
+                engineMode = engineMode,
+            ),
+        )
+    }
+
+    private fun nextGenerationLocked(): Long? =
+        if (generation == Long.MAX_VALUE) null else generation + 1L
+
     private fun scheduleFlush(snapshot: String) {
+        if (!PublishedPolicyRegistry.publish(snapshot)) {
+            Log.w(STORE_TAG, "Rejected non-monotonic policy publication")
+            return
+        }
         synchronized(flushLock) {
             if (closing || executor.isShutdown) return
             pendingSnapshot = snapshot
@@ -409,7 +434,7 @@ class ProfileStore(
                 return@write null
             }
             panicUntilEpochMs = 0L
-            buildSnapshotLocked()
+            buildMutatedSnapshotLocked()
         }
         if (rescheduleDeadline > 0L) {
             schedulePanicExpiry(rescheduleDeadline)
@@ -450,51 +475,46 @@ class ProfileStore(
         if (!storageFile.exists()) {
             return
         }
-        if (storageFile.length() > MAX_PROFILE_STORE_BYTES) {
+        if (storageFile.length() > MAX_POLICY_ENVELOPE_BYTES) {
             Log.w(STORE_TAG, "Persisted profile store is too large; ignoring it")
             return
         }
         try {
-            var panicWasExpired = false
-            val snapshot = readProfileStoreAtomic(storageFile).let { content ->
-                val json = JSONObject(content)
-                lock.write {
-                    val profilesJson = json.optJSONObject("profiles") ?: JSONObject()
-                    profiles.clear()
-                    profilesJson.keys().forEach { key ->
-                        profiles[key] = profilesJson.getJSONObject(key)
-                    }
-                    val whitelistJson = json.optJSONObject("whitelist") ?: JSONObject()
-                    whitelist.clear()
-                    whitelistJson.keys().forEach { key ->
-                        whitelist[key] = whitelistJson.getBoolean(key)
-                    }
-                    val bindingsJson = json.optJSONObject("appBindings") ?: JSONObject()
-                    appBindings.clear()
-                    bindingsJson.keys().forEach { key ->
-                        appBindings[key] = bindingsJson.getString(key)
-                    }
-                    val controlJson = json.optJSONObject("control")
-                    if (controlJson != null) {
-                        masterEnabled = controlJson.optBoolean("masterEnabled", masterEnabled)
-                        bypass = controlJson.optBoolean("bypass", bypass)
-                        panicUntilEpochMs = controlJson.optLong("panicUntilEpochMs", panicUntilEpochMs)
-                        if (panicUntilEpochMs > 0L && panicUntilEpochMs <= nowEpochMs()) {
-                            panicUntilEpochMs = 0L
-                            panicWasExpired = true
-                        }
-                        sidetoneEnabled = controlJson.optBoolean("sidetoneEnabled", sidetoneEnabled)
-                        sidetoneGainDb = controlJson.optDouble("sidetoneGainDb", sidetoneGainDb)
-                        val persistedEngineMode = controlJson.optString("engineMode", engineMode)
-                        engineMode = sanitizeEngineMode(persistedEngineMode)
-                    }
+            val content = readProfileStoreAtomic(storageFile)
+            val published = PolicyEnvelopeCodec.parsePublished(content)
+            val restored = published ?: PolicyEnvelopeCodec.migrateLegacy(content) ?: return
+            var needsRewrite = published == null
+            val snapshot = lock.write {
+                val envelope = restored.envelope
+                profiles.clear()
+                profiles.putAll(envelope.profiles)
+                defaultProfileId = envelope.defaultProfileId
+                appBindings.clear()
+                appBindings.putAll(envelope.appBindings)
+                whitelist.clear()
+                whitelist.putAll(envelope.whitelist)
+                captureOwners.clear()
+                captureOwners.putAll(envelope.captureOwners)
+                masterEnabled = envelope.control.masterEnabled
+                bypass = envelope.control.bypass
+                panicUntilEpochMs = envelope.control.panicUntilEpochMs
+                sidetoneEnabled = envelope.control.sidetoneEnabled
+                sidetoneGainDb = envelope.control.sidetoneGainDb
+                engineMode = envelope.control.engineMode
+                generation = restored.generation
+                if (panicUntilEpochMs > 0L && panicUntilEpochMs <= nowEpochMs()) {
+                    panicUntilEpochMs = 0L
+                    needsRewrite = true
+                    buildMutatedSnapshotLocked()
+                } else {
                     buildSnapshotLocked()
                 }
-            }
+            } ?: return
+            if (!PublishedPolicyRegistry.publish(snapshot)) return
             syncBridge.pushProfiles(snapshot)
             val panicDeadline = lock.read { panicUntilEpochMs }
             schedulePanicExpiry(panicDeadline)
-            if (panicWasExpired) {
+            if (needsRewrite) {
                 scheduleFlush(snapshot)
             }
         } catch (e: Exception) {
@@ -503,19 +523,7 @@ class ProfileStore(
     }
 
     private fun isStructuredPreset(root: JSONObject): Boolean {
-        if (root.optJSONArray("modules") != null && root.optJSONObject("engine") != null) {
-            return true
-        }
-        val profiles = root.optJSONObject("profiles") ?: return false
-        val keys = profiles.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            val preset = profiles.optJSONObject(key) ?: continue
-            if (preset.optJSONArray("modules") != null && preset.optJSONObject("engine") != null) {
-                return true
-            }
-        }
-        return false
+        return root.optJSONArray("modules") != null && root.optJSONObject("engine") != null
     }
 
     private fun isValidProcessName(processName: String): Boolean {
@@ -523,13 +531,33 @@ class ProfileStore(
             return false
         }
         for (char in processName) {
-            val ok = char.isLetterOrDigit() || char == '.' || char == '_' || char == ':'
+            val ok = char in 'A'..'Z' ||
+                char in 'a'..'z' ||
+                char in '0'..'9' ||
+                char == '.' ||
+                char == '_' ||
+                char == ':'
             if (!ok) {
                 return false
             }
         }
         return true
     }
+
+    private fun isValidProfileId(profileId: String): Boolean {
+        if (profileId.isBlank() || profileId.length > MAX_PROFILE_ID_LENGTH) return false
+        return profileId.all { char ->
+            char in 'A'..'Z' ||
+                char in 'a'..'z' ||
+                char in '0'..'9' ||
+                char == '.' ||
+                char == '_' ||
+                char == '-'
+        }
+    }
+
+    private fun isValidPackageName(packageName: String): Boolean =
+        isValidProcessName(packageName) && ':' !in packageName
 
     private fun sanitizeEngineMode(mode: String?): String =
         when (mode) {

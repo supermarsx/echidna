@@ -20,27 +20,61 @@ class ProfileBindingSyncCodecTest {
         val bound = preset("bound")
 
         val root = JSONObject(ProfileBindingSyncCodec.encode(
-            listOf(active, bound),
-            mapOf("com.example.recorder" to bound.id),
-            mapOf("com.example.recorder" to true),
+            presets = listOf(active, bound),
+            defaultProfileId = active.id,
+            appBindings = mapOf("com.example.recorder" to bound.id),
+            whitelist = mapOf("com.example.recorder" to true),
+            captureOwners = mapOf("com.example.recorder" to "zygisk"),
+            control = control(),
         ))
 
+        assertEquals(POLICY_SCHEMA_VERSION, root.getInt("schemaVersion"))
+        assertEquals("active", root.getString("defaultProfileId"))
         assertEquals("bound", root.getJSONObject("appBindings").getString("com.example.recorder"))
         assertEquals("bound", root.getJSONObject("profiles").getJSONObject("bound").getString("id"))
         assertTrue(root.getJSONObject("whitelist").getBoolean("com.example.recorder"))
+        assertEquals("zygisk", root.getJSONObject("captureOwners").getString("com.example.recorder"))
+        assertTrue(root.getJSONObject("control").getBoolean("masterEnabled"))
     }
 
     @Test
     fun `dangling binding cannot be serialized`() {
         val failure = runCatching {
             ProfileBindingSyncCodec.encode(
-                listOf(preset("active")),
-                mapOf("com.example.recorder" to "deleted"),
-                emptyMap(),
+                presets = listOf(preset("active")),
+                defaultProfileId = "active",
+                appBindings = mapOf("com.example.recorder" to "deleted"),
+                whitelist = emptyMap(),
+                captureOwners = emptyMap(),
+                control = control(),
             )
         }
         assertTrue(failure.exceptionOrNull() is IllegalArgumentException)
     }
+
+    @Test
+    fun `process-specific binding and unknown capture owner are rejected`() {
+        val processBinding = runCatching {
+            ProfileBindingSyncCodec.encode(
+                presets = listOf(preset("active")),
+                defaultProfileId = "active",
+                appBindings = mapOf("com.example.recorder:worker" to "active"),
+                whitelist = mapOf("com.example.recorder:worker" to true),
+                captureOwners = mapOf("com.example.recorder:worker" to "other"),
+                control = control(),
+            )
+        }
+        assertTrue(processBinding.exceptionOrNull() is IllegalArgumentException)
+    }
+
+    private fun control() = PolicyControlState(
+        masterEnabled = true,
+        bypass = false,
+        panicUntilEpochMs = 0L,
+        sidetoneEnabled = false,
+        sidetoneGainDb = 0f,
+        engineMode = "native_first",
+    )
 
     private fun preset(id: String): Preset = Preset(
         id = id,
