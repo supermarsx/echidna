@@ -1,5 +1,6 @@
 package com.echidna.control.service
 
+import android.app.ActivityManager
 import android.app.Service
 import android.content.Intent
 import android.os.Binder
@@ -38,6 +39,7 @@ class PolicySnapshotService : Service() {
     private val pendingGeneration = AtomicLong(0L)
     private val invalidationScheduled = AtomicBoolean(false)
     private var registryObservation: Closeable? = null
+    private lateinit var capabilityIssuer: LegacyCapabilityIssuer
     private val callbacks = object : RemoteCallbackList<IEchidnaPolicyListener>() {
         override fun onCallbackDied(
             callback: IEchidnaPolicyListener?,
@@ -52,6 +54,21 @@ class PolicySnapshotService : Service() {
     override fun onCreate() {
         super.onCreate()
         registryObservation = PublishedPolicyRegistry.observe(::scheduleInvalidation)
+        val flagStore = LegacyPreprocessorFlagStore(applicationContext)
+        val signingExecutor = BoundedCapabilityExecutor()
+        capabilityIssuer = LegacyCapabilityIssuer(
+            enabled = flagStore::isEnabled,
+            policySource = { packageName, processName ->
+                PublishedPolicyRegistry.capabilityForProcess(
+                    packageName,
+                    processName,
+                    System.currentTimeMillis(),
+                )
+            },
+            signer = AndroidKeyStoreLegacyCapabilitySigner(applicationContext),
+            executor = signingExecutor,
+        )
+        capabilityIssuer.prepareKey()
         executor.execute(::loadPersistedPolicy)
     }
 
@@ -61,6 +78,7 @@ class PolicySnapshotService : Service() {
         callbacks.kill()
         synchronized(registrationLock) { registrations.clear() }
         executor.shutdownNow()
+        if (::capabilityIssuer.isInitialized) capabilityIssuer.close()
         super.onDestroy()
     }
 
@@ -106,12 +124,99 @@ class PolicySnapshotService : Service() {
             callbacks.unregister(listener)
             synchronized(registrationLock) { registrations.remove(listener.asBinder()) }
         }
+
+        override fun getApiVersion(): Long = CAPABILITY_PROVIDER_API_VERSION
+
+        override fun requestLegacyPreprocessorCapability(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            nonce: ByteArray?,
+            callback: IEchidnaCapabilityCallback?,
+        ) {
+            if (callback == null) return
+            val callingUid = Binder.getCallingUid()
+            val callingPid = Binder.getCallingPid()
+            val packageName = authorizeCapabilityCaller(callingUid, callingPid, processName)
+            if (packageName == null) {
+                notifyCapability(
+                    callback,
+                    LegacyCapabilityResult(
+                        LegacyCapabilityStatus.DENIED,
+                        generation,
+                        diagnostic = LegacyCapabilityDiagnostic.CALLER_UNAUTHORIZED,
+                    ),
+                )
+                return
+            }
+            capabilityIssuer.request(
+                LegacyCapabilityRequest(
+                    uid = callingUid,
+                    packageName = packageName,
+                    processName = processName!!,
+                    audioSessionId = audioSessionId,
+                    generation = generation,
+                    nonce = nonce?.clone() ?: ByteArray(0),
+                ),
+                object : LegacyCapabilityResultSink {
+                    override fun isAlive(): Boolean = callback.asBinder().isBinderAlive
+
+                    override fun complete(result: LegacyCapabilityResult) {
+                        notifyCapability(callback, result)
+                    }
+                },
+            )
+        }
     }
 
     private fun authorizeCaller(processName: String?): String? {
         val uid = Binder.getCallingUid()
         val packages = packageManager.getPackagesForUid(uid)?.asList().orEmpty()
         return CallerPolicyAuthorizer.authorize(packages, processName)
+    }
+
+    private fun authorizeCapabilityCaller(
+        callingUid: Int,
+        callingPid: Int,
+        processName: String?,
+    ): String? {
+        val packages = packageManager.getPackagesForUid(callingUid)?.asList().orEmpty()
+        val running = getSystemService(ActivityManager::class.java)
+            ?.runningAppProcesses
+            .orEmpty()
+            .map { process ->
+                CallerPolicyAuthorizer.RunningProcess(
+                    pid = process.pid,
+                    uid = process.uid,
+                    processName = process.processName,
+                    packageNames = process.pkgList?.toSet().orEmpty(),
+                )
+            }
+        return CallerPolicyAuthorizer.authorizeCapability(
+            callingUid,
+            callingPid,
+            packages,
+            running,
+            processName,
+        )
+    }
+
+    private fun notifyCapability(
+        callback: IEchidnaCapabilityCallback,
+        result: LegacyCapabilityResult,
+    ) {
+        try {
+            callback.onCapabilityResult(
+                result.status,
+                result.generation,
+                result.envelope,
+                result.diagnostic,
+            )
+        } catch (_: RemoteException) {
+            // The request is one-shot; a dead client has no state to unregister.
+        } catch (exception: RuntimeException) {
+            Log.w(POLICY_PROVIDER_TAG, LegacyCapabilityDiagnostic.CALLBACK_FAILED, exception)
+        }
     }
 
     private fun loadPersistedPolicy() {

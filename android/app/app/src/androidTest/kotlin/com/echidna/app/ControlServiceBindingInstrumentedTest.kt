@@ -72,6 +72,20 @@ class ControlServiceBindingInstrumentedTest {
     }
 
     @Test
+    fun legacyPreprocessorGatePersistsOutsidePolicyUpdates() {
+        val service = bind()
+        assertTrue(service.setLegacyPreprocessorEnabled(true))
+        assertTrue(service.isLegacyPreprocessorEnabled)
+
+        service.setMasterEnabled(false)
+        service.setMasterEnabled(true)
+        assertTrue("full control mutations must not erase the separate gate", service.isLegacyPreprocessorEnabled)
+
+        assertTrue(service.setLegacyPreprocessorEnabled(false))
+        assertFalse(service.isLegacyPreprocessorEnabled)
+    }
+
+    @Test
     fun panicPreservesBaseControlsAndSetsExpiry() {
         val service = bind()
         service.setMasterEnabled(true)

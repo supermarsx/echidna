@@ -43,4 +43,7 @@ interface IEchidnaControlService {
     int getStatus();
     int processBlock(in float[] input, inout float[] output, int frames, int sampleRate, int channelCount);
     long getApiVersion();
+    // Companion-owned fail-closed gate. Stored separately from strict v2 policy JSON.
+    boolean isLegacyPreprocessorEnabled();
+    boolean setLegacyPreprocessorEnabled(boolean enabled);
 }

@@ -281,4 +281,6 @@ private class RecordingControlService(
         channelCount: Int,
     ): Int = 0
     override fun getApiVersion(): Long = 0L
+    override fun isLegacyPreprocessorEnabled(): Boolean = false
+    override fun setLegacyPreprocessorEnabled(enabled: Boolean): Boolean = true
 }

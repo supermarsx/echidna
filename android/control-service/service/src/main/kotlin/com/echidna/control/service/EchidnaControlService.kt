@@ -2,6 +2,7 @@ package com.echidna.control.service
 
 import android.app.Service
 import android.content.Intent
+import android.os.Binder
 import android.os.IBinder
 import android.os.RemoteCallbackList
 import android.os.RemoteException
@@ -68,6 +69,7 @@ class EchidnaControlService : Service() {
     private lateinit var telemetryExporter: TelemetryExporter
     private lateinit var audioStackProbe: AudioStackProbe
     private lateinit var cpuArchProbe: CpuArchProbe
+    private lateinit var legacyPreprocessorFlagStore: LegacyPreprocessorFlagStore
     private val telemetryCallbacks = object : RemoteCallbackList<IEchidnaTelemetryListener>() {
         override fun onCallbackDied(callback: IEchidnaTelemetryListener?) {
             telemetryListenerCount = (telemetryListenerCount - 1).coerceAtLeast(0)
@@ -90,6 +92,7 @@ class EchidnaControlService : Service() {
         telemetryExporter = TelemetryExporter(filesDir, authenticatedTelemetryStore)
         audioStackProbe = AudioStackProbe(this)
         cpuArchProbe = CpuArchProbe()
+        legacyPreprocessorFlagStore = LegacyPreprocessorFlagStore(applicationContext)
         executor.execute {
             // Runtime policy belongs to the Magisk module's reviewed sepolicy.rule. The app must
             // never widen zygote policy live merely because a policy tool happens to be present.
@@ -323,6 +326,20 @@ class EchidnaControlService : Service() {
 
         override fun getApiVersion(): Long = safeBinder("get API version", API_VERSION_UNAVAILABLE) {
             EchidnaNative.getApiVersion()
+        }
+
+        override fun isLegacyPreprocessorEnabled(): Boolean {
+            if (Binder.getCallingUid() != applicationInfo.uid) return false
+            return safeBinder("read legacy preprocessor gate", false) {
+                legacyPreprocessorFlagStore.isEnabled()
+            }
+        }
+
+        override fun setLegacyPreprocessorEnabled(enabled: Boolean): Boolean {
+            if (Binder.getCallingUid() != applicationInfo.uid) return false
+            return safeBinder("persist legacy preprocessor gate", false) {
+                legacyPreprocessorFlagStore.setEnabled(enabled)
+            }
         }
     }
 

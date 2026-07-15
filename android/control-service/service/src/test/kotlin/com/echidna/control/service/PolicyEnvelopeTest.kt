@@ -30,6 +30,9 @@ class PolicyEnvelopeTest {
         val unknownControl = validRequest()
         unknownControl.getJSONObject("control").put("future", true)
         assertNull(PolicyEnvelopeCodec.parseRequest(unknownControl.toString()))
+
+        val legacyFlagMustRemainSeparate = validRequest().put("legacyPreprocessorEnabled", true)
+        assertNull(PolicyEnvelopeCodec.parseRequest(legacyFlagMustRemainSeparate.toString()))
     }
 
     @Test

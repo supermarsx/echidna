@@ -90,6 +90,64 @@ class PolicyScopeTest {
                 "com.example.recorder/../../other",
             ),
         )
+
+        val running = listOf(
+            CallerPolicyAuthorizer.RunningProcess(
+                pid = 42,
+                uid = 10_000,
+                processName = "com.example.recorder:remote",
+                packageNames = setOf("com.example.recorder"),
+            ),
+        )
+        assertEquals(
+            "com.example.recorder",
+            CallerPolicyAuthorizer.authorizeCapability(
+                10_000,
+                42,
+                listOf("com.example.recorder"),
+                running,
+                "com.example.recorder:remote",
+            ),
+        )
+        assertNull(
+            CallerPolicyAuthorizer.authorizeCapability(
+                10_000,
+                43,
+                listOf("com.example.recorder"),
+                running,
+                "com.example.recorder:remote",
+            ),
+        )
+    }
+
+    @Test
+    fun `capability policy is current scoped and control gated`() {
+        assertTrue(PublishedPolicyRegistry.publish(envelope(11L).toString()))
+        val current = PublishedPolicyRegistry.capabilityForProcess(
+            "com.example.recorder",
+            "com.example.recorder",
+            nowEpochMs = 1_000L,
+        )
+        assertEquals(11L, current!!.generation)
+        assertTrue(String(current.preset).contains("recorder"))
+        assertNull(
+            PublishedPolicyRegistry.capabilityForProcess(
+                "com.example.recorder",
+                "com.example.recorder:remote",
+                1_000L,
+            ),
+        )
+
+        val bypassed = envelope(12L)
+        bypassed.getJSONObject("control").put("bypass", true)
+        assertTrue(PublishedPolicyRegistry.publish(bypassed.toString()))
+        assertNull(
+            PublishedPolicyRegistry.capabilityForProcess(
+                "com.example.recorder",
+                "com.example.recorder",
+                1_000L,
+            ),
+        )
     }
 
     @Test
