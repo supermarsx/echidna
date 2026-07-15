@@ -1,7 +1,6 @@
 package com.echidna.control.service
 
 import java.io.Closeable
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicReference
 
@@ -34,6 +33,8 @@ internal object PublishedPolicyRegistry {
 
     fun generation(): Long = state.get()?.published?.generation ?: 0L
 
+    fun current(): VersionedPolicyEnvelope? = state.get()?.published
+
     fun scopedForPackages(packageNames: Set<String>): String? = state.get()?.let { current ->
         PolicyEnvelopeCodec.encodeScopedForPackages(current.published, packageNames)
     }
@@ -46,29 +47,6 @@ internal object PublishedPolicyRegistry {
                 processName,
             )
         }
-
-    /** Resolves only service-owned current state; capability callers cannot provide preset bytes. */
-    fun capabilityForProcess(
-        packageName: String,
-        processName: String,
-        nowEpochMs: Long,
-    ): LegacyCapabilityPolicy? = state.get()?.published?.let { published ->
-        if (processName.substringBefore(':') != packageName) return@let null
-        val envelope = published.envelope
-        val allowed = envelope.whitelist[processName] ?: envelope.whitelist[packageName] ?: false
-        val owner = envelope.captureOwners[processName] ?: envelope.captureOwners[packageName]
-        val control = envelope.control
-        if (
-            !allowed || owner != "lsposed" || !control.masterEnabled || control.bypass ||
-            (control.panicUntilEpochMs > 0L && control.panicUntilEpochMs > nowEpochMs)
-        ) {
-            return@let null
-        }
-        val profileId = envelope.appBindings[packageName] ?: envelope.defaultProfileId
-        val preset = envelope.profiles[profileId]?.toString()?.toByteArray(StandardCharsets.UTF_8)
-            ?: return@let null
-        LegacyCapabilityPolicy(published.generation, processName, preset)
-    }
 
     fun observe(observer: (Long) -> Unit): Closeable {
         observers.add(observer)

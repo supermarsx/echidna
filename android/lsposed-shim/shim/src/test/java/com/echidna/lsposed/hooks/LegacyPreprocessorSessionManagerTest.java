@@ -432,6 +432,158 @@ public final class LegacyPreprocessorSessionManagerTest {
     }
 
     @Test
+    public void captureOwnerDrainAcknowledgesOnlyAfterEverySessionIsReleased() {
+        Harness harness = new Harness();
+        Object secondRecord = new Object();
+
+        harness.start(71);
+        harness.manager.onInitialized(secondRecord, 72, true);
+        harness.manager.onStart(secondRecord, 72);
+        harness.scheduler.runReady();
+        assertEquals(2, harness.capabilities.requests.size());
+
+        harness.replySuccess(0);
+        harness.replySuccess(1);
+        harness.scheduler.runReady();
+        FakeEffect firstEffect = harness.factory.created.get(0);
+        FakeEffect secondEffect = harness.factory.created.get(1);
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.manager.ownsRoute(secondRecord));
+
+        List<Long> acknowledged = new ArrayList<>();
+        List<Long> acknowledgedTokens = new ArrayList<>();
+        harness.manager.requestDrain(21L, 101L, (generation, handoffToken) -> {
+            assertFalse(harness.manager.ownsRoute(harness.record));
+            assertFalse(harness.manager.ownsRoute(secondRecord));
+            assertEquals(1, firstEffect.revokeCount);
+            assertEquals(1, firstEffect.disableCount);
+            assertEquals(1, firstEffect.releaseCount);
+            assertEquals(1, secondEffect.revokeCount);
+            assertEquals(1, secondEffect.disableCount);
+            assertEquals(1, secondEffect.releaseCount);
+            acknowledged.add(generation);
+            acknowledgedTokens.add(handoffToken);
+        });
+
+        assertTrue(acknowledged.isEmpty());
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.manager.ownsRoute(secondRecord));
+        harness.scheduler.runReady();
+
+        assertEquals(Arrays.asList(21L), acknowledged);
+        assertEquals(Arrays.asList(101L), acknowledgedTokens);
+        harness.scheduler.advance(250L);
+        assertEquals(2, harness.capabilities.requests.size());
+    }
+
+    @Test
+    public void captureOwnerDrainSchedulerRejectionQuarantinesWithoutAcknowledging() {
+        Harness harness = new Harness();
+        harness.start(73);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+        List<Long> acknowledged = new ArrayList<>();
+
+        harness.scheduler.rejectExecute = true;
+        harness.manager.requestDrain(22L, 102L, (generation, token) ->
+                acknowledged.add(generation));
+
+        assertTrue(acknowledged.isEmpty());
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.leases.isQuarantined(harness.record));
+        assertEquals(0, effect.releaseCount);
+        assertTrue(harness.diagnostics.codes.contains("executor_saturated_drain"));
+    }
+
+    @Test
+    public void captureOwnerDrainFailedTeardownQuarantinesWithoutAcknowledging() {
+        Harness harness = new Harness();
+        harness.start(74);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+        effect.revokeStatus = -5;
+        effect.disableStatus = -6;
+        effect.releaseError = new Exception("release failed");
+        List<Long> acknowledged = new ArrayList<>();
+
+        harness.manager.requestDrain(23L, 103L, (generation, token) ->
+                acknowledged.add(generation));
+        harness.scheduler.runReady();
+
+        assertTrue(acknowledged.isEmpty());
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.leases.isQuarantined(harness.record));
+        assertEquals(1, effect.revokeCount);
+        assertEquals(1, effect.disableCount);
+        assertEquals(1, effect.releaseCount);
+        assertTrue(harness.diagnostics.codes.contains("effect_revoke_-5"));
+        assertTrue(harness.diagnostics.codes.contains("effect_disable_-6"));
+        assertTrue(harness.diagnostics.codes.contains("effect_release_failed"));
+        assertTrue(harness.diagnostics.codes.contains("route_quarantined"));
+    }
+
+    @Test
+    public void rapidCaptureOwnerRevokesKeepNewestTokenBoundRequest() {
+        Harness harness = new Harness();
+        List<Long> acknowledged = new ArrayList<>();
+        List<Long> acknowledgedTokens = new ArrayList<>();
+
+        LegacyPreprocessorSessionManager.DrainCallback callback = (generation, handoffToken) -> {
+            acknowledged.add(generation);
+            acknowledgedTokens.add(handoffToken);
+        };
+        harness.manager.requestDrain(30L, 110L, callback);
+        harness.manager.requestDrain(32L, 111L, callback);
+        harness.manager.requestDrain(31L, 112L, callback);
+        assertTrue(acknowledged.isEmpty());
+        assertEquals(1, harness.scheduler.ready.size());
+
+        harness.scheduler.runReady();
+        assertEquals(Arrays.asList(31L), acknowledged);
+        assertEquals(Arrays.asList(112L), acknowledgedTokens);
+
+        harness.manager.requestDrain(33L, 113L, callback);
+        harness.manager.requestDrain(35L, 114L, callback);
+        harness.manager.requestDrain(34L, 115L, callback);
+        harness.scheduler.runReady();
+        assertEquals(Arrays.asList(31L, 34L), acknowledged);
+        assertEquals(Arrays.asList(112L, 115L), acknowledgedTokens);
+    }
+
+    @Test
+    public void disconnectDrainCannotOverwriteTokenBoundAcknowledgement() {
+        Harness harness = new Harness();
+        List<Long> generations = new ArrayList<>();
+        List<Long> tokens = new ArrayList<>();
+
+        harness.manager.requestDrain(40L, 120L, (generation, handoffToken) -> {
+            generations.add(generation);
+            tokens.add(handoffToken);
+        });
+        harness.manager.requestDrain(40L, 0L, null);
+        harness.manager.requestDrain(41L, 0L, null);
+        harness.scheduler.runReady();
+
+        assertEquals(Arrays.asList(40L), generations);
+        assertEquals(Arrays.asList(120L), tokens);
+    }
+
+    @Test
+    public void newBindingCallbackReplacesQueuedSameGenerationIncarnation() {
+        Harness harness = new Harness();
+        List<Long> tokens = new ArrayList<>();
+
+        harness.manager.requestDrain(42L, 900L, (generation, token) -> tokens.add(token));
+        // A restarted service owns a new Binder epoch and may restart its local transition token.
+        harness.manager.requestDrain(42L, 1L, (generation, token) -> tokens.add(token));
+        harness.scheduler.runReady();
+
+        assertEquals(Arrays.asList(1L), tokens);
+    }
+
+    @Test
     public void rejectedRenewalCallbackKeepsLeaseUntilSerialTeardown() {
         Harness harness = new Harness();
         harness.start(54);

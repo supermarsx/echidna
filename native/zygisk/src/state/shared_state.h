@@ -32,6 +32,24 @@ namespace echidna
         class SharedState
         {
         public:
+            class AudioProcessingPermit
+            {
+            public:
+                AudioProcessingPermit() = default;
+                ~AudioProcessingPermit();
+                AudioProcessingPermit(const AudioProcessingPermit &) = delete;
+                AudioProcessingPermit &operator=(const AudioProcessingPermit &) = delete;
+                AudioProcessingPermit(AudioProcessingPermit &&other) noexcept;
+                AudioProcessingPermit &operator=(AudioProcessingPermit &&other) noexcept;
+
+                explicit operator bool() const { return owner_ != nullptr; }
+
+            private:
+                friend class SharedState;
+                explicit AudioProcessingPermit(SharedState *owner) : owner_(owner) {}
+                SharedState *owner_{nullptr};
+            };
+
             /**
              * @brief Singleton accessor for process-local shared state.
              */
@@ -69,6 +87,8 @@ namespace echidna
              * @brief Returns the cached hooks-enabled + whitelist decision without locking.
              */
             bool audioProcessingAllowed() const;
+            /** Acquires a drain-tracked permit for direct DSP entrypoints. */
+            AudioProcessingPermit acquireAudioProcessing();
             /**
              * @brief Returns whether hooks are globally enabled.
              */
@@ -109,12 +129,15 @@ namespace echidna
             std::string profile_;
             std::string current_process_;
             std::atomic<bool> hooks_enabled_{false};
-            std::atomic<bool> audio_processing_allowed_{false};
+            std::atomic<uint32_t> audio_processing_usage_{0};
             std::atomic<bool> bypass_enabled_;
             std::atomic<uint64_t> bypass_until_ns_;
             utils::ConfigSharedMemory shared_memory_;
             utils::ConfigurationSnapshot cached_snapshot_;
             utils::TelemetryAccumulator telemetry_accumulator_;
+
+            void setAudioProcessingAllowed(bool allowed);
+            void releaseAudioProcessing();
         };
 
     } // namespace state

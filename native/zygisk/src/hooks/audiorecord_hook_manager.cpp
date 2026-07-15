@@ -39,16 +39,16 @@ namespace echidna::hooks
                                             std::getenv("ECHIDNA_AR_FORMAT"));
         }
 
-        bool ProcessingAllowed()
-        {
-            return state::SharedState::instance().audioProcessingAllowed();
-        }
-
         ssize_t ForwardRead(void *instance, void *buffer, size_t bytes, bool blocking)
         {
             const ssize_t result =
                 gOriginalRead ? gOriginalRead(instance, buffer, bytes, blocking) : -1;
-            if (result <= 0 || !buffer || !gPcmContract || !ProcessingAllowed())
+            if (result <= 0 || !buffer || !gPcmContract)
+            {
+                return result;
+            }
+            auto processing = state::SharedState::instance().acquireAudioProcessing();
+            if (!processing)
             {
                 return result;
             }

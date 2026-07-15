@@ -1,7 +1,6 @@
 package com.echidna.lsposed.hooks;
 
 import android.media.AudioRecord;
-import android.os.Build;
 import android.os.SystemClock;
 
 import com.echidna.lsposed.core.AudioFormatUtils;
@@ -26,6 +25,24 @@ public final class AudioRecordHook {
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
     private static final AtomicBoolean HOOK_FAILURE_LOGGED = new AtomicBoolean(false);
     private static volatile LegacyPreprocessorSessionManager sessionManager;
+    private static final java.util.concurrent.atomic.AtomicReference<PendingDrain> PENDING_DRAIN =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
+    public interface CaptureDrainCallback {
+        void onDrained(long generation, long handoffToken);
+    }
+
+    private static final class PendingDrain {
+        final long generation;
+        final long handoffToken;
+        final CaptureDrainCallback callback;
+
+        PendingDrain(long generation, long handoffToken, CaptureDrainCallback callback) {
+            this.generation = generation;
+            this.handoffToken = handoffToken;
+            this.callback = callback;
+        }
+    }
 
     private AudioRecordHook() {
     }
@@ -38,6 +55,13 @@ public final class AudioRecordHook {
             Class<?> audioRecordClass = XposedHelpers.findClass("android.media.AudioRecord", classLoader);
             LegacyPreprocessorSessionManager manager = createSessionManager(moduleState);
             sessionManager = manager;
+            PendingDrain pending = PENDING_DRAIN.getAndSet(null);
+            if (pending != null) {
+                manager.requestDrain(
+                        pending.generation,
+                        pending.handoffToken,
+                        pending.callback != null ? pending.callback::onDrained : null);
+            }
             hookLifecycle(audioRecordClass, manager);
             hookByteArray(audioRecordClass, moduleState);
             hookByteArrayWithMode(audioRecordClass, moduleState);
@@ -52,6 +76,47 @@ public final class AudioRecordHook {
             INSTALLED.set(false);
             XposedBridge.log(TAG + ": unable to install AudioRecord hooks: " + throwable);
         }
+    }
+
+    public static void requestCaptureRouteDrain(
+            long generation, long handoffToken, CaptureDrainCallback callback) {
+        if (generation <= 0L || (callback != null && handoffToken <= 0L)) {
+            return;
+        }
+        LegacyPreprocessorSessionManager manager = sessionManager;
+        if (manager != null) {
+            manager.requestDrain(
+                    generation,
+                    handoffToken,
+                    callback != null ? callback::onDrained : null);
+            return;
+        }
+        PENDING_DRAIN.accumulateAndGet(
+                new PendingDrain(generation, handoffToken, callback),
+                AudioRecordHook::mergePendingDrain);
+        manager = sessionManager;
+        if (manager != null) {
+            PendingDrain pending = PENDING_DRAIN.getAndSet(null);
+            if (pending != null) {
+                manager.requestDrain(
+                        pending.generation,
+                        pending.handoffToken,
+                        pending.callback != null ? pending.callback::onDrained : null);
+            }
+        }
+    }
+
+    private static PendingDrain mergePendingDrain(PendingDrain current, PendingDrain incoming) {
+        if (current == null) {
+            return incoming;
+        }
+        if (incoming.callback == null && current.callback != null) {
+            return current;
+        }
+        if (incoming.callback != null) {
+            return incoming;
+        }
+        return incoming.generation >= current.generation ? incoming : current;
     }
 
     private static LegacyPreprocessorSessionManager createSessionManager(ModuleState state) {
@@ -246,9 +311,6 @@ public final class AudioRecordHook {
     }
 
     private static void hookFloatArray(Class<?> audioRecordClass, ModuleState state) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return;
-        }
         try {
             XposedHelpers.findAndHookMethod(
                     audioRecordClass,
@@ -278,20 +340,18 @@ public final class AudioRecordHook {
         } catch (Throwable throwable) {
             XposedBridge.log(TAG + ": ByteBuffer read(size) hook failed: " + throwable);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                XposedHelpers.findAndHookMethod(
-                        audioRecordClass,
-                        "read",
-                        ByteBuffer.class,
-                        int.class,
-                        int.class,
-                        new ByteBufferReadHook(state));
-            } catch (NoSuchMethodError ignored) {
-                // Optional overload introduced on newer APIs.
-            } catch (Throwable throwable) {
-                XposedBridge.log(TAG + ": ByteBuffer read(size,mode) hook failed: " + throwable);
-            }
+        try {
+            XposedHelpers.findAndHookMethod(
+                    audioRecordClass,
+                    "read",
+                    ByteBuffer.class,
+                    int.class,
+                    int.class,
+                    new ByteBufferReadHook(state));
+        } catch (NoSuchMethodError ignored) {
+            // Optional overload introduced on newer APIs.
+        } catch (Throwable throwable) {
+            XposedBridge.log(TAG + ": ByteBuffer read(size,mode) hook failed: " + throwable);
         }
     }
 

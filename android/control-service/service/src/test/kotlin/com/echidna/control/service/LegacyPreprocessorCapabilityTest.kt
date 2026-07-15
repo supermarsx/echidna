@@ -123,6 +123,32 @@ class LegacyPreprocessorCapabilityTest {
     }
 
     @Test
+    fun `request pinned policy source is revalidated after signing`() {
+        val endpointPolicy = AtomicReference(policy(8L))
+        val signer = RecordingSigner { endpointPolicy.set(null) }
+        val executor = BoundedCapabilityExecutor()
+        try {
+            val issuer = LegacyCapabilityIssuer(
+                enabled = { true },
+                policySource = { _, _ -> null },
+                signer = signer,
+                executor = executor,
+                boottimeMs = { 1_000L },
+            )
+            val result = awaitResult(
+                issuer,
+                request(8L),
+                requestPolicySource = { _, _ -> endpointPolicy.get() },
+            )
+
+            assertEquals(LegacyCapabilityStatus.STALE, result.status)
+            assertEquals(LegacyCapabilityDiagnostic.STALE_GENERATION, result.diagnostic)
+        } finally {
+            executor.close()
+        }
+    }
+
+    @Test
     fun `issuer suppresses revoked dead and shutdown work`() {
         val enabled = AtomicBoolean(true)
         val revokeSigner = RecordingSigner { enabled.set(false) }
@@ -270,8 +296,11 @@ class LegacyPreprocessorCapabilityTest {
     }
 
     @Test
-    fun `provider capability API includes append-only telemetry proof version five`() {
-        assertEquals(5L, CAPABILITY_PROVIDER_API_VERSION)
+    fun `provider capability API includes capture handoff acknowledgement version six`() {
+        assertEquals(6L, CAPABILITY_PROVIDER_API_VERSION)
+        assertFalse(isCaptureOwnerClientApiSupported(5L))
+        assertTrue(isCaptureOwnerClientApiSupported(6L))
+        assertFalse(isCaptureOwnerClientApiSupported(7L))
         assertEquals(-1, LegacyCapabilityStatus.DENIED)
         assertEquals(-116, LegacyCapabilityStatus.STALE)
         assertEquals(-126, LegacyCapabilityStatus.KEY_UNAVAILABLE)
@@ -289,6 +318,21 @@ class LegacyPreprocessorCapabilityTest {
             result.set(it)
             latch.countDown()
         }
+        assertTrue("capability callback timed out", latch.await(3, TimeUnit.SECONDS))
+        return result.get()
+    }
+
+    private fun awaitResult(
+        issuer: LegacyCapabilityIssuer,
+        request: LegacyCapabilityRequest,
+        requestPolicySource: (String, String) -> LegacyCapabilityPolicy?,
+    ): LegacyCapabilityResult {
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<LegacyCapabilityResult>()
+        issuer.request(request, {
+            result.set(it)
+            latch.countDown()
+        }, requestPolicySource)
         assertTrue("capability callback timed out", latch.await(3, TimeUnit.SECONDS))
         return result.get()
     }

@@ -114,6 +114,22 @@ final class LegacyPreprocessorSessionManager {
         void shutdown();
     }
 
+    interface DrainCallback {
+        void onDrained(long generation, long handoffToken);
+    }
+
+    private static final class DrainRequest {
+        final long generation;
+        final long handoffToken;
+        final DrainCallback callback;
+
+        DrainRequest(long generation, long handoffToken, DrainCallback callback) {
+            this.generation = generation;
+            this.handoffToken = handoffToken;
+            this.callback = callback;
+        }
+    }
+
     static final class RouteLeases {
         private final AtomicReferenceArray<Lease> entries =
                 new AtomicReferenceArray<>(MAX_SESSIONS);
@@ -159,6 +175,20 @@ final class LegacyPreprocessorSessionManager {
                 }
             }
             return false;
+        }
+
+        void quarantineAll() {
+            for (int i = 0; i < entries.length(); i++) {
+                Lease lease = entries.get(i);
+                if (lease != null) lease.quarantined = true;
+            }
+        }
+
+        boolean isEmpty() {
+            for (int i = 0; i < entries.length(); i++) {
+                if (entries.get(i) != null) return false;
+            }
+            return true;
         }
 
         void release(Object record) {
@@ -245,6 +275,10 @@ final class LegacyPreprocessorSessionManager {
     private final java.util.concurrent.ConcurrentHashMap<Object, DesiredState> desired =
             new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean closed;
+    private final java.util.concurrent.atomic.AtomicReference<DrainRequest> pendingDrain =
+            new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicBoolean drainScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     LegacyPreprocessorSessionManager(
             PolicyAccess policyAccess,
@@ -303,6 +337,24 @@ final class LegacyPreprocessorSessionManager {
         return record != null && leases.contains(record);
     }
 
+    void requestDrain(long generation, long handoffToken, DrainCallback callback) {
+        if (closed || generation <= 0L || (callback != null && handoffToken <= 0L)) {
+            return;
+        }
+        DrainRequest incoming = new DrainRequest(generation, handoffToken, callback);
+        pendingDrain.accumulateAndGet(incoming, LegacyPreprocessorSessionManager::mergeDrainRequest);
+        desired.replaceAll((record, state) ->
+                state == DesiredState.RELEASED ? state : DesiredState.STOPPED);
+        if (!drainScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        if (!scheduler.execute(this::drainPending)) {
+            drainScheduled.set(false);
+            leases.quarantineAll();
+            diagnostics.report("executor_saturated_drain", null);
+        }
+    }
+
     void shutdown() {
         if (closed) {
             return;
@@ -324,6 +376,55 @@ final class LegacyPreprocessorSessionManager {
             diagnostics.report("executor_saturated_shutdown", null);
         }
         scheduler.shutdown();
+    }
+
+    private void drainPending() {
+        while (true) {
+            DrainRequest request = pendingDrain.getAndSet(null);
+            if (request == null) {
+                drainScheduled.set(false);
+                if (pendingDrain.get() == null || !drainScheduled.compareAndSet(false, true)) {
+                    return;
+                }
+                continue;
+            }
+            boolean confirmed = true;
+            for (Session session : sessions.values()) {
+                if (!teardownAndRelease(session)) {
+                    confirmed = false;
+                }
+            }
+            if (confirmed && leases.isEmpty() && request.callback != null) {
+                request.callback.onDrained(request.generation, request.handoffToken);
+            }
+            if (pendingDrain.get() == null) {
+                drainScheduled.set(false);
+                if (
+                        pendingDrain.get() == null ||
+                        !drainScheduled.compareAndSet(false, true)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private static DrainRequest mergeDrainRequest(DrainRequest current, DrainRequest incoming) {
+        if (current == null) {
+            return incoming;
+        }
+        // A provider disconnect requests fail-closed teardown without an acknowledgement. It must
+        // never erase the token-bound callback that proves an already requested coordinator drain.
+        if (incoming.callback == null && current.callback != null) {
+            return current;
+        }
+        // ProfileSyncReceiver rejects callbacks from obsolete Binder epochs before they reach this
+        // manager, so the newest live callback is authoritative even after a service restart resets
+        // its process-local transition counter. A live callback also upgrades a queued disconnect.
+        if (incoming.callback != null) {
+            return incoming;
+        }
+        // Coalesce disconnect-only drains by generation. Their token is deliberately not reported.
+        return incoming.generation >= current.generation ? incoming : current;
     }
 
     private boolean observeSession(Object record, int sessionId) {

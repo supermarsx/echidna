@@ -275,6 +275,43 @@ namespace
               "same generation with different bytes must reject without hashes");
     }
 
+    void TestCapturePolicyTransportWrapper()
+    {
+        const std::string policy = Envelope();
+        const std::string wrapped =
+            R"({"schemaVersion":1,"type":"capture_policy","handoffToken":91,"policy":)" +
+            policy + "}";
+        echidna::runtime::DecodedCapturePolicyFrame frame;
+        std::string error;
+        CHECK(echidna::runtime::DecodeCapturePolicyFrameV1(wrapped, &frame, &error), error);
+        CHECK(frame.handoff_token == 91, "transport token must decode exactly");
+        CHECK(frame.policy_payload == policy,
+              "nested policy bytes must remain exact for generation conflict checks");
+
+        const auto rejected = [&](std::string_view payload)
+        {
+            echidna::runtime::DecodedCapturePolicyFrame rejected_frame;
+            std::string rejected_error;
+            return !echidna::runtime::DecodeCapturePolicyFrameV1(
+                payload, &rejected_frame, &rejected_error);
+        };
+        CHECK(rejected(
+                  R"({"schemaVersion":1,"type":"capture_policy","handoffToken":0,"policy":{}})"),
+              "zero transition tokens must reject");
+        CHECK(rejected(
+                  R"({"schemaVersion":1,"type":"capture_policy","handoffToken":1.5,"policy":{}})"),
+              "fractional transition tokens must reject");
+        CHECK(rejected(
+                  R"({"schemaVersion":1,"type":"capture_policy","handoffToken":1,"policy":"{}"})"),
+              "policy must be a nested object, not a quoted document");
+        CHECK(rejected(
+                  R"({"schemaVersion":1,"type":"capture_policy","handoffToken":1,"policy":{},"extra":true})"),
+              "unknown wrapper fields must reject");
+        CHECK(rejected(
+                  R"({"schemaVersion":1,"type":"capture_policy","handoffToken":1,"handoffToken":2,"policy":{}})"),
+              "duplicate wrapper fields must reject");
+    }
+
     void TestSigned64BitIntegerBounds()
     {
         echidna::runtime::DecodedProfileSnapshot snapshot;
@@ -320,6 +357,7 @@ int main()
     TestReferenceAndTypeRejection();
     TestSizeAndCountBounds();
     TestGenerationDecisions();
+    TestCapturePolicyTransportWrapper();
     TestSigned64BitIntegerBounds();
 
     if (g_failures != 0)

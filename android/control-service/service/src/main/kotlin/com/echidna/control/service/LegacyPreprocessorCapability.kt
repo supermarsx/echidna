@@ -359,7 +359,16 @@ internal class LegacyCapabilityIssuer(
         if (!closed.get()) executor.execute { runCatching(signer::preparePublicKey) }
     }
 
-    fun request(request: LegacyCapabilityRequest, sink: LegacyCapabilityResultSink) {
+    fun request(
+        request: LegacyCapabilityRequest,
+        sink: LegacyCapabilityResultSink,
+    ) = request(request, sink, policySource)
+
+    fun request(
+        request: LegacyCapabilityRequest,
+        sink: LegacyCapabilityResultSink,
+        requestPolicySource: (String, String) -> LegacyCapabilityPolicy?,
+    ) {
         if (!sink.isAlive()) return
         if (closed.get()) {
             sink.complete(
@@ -402,7 +411,7 @@ internal class LegacyCapabilityIssuer(
             )
             return
         }
-        if (!executor.execute { sign(request, sink) }) {
+        if (!executor.execute { sign(request, sink, requestPolicySource) }) {
             limiter.release(request.uid, request.audioSessionId)
             sink.complete(
                 result(
@@ -414,13 +423,17 @@ internal class LegacyCapabilityIssuer(
         }
     }
 
-    private fun sign(request: LegacyCapabilityRequest, sink: LegacyCapabilityResultSink) {
+    private fun sign(
+        request: LegacyCapabilityRequest,
+        sink: LegacyCapabilityResultSink,
+        requestPolicySource: (String, String) -> LegacyCapabilityPolicy?,
+    ) {
         if (closed.get() || !sink.isAlive()) {
             limiter.release(request.uid, request.audioSessionId)
             return
         }
         val completed = try {
-            issue(request)
+            issue(request, requestPolicySource)
         } catch (_: java.security.KeyStoreException) {
             result(
                 request,
@@ -457,7 +470,10 @@ internal class LegacyCapabilityIssuer(
         if (!closed.get() && sink.isAlive()) sink.complete(completed)
     }
 
-    private fun issue(request: LegacyCapabilityRequest): LegacyCapabilityResult {
+    private fun issue(
+        request: LegacyCapabilityRequest,
+        requestPolicySource: (String, String) -> LegacyCapabilityPolicy?,
+    ): LegacyCapabilityResult {
         if (!enabled()) {
             return result(
                 request,
@@ -465,7 +481,7 @@ internal class LegacyCapabilityIssuer(
                 LegacyCapabilityDiagnostic.FEATURE_DISABLED,
             )
         }
-        val before = policySource(request.packageName, request.processName)
+        val before = requestPolicySource(request.packageName, request.processName)
             ?: return result(
                 request,
                 LegacyCapabilityStatus.DENIED,
@@ -509,7 +525,7 @@ internal class LegacyCapabilityIssuer(
                 LegacyCapabilityDiagnostic.FEATURE_DISABLED,
             )
         }
-        val after = policySource(request.packageName, request.processName)
+        val after = requestPolicySource(request.packageName, request.processName)
         if (
             after == null || after.generation != request.generation ||
             after.processName != request.processName || !after.preset.contentEquals(before.preset)

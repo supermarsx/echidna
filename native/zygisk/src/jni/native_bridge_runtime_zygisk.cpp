@@ -42,6 +42,11 @@ namespace echidna::jni
                                          uint32_t sample_rate,
                                          uint32_t channels)
     {
+        auto processing = state::SharedState::instance().acquireAudioProcessing();
+        if (!processing)
+        {
+            return ECHIDNA_RESULT_NOT_AVAILABLE;
+        }
         return echidna_process_block(input, output, frames, sample_rate, channels);
     }
 

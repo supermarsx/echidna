@@ -120,6 +120,23 @@ namespace
         CHECK(!gate.processingActive());
     }
 
+    void TestDisableDuringActivationCannotPublishActiveState()
+    {
+        echidna::runtime::ActivationGate gate;
+        gate.start();
+        gate.updatePolicy(true);
+        CHECK(gate.shouldAttemptInstall());
+
+        // The policy callback drains and disables while installHooks is outside
+        // the activation mutex. A successful late return may retain installed
+        // trampolines, but must never make the revoked route active.
+        gate.updatePolicy(false);
+        gate.markHooksInstalled();
+        CHECK(gate.hooksInstalled());
+        CHECK(!gate.processingActive());
+        CHECK(!gate.shouldAttemptInstall());
+    }
+
     void TestReconnectBackoffIsJitteredAndBounded()
     {
         echidna::runtime::ReconnectBackoff backoff(0x12345678u);
@@ -148,6 +165,7 @@ int main()
     TestFailedInstallRemainsRetryable();
     TestTeardownBlocksLateCallbacks();
     TestInFlightInstallCannotReactivateStoppedGate();
+    TestDisableDuringActivationCannotPublishActiveState();
     TestReconnectBackoffIsJitteredAndBounded();
     if (g_failures != 0)
     {

@@ -70,16 +70,15 @@ namespace echidna::hooks
                    std::strcmp(target, "/dev/audio") == 0;
         }
 
-        bool ProcessingAllowed()
-        {
-            return state::SharedState::instance().audioProcessingAllowed();
-        }
-
         ssize_t ForwardRead(int fd, void *buffer, size_t bytes)
         {
             const ssize_t result = gOriginalRead ? gOriginalRead(fd, buffer, bytes) : -1;
-            if (result <= 0 || !buffer || !gPcmContract || !IsRawAudioDevice(fd) ||
-                !ProcessingAllowed())
+            if (result <= 0 || !buffer || !gPcmContract || !IsRawAudioDevice(fd))
+            {
+                return result;
+            }
+            auto processing = state::SharedState::instance().acquireAudioProcessing();
+            if (!processing)
             {
                 return result;
             }

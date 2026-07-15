@@ -193,7 +193,7 @@ internal object AuthenticatedTelemetryWire {
 }
 
 /** Android's JSONObject accepts non-JSON extensions, so validate RFC 8259 syntax first. */
-private object StrictJsonValidator {
+internal object StrictJsonValidator {
     fun isValid(json: String): Boolean = try {
         Parser(json).validate()
         true

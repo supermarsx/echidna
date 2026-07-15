@@ -54,14 +54,28 @@ namespace
         kReset,
     };
 
+    struct CaptureRouteIdentity
+    {
+        uint64_t generation{0};
+        uint64_t handoff_token{0};
+        uint64_t connection_epoch{0};
+
+        [[nodiscard]] bool valid() const
+        {
+            return generation != 0 && handoff_token != 0 && connection_epoch != 0;
+        }
+    };
+
     std::unique_ptr<echidna::hooks::AudioHookOrchestrator> g_audio_orchestrator;
-    std::unique_ptr<echidna::runtime::ProfileSyncServer> g_profile_server;
+    std::shared_ptr<echidna::runtime::ProfileSyncServer> g_profile_server;
     std::thread g_activation_worker;
     std::mutex g_runtime_mutex;
+    std::mutex g_profile_server_mutex;
     std::mutex g_activation_mutex;
     std::condition_variable g_activation_changed;
     echidna::runtime::ActivationGate g_activation_gate;
     uint64_t g_policy_revision{0};
+    CaptureRouteIdentity g_pending_active_ack;
     std::atomic<int> g_lifecycle_phase{static_cast<int>(LifecyclePhase::kNotLoaded)};
     std::atomic<bool> g_hooks_installed{false};
     std::atomic<bool> g_process_on_denylist{false};
@@ -143,6 +157,33 @@ namespace
                             reason);
     }
 
+    std::shared_ptr<echidna::runtime::ProfileSyncServer> CurrentProfileServer()
+    {
+        std::scoped_lock lock(g_profile_server_mutex);
+        return g_profile_server;
+    }
+
+    bool ReportCaptureRouteState(const CaptureRouteIdentity &identity, bool active)
+    {
+        const auto server = CurrentProfileServer();
+        return identity.valid() && server &&
+               server->reportCaptureRouteState(identity.generation,
+                                               identity.handoff_token,
+                                               identity.connection_epoch,
+                                               active);
+    }
+
+    void RejectCaptureRouteState(const CaptureRouteIdentity &identity)
+    {
+        const auto server = CurrentProfileServer();
+        if (server && identity.valid())
+        {
+            (void)server->rejectCaptureRouteState(identity.generation,
+                                                  identity.handoff_token,
+                                                  identity.connection_epoch);
+        }
+    }
+
     void ActivationWorker()
     {
         auto retry_delay = kInitialHookRetryDelay;
@@ -175,15 +216,24 @@ namespace
                 g_activation_gate.markHooksInstalled();
                 g_hooks_installed.store(true, std::memory_order_release);
                 retry_delay = kInitialHookRetryDelay;
+                CaptureRouteIdentity active_ack;
                 if (g_activation_gate.admitted())
                 {
                     state.setStatus(echidna::state::InternalStatus::kHooked);
                     const std::string process = echidna::utils::CachedProcessName();
                     RecordLifecycle(LifecyclePhase::kAttached, process.c_str());
+                    active_ack = g_pending_active_ack;
+                    g_pending_active_ack = {};
                 }
                 else
                 {
                     state.setStatus(echidna::state::InternalStatus::kDisabled);
+                }
+                if (active_ack.valid())
+                {
+                    lock.unlock();
+                    (void)ReportCaptureRouteState(active_ack, true);
+                    lock.lock();
                 }
                 continue;
             }
@@ -222,6 +272,7 @@ namespace
         }
         g_activation_gate = echidna::runtime::ActivationGate{};
         g_activation_gate.start();
+        g_pending_active_ack = {};
         ++g_policy_revision;
         g_activation_worker = std::thread(ActivationWorker);
     }
@@ -231,6 +282,7 @@ namespace
         {
             std::scoped_lock lock(g_activation_mutex);
             g_activation_gate.stop();
+            g_pending_active_ack = {};
             ++g_policy_revision;
         }
         g_activation_changed.notify_all();
@@ -247,22 +299,27 @@ namespace
     void ResetRuntimeObjects(const char *reason)
     {
         std::scoped_lock runtime_lock(g_runtime_mutex);
+        const auto profile_server = CurrentProfileServer();
         auto &state = echidna::state::SharedState::instance();
-        if (g_profile_server)
+        if (profile_server)
         {
             // Stop accepting frames, wait out/detach callbacks, revoke the real
             // audio gate, and interrupt I/O before either worker is joined.
-            g_profile_server->beginStop();
+            profile_server->beginStop();
         }
         // The reader is now unable to republish. Close the lifecycle gate without
         // joining so no in-flight callback/install can schedule another attempt.
         RequestActivationStop();
         state.updateConfiguration(echidna::utils::ConfigurationSnapshot{});
         state.setStatus(echidna::state::InternalStatus::kDisabled);
-        if (g_profile_server)
+        if (profile_server)
         {
-            g_profile_server->finishStop();
-            g_profile_server.reset();
+            profile_server->finishStop();
+            std::scoped_lock server_lock(g_profile_server_mutex);
+            if (g_profile_server == profile_server)
+            {
+                g_profile_server.reset();
+            }
         }
         // The reader publishes process state before invoking its callback. Clear
         // once more after join so an in-flight final frame cannot leave already-
@@ -322,39 +379,86 @@ namespace
     {
         // Profile callbacks run on the control thread. Gate and replace every
         // live route engine before native capture admission changes.
-        (void)echidna::hooks::PublishAAudioProfile(snapshot);
-        (void)echidna::hooks::PublishOpenSLProfile(snapshot);
-        (void)echidna::hooks::PublishTinyAlsaProfile(snapshot);
+        const bool aaudio_published = echidna::hooks::PublishAAudioProfile(snapshot);
+        const bool opensl_published = echidna::hooks::PublishOpenSLProfile(snapshot);
+        const bool tinyalsa_published = echidna::hooks::PublishTinyAlsaProfile(snapshot);
+        const bool admitted = snapshot.nativeProcessAdmitted();
+        const CaptureRouteIdentity identity{
+            snapshot.generation,
+            snapshot.handoff_token,
+            snapshot.connection_epoch,
+        };
         auto &state = echidna::state::SharedState::instance();
+        if (admitted && (!aaudio_published || !opensl_published || !tinyalsa_published))
+        {
+            // One failed route publication must not leave the other route
+            // registries admitted for the same process generation.
+            auto revoked = snapshot;
+            revoked.global_hooks_enabled = false;
+            revoked.capture_owner = echidna::runtime::CaptureOwner::kNone;
+            (void)echidna::hooks::PublishAAudioProfile(revoked);
+            (void)echidna::hooks::PublishOpenSLProfile(revoked);
+            (void)echidna::hooks::PublishTinyAlsaProfile(revoked);
+            {
+                std::scoped_lock lock(g_activation_mutex);
+                g_pending_active_ack = {};
+                if (g_activation_gate.running())
+                {
+                    g_activation_gate.updatePolicy(false);
+                    ++g_policy_revision;
+                }
+            }
+            state.updateConfiguration(echidna::utils::ConfigurationSnapshot{});
+            state.setStatus(echidna::state::InternalStatus::kError);
+            g_activation_changed.notify_all();
+            RejectCaptureRouteState(identity);
+            return;
+        }
+
+        bool report_inactive = false;
+        bool report_active = false;
         {
             std::scoped_lock lock(g_activation_mutex);
             if (!g_activation_gate.running())
             {
                 return;
             }
-            g_activation_gate.updatePolicy(snapshot.nativeProcessAdmitted());
+            g_activation_gate.updatePolicy(admitted);
             ++g_policy_revision;
             if (!g_activation_gate.admitted())
             {
+                g_pending_active_ack = {};
+                report_inactive = true;
                 state.setStatus(echidna::state::InternalStatus::kDisabled);
                 RecordLifecycle(LifecyclePhase::kDisabled, "profile policy denied native owner");
             }
             else if (g_activation_gate.hooksInstalled())
             {
+                g_pending_active_ack = {};
+                report_active = true;
                 state.setStatus(echidna::state::InternalStatus::kHooked);
             }
             else
             {
+                g_pending_active_ack = identity;
                 state.setStatus(echidna::state::InternalStatus::kWaitingForAttach);
             }
         }
         g_activation_changed.notify_all();
+        if (report_inactive)
+        {
+            (void)ReportCaptureRouteState(identity, false);
+        }
+        else if (report_active)
+        {
+            (void)ReportCaptureRouteState(identity, true);
+        }
     }
 
     void StartEchidnaRuntime()
     {
         std::scoped_lock runtime_lock(g_runtime_mutex);
-        if (g_profile_server)
+        if (CurrentProfileServer())
         {
             return;
         }
@@ -372,12 +476,16 @@ namespace
         }
         StartActivationWorker();
 
-        g_profile_server = std::make_unique<echidna::runtime::ProfileSyncServer>(
+        auto profile_server = std::make_shared<echidna::runtime::ProfileSyncServer>(
             echidna::utils::CachedProcessName(),
             OnProfileSnapshot,
             echidna::runtime::ProfileSyncServer::PresetApplier{},
             g_trusted_publisher_uid.load(std::memory_order_acquire));
-        g_profile_server->start();
+        {
+            std::scoped_lock server_lock(g_profile_server_mutex);
+            g_profile_server = profile_server;
+        }
+        profile_server->start();
         // Cold publisher startup is not a terminal policy decision. Keep
         // app specialization non-blocking and the reconnect reader resident,
         // with audio admission fail-closed until a valid frame arrives.

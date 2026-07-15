@@ -1,10 +1,12 @@
 package com.echidna.control.service
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.util.Log
 import java.io.Closeable
+import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.net.SocketTimeoutException
@@ -22,6 +24,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONObject
 
 private const val SYNC_TAG = "EchidnaProfileSync"
 private const val SOCKET_NAME = "echidna_profiles"
@@ -32,7 +35,8 @@ private const val SLOW_WRITER_TIMEOUT_MS = 2_000L
 private const val WRITER_WATCHDOG_PERIOD_MS = 250L
 internal const val PROFILE_SYNC_V2_ZYGISK_HELLO = "ECHIDNA_PROFILE_SYNC/2 zygisk\n"
 internal const val PROFILE_SYNC_V2_LSPOSED_HELLO = "ECHIDNA_PROFILE_SYNC/2 lsposed\n"
-private const val MAX_HELLO_BYTES = 64
+internal const val PROFILE_SYNC_V3_ZYGISK_PREFIX = "ECHIDNA_PROFILE_SYNC/3 zygisk "
+private const val MAX_HELLO_BYTES = 320
 private val LEGACY_FAIL_CLOSED_SNAPSHOT =
     "{" +
         "\"profiles\":{}," +
@@ -60,12 +64,36 @@ internal enum class ProfileSyncClientRole {
     LEGACY,
 }
 
+internal data class ProfileSyncHello(
+    val role: ProfileSyncClientRole,
+    val processName: String = "",
+    val acknowledgedHandoff: Boolean = false,
+)
+
 /** Pure framing/negotiation helpers shared with unit tests. */
 internal object ProfileSyncWire {
     fun classifyHello(hello: String?): ProfileSyncClientRole = when (hello) {
-        PROFILE_SYNC_V2_ZYGISK_HELLO -> ProfileSyncClientRole.ZYGISK
         PROFILE_SYNC_V2_LSPOSED_HELLO -> ProfileSyncClientRole.LSPOSED
         else -> ProfileSyncClientRole.LEGACY
+    }
+
+    fun parseHello(hello: String?): ProfileSyncHello {
+        if (hello == PROFILE_SYNC_V2_LSPOSED_HELLO) {
+            return ProfileSyncHello(ProfileSyncClientRole.LSPOSED)
+        }
+        if (
+            hello != null && hello.endsWith('\n') &&
+            hello.startsWith(PROFILE_SYNC_V3_ZYGISK_PREFIX)
+        ) {
+            val process = hello.substring(
+                PROFILE_SYNC_V3_ZYGISK_PREFIX.length,
+                hello.length - 1,
+            )
+            if (isValidClaimedProcess(process)) {
+                return ProfileSyncHello(ProfileSyncClientRole.ZYGISK, process, true)
+            }
+        }
+        return ProfileSyncHello(ProfileSyncClientRole.LEGACY)
     }
 
     @Throws(IOException::class)
@@ -93,6 +121,25 @@ internal object ProfileSyncWire {
             .array()
     }
 
+    fun encodeCapturePolicyFrame(payload: String, handoffToken: Long): ByteArray? {
+        if (handoffToken <= 0L || PolicyEnvelopeCodec.parsePublished(payload) == null) return null
+        val wrapped = "{" +
+            "\"schemaVersion\":1," +
+            "\"type\":\"capture_policy\"," +
+            "\"handoffToken\":" + handoffToken + "," +
+            "\"policy\":" + payload +
+            "}"
+        val payloadBytes = encodeUtf8Strict(wrapped) ?: return null
+        if (payloadBytes.isEmpty() || payloadBytes.size > MAX_POLICY_ENVELOPE_BYTES + 128) {
+            return null
+        }
+        return ByteBuffer.allocate(Int.SIZE_BYTES + payloadBytes.size)
+            .order(ByteOrder.BIG_ENDIAN)
+            .putInt(payloadBytes.size)
+            .put(payloadBytes)
+            .array()
+    }
+
     fun encodeUtf8Strict(value: String): ByteArray? = try {
         val encoded = StandardCharsets.UTF_8.newEncoder()
             .onMalformedInput(CodingErrorAction.REPORT)
@@ -109,6 +156,11 @@ internal object ProfileSyncWire {
         .onUnmappableCharacter(CodingErrorAction.REPORT)
         .decode(ByteBuffer.wrap(value))
         .toString()
+
+    private fun isValidClaimedProcess(process: String): Boolean =
+        process.isNotEmpty() &&
+            (encodeUtf8Strict(process)?.size ?: 0) in 1..255 &&
+            process.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.:-]*"))
 }
 
 /** One-slot mailbox: a slow writer observes the newest complete frame, never frame fragments. */
@@ -156,10 +208,12 @@ internal class ProfileSyncBridge(
     context: Context,
     telemetryStore: AuthenticatedTelemetryStore = AuthenticatedTelemetryStore(),
 ) : ProfileSyncChannel, Closeable {
+    private val handoffCoordinator = CaptureOwnerHandoffRegistry.get()
     private val publisher = ProfileSnapshotPublisher(
         context.applicationContext,
         SOCKET_NAME,
         telemetryStore,
+        handoffCoordinator,
     )
 
     init {
@@ -175,16 +229,11 @@ internal class ProfileSyncBridge(
     }
 }
 
-private data class PublishedSnapshot(
-    val generation: Long,
-    val payload: String,
-    val parsed: VersionedPolicyEnvelope,
-)
-
 private class ProfileSnapshotPublisher(
     private val context: Context,
     private val socketName: String,
     private val telemetryStore: AuthenticatedTelemetryStore,
+    private val handoffCoordinator: CaptureOwnerHandoffCoordinator,
 ) : Closeable {
     private val running = AtomicBoolean(false)
     private val stateLock = Any()
@@ -201,7 +250,6 @@ private class ProfileSnapshotPublisher(
         Executors.newSingleThreadScheduledExecutor { runnable ->
             daemonThread(runnable, "echidna-profile-watchdog")
         }
-    @Volatile private var latestSnapshot: PublishedSnapshot? = null
     @Volatile private var server: LocalServerSocket? = null
     private var acceptThread: Thread? = null
 
@@ -221,29 +269,9 @@ private class ProfileSnapshotPublisher(
             Log.w(SYNC_TAG, "Rejected invalid v2 profile snapshot before publication")
             return
         }
-        if (ProfileSyncWire.encodeFrame(json) == null) {
-            Log.w(SYNC_TAG, "Profile snapshot cannot be framed safely")
-            return
+        if (!handoffCoordinator.publishPolicy(parsed)) {
+            Log.w(SYNC_TAG, "Rejected profile snapshot generation rollback or conflict")
         }
-        val next = PublishedSnapshot(parsed.generation, json, parsed)
-        val recipients = synchronized(stateLock) {
-            val current = latestSnapshot
-            when {
-                current != null && next.generation < current.generation -> {
-                    Log.w(SYNC_TAG, "Rejected profile snapshot generation rollback")
-                    return
-                }
-                current != null && next.generation == current.generation &&
-                    next.payload != current.payload -> {
-                    Log.w(SYNC_TAG, "Rejected conflicting profile snapshot generation")
-                    return
-                }
-                current != null && next.generation == current.generation -> return
-            }
-            latestSnapshot = next
-            clients.toList()
-        }
-        recipients.forEach { client -> client.offerSnapshot(next) }
     }
 
     private fun run() {
@@ -282,14 +310,15 @@ private class ProfileSnapshotPublisher(
             closeSocket(socket)
             return
         }
-        when (val role = ProfileSyncWire.classifyHello(hello)) {
+        val parsed = ProfileSyncWire.parseHello(hello)
+        when (parsed.role) {
             ProfileSyncClientRole.LEGACY -> sendLegacyAndClose(socket)
             ProfileSyncClientRole.LSPOSED -> closeSocket(socket)
-            ProfileSyncClientRole.ZYGISK -> registerV2Client(socket, role)
+            ProfileSyncClientRole.ZYGISK -> registerV3Client(socket, parsed.processName)
         }
     }
 
-    private fun registerV2Client(socket: LocalSocket, role: ProfileSyncClientRole) {
+    private fun registerV3Client(socket: LocalSocket, processName: String) {
         val credentials = runCatching { socket.peerCredentials }.getOrNull()
         if (credentials == null || credentials.pid <= 0 || credentials.uid < 0) {
             Log.w(SYNC_TAG, "Dropping profile reader with unavailable peer credentials")
@@ -304,6 +333,11 @@ private class ProfileSnapshotPublisher(
             closeSocket(socket)
             return
         }
+        if (!authenticatedProcessClaim(context, credentials.uid, credentials.pid, processName, packageNames)) {
+            Log.w(SYNC_TAG, "Dropping profile reader with mismatched process claim")
+            closeSocket(socket)
+            return
+        }
         try {
             socket.soTimeout = 0
         } catch (_: IOException) {
@@ -311,30 +345,23 @@ private class ProfileSnapshotPublisher(
             return
         }
         var client: ProfileClient? = null
-        var initialFrame: ByteArray? = null
         synchronized(stateLock) {
             if (running.get() && clients.size < MAX_CLIENTS) {
-                val initial = latestSnapshot
-                val scoped = initial?.let { snapshot ->
-                    PolicyEnvelopeCodec.encodeScopedForPackages(snapshot.parsed, packageNames)
-                }
-                initialFrame = scoped?.let(ProfileSyncWire::encodeFrame)
-                if (initialFrame != null) {
-                    client = ProfileClient(
-                        socket = socket,
-                        role = role,
-                        packageNames = packageNames,
-                        peer = AuthenticatedPeer(credentials.uid, credentials.pid),
-                        telemetryStore = telemetryStore,
-                        onClosed = { closed -> clients.remove(closed) },
-                    )
-                    client!!.offer(initialFrame!!)
-                    clients.add(client!!)
-                }
+                client = ProfileClient(
+                    socket = socket,
+                    processName = processName,
+                    packageNames = packageNames,
+                    peer = AuthenticatedPeer(credentials.uid, credentials.pid),
+                    telemetryStore = telemetryStore,
+                    handoffCoordinator = handoffCoordinator,
+                    onClosed = { closed -> clients.remove(closed) },
+                )
+                clients.add(client!!)
             }
         }
         val registered = client
-        if (registered == null || initialFrame == null) {
+        if (registered == null || !handoffCoordinator.registerNative(registered)) {
+            registered?.close()
             closeSocket(socket)
             return
         }
@@ -387,12 +414,13 @@ private class ProfileSnapshotPublisher(
 
 private class ProfileClient(
     private val socket: LocalSocket,
-    private val role: ProfileSyncClientRole,
+    override val processName: String,
     private val packageNames: Set<String>,
     private val peer: AuthenticatedPeer,
     private val telemetryStore: AuthenticatedTelemetryStore,
+    private val handoffCoordinator: CaptureOwnerHandoffCoordinator,
     private val onClosed: (ProfileClient) -> Unit,
-) : Closeable {
+) : NativeCaptureEndpoint, Closeable {
     private val open = AtomicBoolean(true)
     private val mailbox = LatestFrameMailbox()
     private val writeStartedNanos = AtomicLong(0L)
@@ -402,21 +430,12 @@ private class ProfileClient(
         daemonThread(::monitorInput, "echidna-profile-client-reader").start()
     }
 
-    fun offer(frame: ByteArray) {
-        if (open.get()) mailbox.offer(frame)
+    override fun publishPolicy(payload: String, handoffToken: Long): Boolean {
+        val frame = ProfileSyncWire.encodeCapturePolicyFrame(payload, handoffToken) ?: return false
+        return open.get() && mailbox.offer(frame)
     }
 
-    fun offerSnapshot(snapshot: PublishedSnapshot) {
-        val scoped = PolicyEnvelopeCodec.encodeScopedForPackages(
-            snapshot.parsed,
-            packageNames,
-            requireWhitelistMatch = false,
-        ) ?: return close()
-        val frame = ProfileSyncWire.encodeFrame(scoped) ?: return close()
-        offer(frame)
-    }
-
-    fun roleName(): String = role.name.lowercase()
+    fun roleName(): String = "zygisk"
 
     fun hasWriteExceeded(nowNanos: Long, timeoutMs: Long): Boolean {
         val started = writeStartedNanos.get()
@@ -446,14 +465,44 @@ private class ProfileClient(
     private fun monitorInput() {
         try {
             val input = socket.inputStream
-            val rateLimiter = PeerTelemetryRateLimiter()
+            val telemetryRateLimiter = PeerTelemetryRateLimiter()
+            val acknowledgementRateLimiter = PeerTelemetryRateLimiter(
+                windowMs = 2_000L,
+                maxFrames = 32,
+            )
             while (open.get()) {
-                val frame = AuthenticatedTelemetryWire.readFrame(input) ?: return
-                if (!rateLimiter.allow(telemetryStore.nowMs())) {
-                    throw IOException("Telemetry peer exceeded the bounded receive rate")
+                val payload = readProfileClientPayload(input) ?: return
+                val ack = CaptureOwnerAckWire.parse(payload)
+                if (ack != null) {
+                    if (!acknowledgementRateLimiter.allow(telemetryStore.nowMs())) {
+                        throw IOException("Profile peer exceeded the bounded ACK rate")
+                    }
+                    if (ack.processName != processName) {
+                        throw IOException("Capture ACK process does not match authenticated peer")
+                    }
+                    handoffCoordinator.acknowledgeNative(
+                        this,
+                        ack.processName,
+                        ack.generation,
+                        ack.handoffToken,
+                        ack.active,
+                    )
+                    continue
                 }
-                if (!processBelongsToPeerPackages(frame.process, packageNames)) {
-                    throw IOException("Telemetry process is not owned by the authenticated peer")
+                val frame = AuthenticatedTelemetryWire.parse(payload)
+                    ?: throw IOException("Invalid authenticated profile-peer frame")
+                if (!telemetryRateLimiter.allow(telemetryStore.nowMs())) {
+                    throw IOException("Profile peer exceeded the bounded telemetry rate")
+                }
+                if (frame.process != processName) {
+                    throw IOException("Telemetry process does not match authenticated peer")
+                }
+                if (!handoffCoordinator.acceptsNativeTelemetry(
+                        this,
+                        processName,
+                        frame.generation,
+                    )) {
+                    continue
                 }
                 telemetryStore.record(
                     frame = frame,
@@ -474,7 +523,107 @@ private class ProfileClient(
         mailbox.close()
         closeSocket(socket)
         onClosed(this)
+        handoffCoordinator.unregisterNative(this)
     }
+}
+
+internal data class CaptureOwnerAck(
+    val processName: String,
+    val generation: Long,
+    val handoffToken: Long,
+    val active: Boolean,
+)
+
+internal object CaptureOwnerAckWire {
+    private val keys = setOf(
+        "schemaVersion",
+        "type",
+        "process",
+        "generation",
+        "handoffToken",
+        "active",
+    )
+
+    fun parse(payload: String): CaptureOwnerAck? {
+        if (!StrictJsonValidator.isValid(payload)) return null
+        val root = runCatching { JSONObject(payload) }.getOrNull() ?: return null
+        val actual = buildSet {
+            val iterator = root.keys()
+            while (iterator.hasNext()) add(iterator.next())
+        }
+        if (actual != keys || root.optInt("schemaVersion", -1) != 1) return null
+        if (root.optString("type", "") != "capture_owner_ack") return null
+        val process = root.opt("process") as? String ?: return null
+        if (
+            process.isEmpty() || process.length > 255 ||
+            !process.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.:-]*"))
+        ) {
+            return null
+        }
+        val rawGeneration = root.opt("generation")
+        if (rawGeneration !is Number || rawGeneration is Float || rawGeneration is Double) return null
+        val generation = rawGeneration.toString().toLongOrNull()?.takeIf { it > 0L } ?: return null
+        val rawToken = root.opt("handoffToken")
+        if (rawToken !is Number || rawToken is Float || rawToken is Double) return null
+        val handoffToken = rawToken.toString().toLongOrNull()?.takeIf { it > 0L } ?: return null
+        val active = root.opt("active") as? Boolean ?: return null
+        return CaptureOwnerAck(process, generation, handoffToken, active)
+    }
+}
+
+@Throws(IOException::class)
+private fun readProfileClientPayload(input: InputStream): String? {
+    val first = input.read()
+    if (first < 0) return null
+    val header = ByteArray(Int.SIZE_BYTES)
+    header[0] = first.toByte()
+    readFully(input, header, 1, header.size - 1)
+    val size =
+        ((header[0].toInt() and 0xff) shl 24) or
+            ((header[1].toInt() and 0xff) shl 16) or
+            ((header[2].toInt() and 0xff) shl 8) or
+            (header[3].toInt() and 0xff)
+    if (size <= 0 || size > MAX_TELEMETRY_FRAME_BYTES) {
+        throw IOException("Invalid profile-client frame size")
+    }
+    val payload = ByteArray(size)
+    readFully(input, payload, 0, payload.size)
+    return try {
+        ProfileSyncWire.decodeUtf8Strict(payload)
+    } catch (error: Exception) {
+        throw IOException("Profile-client frame is not strict UTF-8", error)
+    }
+}
+
+@Throws(IOException::class)
+private fun readFully(input: InputStream, target: ByteArray, offset: Int, length: Int) {
+    var cursor = offset
+    val end = offset + length
+    while (cursor < end) {
+        val count = input.read(target, cursor, end - cursor)
+        if (count < 0) throw EOFException("Truncated profile-client frame")
+        if (count > 0) cursor += count
+    }
+}
+
+private fun authenticatedProcessClaim(
+    context: Context,
+    uid: Int,
+    pid: Int,
+    processName: String,
+    packageNames: Set<String>,
+): Boolean {
+    val packageName = processName.substringBefore(':')
+    if (packageName !in packageNames) return false
+    return context.getSystemService(ActivityManager::class.java)
+        ?.runningAppProcesses
+        .orEmpty()
+        .any { process ->
+            process.uid == uid &&
+                process.pid == pid &&
+                process.processName == processName &&
+                packageName in process.pkgList.orEmpty()
+        }
 }
 
 private fun daemonThread(block: () -> Unit, name: String): Thread =

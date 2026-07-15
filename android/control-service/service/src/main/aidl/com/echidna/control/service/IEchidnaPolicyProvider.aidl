@@ -21,4 +21,10 @@ interface IEchidnaPolicyProvider {
     // Append-only v5 surface. Proof is the exact fixed 112-byte ECHT v2 value.
     oneway void reportLegacyPreprocessorTelemetryProofV5(int audioSessionId, String processName,
             long generation, in byte[] proof);
+    // Append-only v6 surface. Registration is required before any activating LSPosed policy is
+    // exposed; the drain report is accepted only from the same exact process/PID registration.
+    boolean registerCaptureOwnerClient(String processName, long clientApiVersion,
+            IEchidnaPolicyListener listener);
+    oneway void reportCaptureOwnerInactive(
+            String processName, long generation, long handoffToken);
 }

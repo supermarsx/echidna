@@ -5,7 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 
-internal const val PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION = 5L
+internal const val PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION = 6L
 internal const val PREPROCESSOR_TELEMETRY_VALUE_BYTES = 48
 internal const val PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES = 16
 internal const val PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS = 250L

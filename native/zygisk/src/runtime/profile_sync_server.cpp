@@ -111,8 +111,42 @@ namespace
         return static_cast<int64_t>(credentials.uid) == expected_uid;
     }
 
-    int ConnectPublisher(int64_t expected_uid)
+    bool IsValidProcessName(std::string_view process_name)
     {
+        if (process_name.empty() ||
+            process_name.size() > echidna::runtime::kProfileSyncMaxProcessNameBytes)
+        {
+            return false;
+        }
+        const auto is_alpha_numeric = [](unsigned char byte)
+        {
+            return (byte >= 'A' && byte <= 'Z') ||
+                   (byte >= 'a' && byte <= 'z') ||
+                   (byte >= '0' && byte <= '9');
+        };
+        const unsigned char first = static_cast<unsigned char>(process_name.front());
+        if (!is_alpha_numeric(first) && first != '_')
+        {
+            return false;
+        }
+        for (const unsigned char byte : process_name)
+        {
+            if (!is_alpha_numeric(byte) && byte != '_' && byte != '.' && byte != ':' &&
+                byte != '-')
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int ConnectPublisher(int64_t expected_uid, std::string_view process_name)
+    {
+        if (!IsValidProcessName(process_name))
+        {
+            errno = EINVAL;
+            return -1;
+        }
         const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0)
         {
@@ -132,9 +166,14 @@ namespace
         std::memcpy(address.sun_path + 1, kSocketName, name_length);
         const auto address_length = static_cast<socklen_t>(
             offsetof(sockaddr_un, sun_path) + 1 + name_length);
+        std::string hello;
+        hello.reserve(echidna::runtime::kProfileSyncV3ZygiskHelloPrefix.size() +
+                      process_name.size() + 1);
+        hello.append(echidna::runtime::kProfileSyncV3ZygiskHelloPrefix);
+        hello.append(process_name);
+        hello.push_back('\n');
         if (::connect(fd, reinterpret_cast<sockaddr *>(&address), address_length) != 0 ||
-            !IsTrustedPublisher(fd, expected_uid) ||
-            !SendBytes(fd, echidna::runtime::kProfileSyncV2ZygiskHello))
+            !IsTrustedPublisher(fd, expected_uid) || !SendBytes(fd, hello))
         {
             ::close(fd);
             return -1;
@@ -150,7 +189,7 @@ namespace
             return false;
         }
         const uint32_t length = ntohl(network_length);
-        if (length == 0 || length > echidna::runtime::kProfileSyncMaxEnvelopeBytes)
+        if (length == 0 || length > echidna::runtime::kProfileSyncMaxTransportFrameBytes)
         {
             __android_log_print(ANDROID_LOG_WARN,
                                 kLogTag,
@@ -202,11 +241,13 @@ namespace echidna::runtime
     ProfileSyncServer::ProfileSyncServer(std::string process_name,
                                          SnapshotCallback callback,
                                          PresetApplier preset_applier,
-                                         int64_t expected_publisher_uid)
+                                         int64_t expected_publisher_uid,
+                                         TelemetrySendFn critical_send_fn)
         : process_name_(std::move(process_name)),
           callback_(std::move(callback)),
           preset_applier_(std::move(preset_applier)),
-          expected_publisher_uid_(expected_publisher_uid)
+          expected_publisher_uid_(expected_publisher_uid),
+          critical_send_fn_(critical_send_fn)
     {
         if (!preset_applier_)
         {
@@ -221,18 +262,48 @@ namespace echidna::runtime
 
     bool ProfileSyncServer::refreshOnce()
     {
-        const int fd = ConnectPublisher(expected_publisher_uid_);
+        if (running_.load(std::memory_order_acquire))
+        {
+            return false;
+        }
+        const int fd = ConnectPublisher(expected_publisher_uid_, process_name_);
         if (fd < 0)
         {
             return false;
         }
+        uint64_t connection_epoch = 0;
+        {
+            std::scoped_lock lock(client_mutex_);
+            ++client_epoch_;
+            if (client_epoch_ == 0)
+            {
+                ++client_epoch_;
+            }
+            connection_epoch = client_epoch_;
+            client_fd_ = fd;
+            has_acknowledgement_ = false;
+        }
         (void)SetReadTimeout(fd, kInitialReadTimeoutMs);
-        const bool received = readAndApply(fd);
+        const bool received = readAndApply(fd, connection_epoch);
+        {
+            std::scoped_lock lock(client_mutex_);
+            if (client_fd_ == fd && client_epoch_ == connection_epoch)
+            {
+                client_fd_ = -1;
+            }
+        }
         ::close(fd);
         return received && hasSnapshot();
     }
 
     bool ProfileSyncServer::applyPayload(std::string_view payload)
+    {
+        return applyPolicyPayload(payload, 0, 0);
+    }
+
+    bool ProfileSyncServer::applyPolicyPayload(std::string_view payload,
+                                               uint64_t handoff_token,
+                                               uint64_t connection_epoch)
     {
         DecodedProfileSnapshot candidate;
         std::string error;
@@ -248,6 +319,8 @@ namespace echidna::runtime
                                 error.c_str());
             return false;
         }
+        candidate.handoff_token = handoff_token;
+        candidate.connection_epoch = connection_epoch;
 
         // Prepare every allocation needed for the retained generation before
         // applying the preset or publishing admission state.
@@ -266,9 +339,11 @@ namespace echidna::runtime
                                                                    payload,
                                                                    generation_,
                                                                    generation_payload_);
+            const bool transport_changed = handoff_token_ != handoff_token ||
+                                           policy_connection_epoch_ != connection_epoch;
             if (decision == GenerationDecision::kDuplicate)
             {
-                if (snapshot_published_)
+                if (snapshot_published_ && !transport_changed)
                 {
                     return true;
                 }
@@ -276,6 +351,12 @@ namespace echidna::runtime
                 // Disconnect revocation deliberately preserves the watermark.
                 // Re-publish an exact duplicate so the legitimate service can
                 // restore admission without inventing a new generation.
+                disableTelemetryLocked();
+                dropAccumulatedTelemetry();
+                current_snapshot_.handoff_token = handoff_token;
+                current_snapshot_.connection_epoch = connection_epoch;
+                handoff_token_ = handoff_token;
+                policy_connection_epoch_ = connection_epoch;
                 state::SharedState::instance().updateConfiguration(
                     ConfigurationFor(current_snapshot_, process_name_));
                 snapshot_published_ = true;
@@ -308,6 +389,9 @@ namespace echidna::runtime
                     return false;
                 }
 
+                disableTelemetryLocked();
+                dropAccumulatedTelemetry();
+
                 // The socket snapshot is process-specific. Publish directly to the
                 // process-local singleton only after every validation and preset step
                 // succeeds; do not leak one process's selected profile into a global map.
@@ -315,6 +399,8 @@ namespace echidna::runtime
                     ConfigurationFor(candidate, process_name_));
 
                 generation_ = candidate.generation;
+                handoff_token_ = handoff_token;
+                policy_connection_epoch_ = connection_epoch;
                 generation_payload_ = std::move(retained_payload);
                 current_snapshot_ = std::move(retained_snapshot);
                 has_snapshot_ = true;
@@ -342,6 +428,131 @@ namespace echidna::runtime
         std::scoped_lock lock(state_mutex_);
         return has_snapshot_ && snapshot_published_ &&
                current_snapshot_.nativeProcessAdmitted();
+    }
+
+    bool ProfileSyncServer::reportCaptureRouteState(uint64_t generation,
+                                                    uint64_t handoff_token,
+                                                    uint64_t connection_epoch,
+                                                    bool active)
+    {
+        const std::string payload =
+            EncodeCaptureOwnerAckV1(process_name_, generation, handoff_token, active);
+        if (payload.empty())
+        {
+            return false;
+        }
+
+        int export_fd = -1;
+        int acknowledged_client_fd = -1;
+        TelemetrySendResult result = TelemetrySendResult::kConnectionLost;
+        {
+            // Keep the accepted policy stable through the nonblocking critical
+            // write. A later generation cannot overtake this acknowledgement.
+            std::scoped_lock state_lock(state_mutex_);
+            if (!accepting_payloads_.load(std::memory_order_acquire) ||
+                !has_snapshot_ || !snapshot_published_ || generation_ != generation ||
+                handoff_token_ != handoff_token ||
+                policy_connection_epoch_ != connection_epoch ||
+                current_snapshot_.nativeProcessAdmitted() != active)
+            {
+                return false;
+            }
+            {
+                std::scoped_lock client_lock(client_mutex_);
+                if (client_fd_ >= 0)
+                {
+                    if (has_acknowledgement_ && acknowledged_generation_ == generation &&
+                        acknowledged_handoff_token_ == handoff_token &&
+                        acknowledged_connection_epoch_ == connection_epoch &&
+                        acknowledged_active_ == active)
+                    {
+                        return false;
+                    }
+                    if (client_epoch_ == connection_epoch)
+                    {
+                        acknowledged_client_fd = client_fd_;
+#ifdef F_DUPFD_CLOEXEC
+                        export_fd = ::fcntl(client_fd_, F_DUPFD_CLOEXEC, 0);
+#else
+                        export_fd = ::dup(client_fd_);
+#endif
+                    }
+                }
+            }
+            if (export_fd < 0)
+            {
+                return false;
+            }
+            {
+                std::scoped_lock outbound_lock(outbound_mutex_);
+                result = SendTelemetryV2Frame(export_fd, payload, critical_send_fn_);
+            }
+            if (result != TelemetrySendResult::kComplete)
+            {
+                // Unlike best-effort telemetry, an activation/drain ACK may
+                // never be silently coalesced. Force endpoint replacement.
+                (void)::shutdown(export_fd, SHUT_RDWR);
+            }
+            else
+            {
+                std::scoped_lock client_lock(client_mutex_);
+                // The duplicated descriptor remains bound to this endpoint,
+                // but only remember the ACK if it is still the live endpoint.
+                if (client_fd_ == acknowledged_client_fd &&
+                    client_epoch_ == connection_epoch)
+                {
+                    acknowledged_generation_ = generation;
+                    acknowledged_handoff_token_ = handoff_token;
+                    acknowledged_connection_epoch_ = connection_epoch;
+                    acknowledged_active_ = active;
+                    has_acknowledgement_ = true;
+
+                    // Activation begins a fresh evidence epoch. Drop every
+                    // counter captured before the terminal ACK so a queued old
+                    // delta can never be relabelled with this handoff.
+                    disableTelemetryLocked();
+                    dropAccumulatedTelemetry();
+                    if (active)
+                    {
+                        telemetry_generation_ = generation;
+                        telemetry_handoff_token_ = handoff_token;
+                        telemetry_connection_epoch_ = connection_epoch;
+                        telemetry_active_ = true;
+                    }
+                }
+                else
+                {
+                    result = TelemetrySendResult::kConnectionLost;
+                    (void)::shutdown(export_fd, SHUT_RDWR);
+                }
+            }
+        }
+        ::close(export_fd);
+        return result == TelemetrySendResult::kComplete;
+    }
+
+    bool ProfileSyncServer::rejectCaptureRouteState(uint64_t generation,
+                                                    uint64_t handoff_token,
+                                                    uint64_t connection_epoch)
+    {
+        std::scoped_lock state_lock(state_mutex_);
+        if (!has_snapshot_ || !snapshot_published_ || generation_ != generation ||
+            handoff_token_ != handoff_token ||
+            policy_connection_epoch_ != connection_epoch)
+        {
+            return false;
+        }
+        snapshot_published_ = false;
+        disableTelemetryLocked();
+        dropAccumulatedTelemetry();
+        state::SharedState::instance().updateConfiguration(utils::ConfigurationSnapshot{});
+        std::scoped_lock client_lock(client_mutex_);
+        if (client_fd_ < 0 || client_epoch_ != connection_epoch)
+        {
+            return false;
+        }
+        (void)::shutdown(client_fd_, SHUT_RDWR);
+        return true;
     }
 
     void ProfileSyncServer::start()
@@ -410,7 +621,7 @@ namespace echidna::runtime
         ReconnectBackoff reconnect_backoff(static_cast<uint32_t>(::getpid()));
         while (running_.load(std::memory_order_acquire))
         {
-            const int client = ConnectPublisher(expected_publisher_uid_);
+            const int client = ConnectPublisher(expected_publisher_uid_, process_name_);
             if (client < 0)
             {
                 if (!waitBeforeReconnect(reconnect_backoff.nextDelay()))
@@ -420,6 +631,7 @@ namespace echidna::runtime
                 reconnect_backoff.recordFailure();
                 continue;
             }
+            uint64_t connection_epoch = 0;
             {
                 std::scoped_lock lock(client_mutex_);
                 if (!running_.load(std::memory_order_acquire))
@@ -427,25 +639,36 @@ namespace echidna::runtime
                     ::close(client);
                     break;
                 }
+                ++client_epoch_;
+                if (client_epoch_ == 0)
+                {
+                    ++client_epoch_;
+                }
+                connection_epoch = client_epoch_;
                 client_fd_ = client;
+                acknowledged_generation_ = 0;
+                acknowledged_handoff_token_ = 0;
+                acknowledged_connection_epoch_ = 0;
+                acknowledged_active_ = false;
+                has_acknowledgement_ = false;
             }
-            __android_log_print(ANDROID_LOG_INFO, kLogTag, "Connected to v2 profile publisher");
+            __android_log_print(ANDROID_LOG_INFO, kLogTag, "Connected to v3 profile publisher");
             (void)SetReadTimeout(client, kInitialReadTimeoutMs);
-            const bool received_initial_frame = readAndApply(client);
+            const bool received_initial_frame = readAndApply(client, connection_epoch);
             (void)SetReadTimeout(client, 0);
             if (received_initial_frame)
             {
                 reconnect_backoff.reset();
             }
             while (received_initial_frame && running_.load(std::memory_order_acquire) &&
-                   readAndApply(client))
+                   readAndApply(client, connection_epoch))
             {
                 // Keep consuming framed updates. Invalid policy frames are rejected
                 // by applyPayload without discarding the healthy stream.
             }
             {
                 std::scoped_lock lock(client_mutex_);
-                if (client_fd_ == client)
+                if (client_fd_ == client && client_epoch_ == connection_epoch)
                 {
                     client_fd_ = -1;
                 }
@@ -481,6 +704,7 @@ namespace echidna::runtime
         }
         size_t next_route = 0;
         uint32_t sequence = 0;
+        uint64_t pending_epoch = 0;
 
         while (running_.load(std::memory_order_acquire))
         {
@@ -498,24 +722,41 @@ namespace echidna::runtime
                 break;
             }
 
+            uint64_t evidence_epoch = 0;
+            uint64_t generation = 0;
+            uint64_t handoff_token = 0;
+            uint64_t connection_epoch = 0;
+            bool evidence_active = false;
+            {
+                std::scoped_lock lock(state_mutex_);
+                evidence_epoch = telemetry_epoch_;
+                generation = telemetry_generation_;
+                handoff_token = telemetry_handoff_token_;
+                connection_epoch = telemetry_connection_epoch_;
+                evidence_active = telemetry_active_;
+            }
+            if (RebindTelemetryPendingEpoch(evidence_epoch,
+                                            &pending_epoch,
+                                            pending.data(),
+                                            pending.size()))
+            {
+                next_route = 0;
+            }
+
             auto &accumulator = state::SharedState::instance().telemetry();
+            if (!evidence_active || generation == 0 || handoff_token == 0 ||
+                connection_epoch == 0)
+            {
+                for (size_t index = 0; index < kRouteCount; ++index)
+                {
+                    (void)accumulator.take(static_cast<utils::TelemetryRoute>(index));
+                }
+                continue;
+            }
             for (size_t index = 0; index < kRouteCount; ++index)
             {
                 pending[index].merge(
                     accumulator.take(static_cast<utils::TelemetryRoute>(index)));
-            }
-
-            uint64_t generation = 0;
-            {
-                std::scoped_lock lock(state_mutex_);
-                if (snapshot_published_)
-                {
-                    generation = generation_;
-                }
-            }
-            if (generation == 0)
-            {
-                continue;
             }
 
             size_t selected = kRouteCount;
@@ -534,22 +775,6 @@ namespace echidna::runtime
             }
 
             int export_fd = -1;
-            {
-                std::scoped_lock lock(client_mutex_);
-                if (client_fd_ >= 0)
-                {
-#ifdef F_DUPFD_CLOEXEC
-                    export_fd = ::fcntl(client_fd_, F_DUPFD_CLOEXEC, 0);
-#else
-                    export_fd = ::dup(client_fd_);
-#endif
-                }
-            }
-            if (export_fd < 0)
-            {
-                continue;
-            }
-
             uint32_t candidate_sequence = sequence + 1;
             if (candidate_sequence == 0)
             {
@@ -567,9 +792,37 @@ namespace echidna::runtime
                                                           monotonic_ms,
                                                           process_name_,
                                                           generation);
-            const TelemetrySendResult send_result =
-                SendTelemetryV2Frame(export_fd, payload);
-            ::close(export_fd);
+            TelemetrySendResult send_result = TelemetrySendResult::kConnectionLost;
+            {
+                // Revalidate the exact evidence and connection incarnation
+                // immediately around the write. A transition invalidates the
+                // pending epoch instead of relabelling queued counters.
+                std::scoped_lock state_lock(state_mutex_);
+                if (telemetry_active_ && telemetry_epoch_ == evidence_epoch &&
+                    telemetry_generation_ == generation &&
+                    telemetry_handoff_token_ == handoff_token &&
+                    telemetry_connection_epoch_ == connection_epoch)
+                {
+                    std::scoped_lock client_lock(client_mutex_);
+                    if (client_fd_ >= 0 && client_epoch_ == connection_epoch)
+                    {
+#ifdef F_DUPFD_CLOEXEC
+                        export_fd = ::fcntl(client_fd_, F_DUPFD_CLOEXEC, 0);
+#else
+                        export_fd = ::dup(client_fd_);
+#endif
+                    }
+                    if (export_fd >= 0)
+                    {
+                        std::scoped_lock outbound_lock(outbound_mutex_);
+                        send_result = SendTelemetryV2Frame(export_fd, payload);
+                    }
+                }
+            }
+            if (export_fd >= 0)
+            {
+                ::close(export_fd);
+            }
             if (send_result == TelemetrySendResult::kComplete)
             {
                 sequence = candidate_sequence;
@@ -579,7 +832,7 @@ namespace echidna::runtime
         }
     }
 
-    bool ProfileSyncServer::readAndApply(int client_fd)
+    bool ProfileSyncServer::readAndApply(int client_fd, uint64_t connection_epoch)
     {
         std::string payload;
         if (!ReceiveFrame(client_fd, &payload))
@@ -588,7 +841,25 @@ namespace echidna::runtime
         }
         try
         {
-            (void)applyPayload(payload);
+            DecodedCapturePolicyFrame frame;
+            std::string error;
+            if (!DecodeCapturePolicyFrameV1(payload, &frame, &error))
+            {
+                __android_log_print(ANDROID_LOG_WARN,
+                                    kLogTag,
+                                    "Rejected v3 capture-policy frame: %s",
+                                    error.c_str());
+                return false;
+            }
+            if (!applyPolicyPayload(frame.policy_payload,
+                                    frame.handoff_token,
+                                    connection_epoch))
+            {
+                __android_log_print(ANDROID_LOG_WARN,
+                                    kLogTag,
+                                    "Capture-policy application failed; disconnecting publisher");
+                return false;
+            }
         }
         catch (const std::exception &error)
         {
@@ -596,12 +867,14 @@ namespace echidna::runtime
                                 kLogTag,
                                 "Profile snapshot application failed: %s",
                                 error.what());
+            return false;
         }
         catch (...)
         {
             __android_log_print(ANDROID_LOG_WARN,
                                 kLogTag,
                                 "Profile snapshot application failed unexpectedly");
+            return false;
         }
         return true;
     }
@@ -627,6 +900,8 @@ namespace echidna::runtime
             notify = notify_callback && has_snapshot_ && snapshot_published_ &&
                      current_snapshot_.nativeProcessAdmitted();
             snapshot_published_ = false;
+            disableTelemetryLocked();
+            dropAccumulatedTelemetry();
             state::SharedState::instance().updateConfiguration(utils::ConfigurationSnapshot{});
             if (notify)
             {
@@ -646,6 +921,29 @@ namespace echidna::runtime
         if (accepting_payloads_.load(std::memory_order_acquire) && callback_)
         {
             callback_(snapshot);
+        }
+    }
+
+    void ProfileSyncServer::disableTelemetryLocked()
+    {
+        ++telemetry_epoch_;
+        if (telemetry_epoch_ == 0)
+        {
+            ++telemetry_epoch_;
+        }
+        telemetry_generation_ = 0;
+        telemetry_handoff_token_ = 0;
+        telemetry_connection_epoch_ = 0;
+        telemetry_active_ = false;
+    }
+
+    void ProfileSyncServer::dropAccumulatedTelemetry()
+    {
+        auto &accumulator = state::SharedState::instance().telemetry();
+        const size_t route_count = static_cast<size_t>(utils::TelemetryRoute::kCount);
+        for (size_t index = 0; index < route_count; ++index)
+        {
+            (void)accumulator.take(static_cast<utils::TelemetryRoute>(index));
         }
     }
 

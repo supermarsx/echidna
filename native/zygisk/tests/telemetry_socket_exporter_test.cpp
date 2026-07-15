@@ -13,6 +13,7 @@
 namespace
 {
     int g_failures = 0;
+    int g_send_count = 0;
     std::vector<uint8_t> g_frame;
 
     void Check(bool condition, const char *message)
@@ -26,6 +27,7 @@ namespace
 
     ssize_t CaptureSend(int, const void *data, size_t size, int flags)
     {
+        ++g_send_count;
         Check((flags & MSG_DONTWAIT) != 0, "telemetry send must be nonblocking");
         g_frame.assign(static_cast<const uint8_t *>(data),
                        static_cast<const uint8_t *>(data) + size);
@@ -61,6 +63,46 @@ int main()
           "mutation delta must be serialized");
     Check(payload.find(R"("route":"aaudio")") != std::string::npos,
           "route must use the stable schema enum");
+
+    utils::TelemetryDelta pending[2]{};
+    pending[0].route = utils::TelemetryRoute::kAAudio;
+    pending[1].route = utils::TelemetryRoute::kOpenSl;
+    pending[0].blocks = 3;
+    pending[1].mutations = 1;
+    uint64_t pending_epoch = 0;
+    Check(runtime::RebindTelemetryPendingEpoch(10, &pending_epoch, pending, 2) &&
+              pending_epoch == 10 && !pending[0].pending() && !pending[1].pending(),
+          "first authenticated evidence epoch must drop pre-ACK queued counters");
+    pending[0].blocks = 2;
+    Check(!runtime::RebindTelemetryPendingEpoch(10, &pending_epoch, pending, 2) &&
+              pending[0].blocks == 2,
+          "same evidence epoch must preserve unsent telemetry for retry");
+    Check(runtime::RebindTelemetryPendingEpoch(11, &pending_epoch, pending, 2) &&
+              !pending[0].pending(),
+          "cross-generation or reconnect evidence must drop queued old deltas");
+
+    const std::string active_ack =
+        runtime::EncodeCaptureOwnerAckV1("com.example:capture", 42, 73, true);
+    Check(active_ack ==
+              R"({"schemaVersion":1,"type":"capture_owner_ack","process":"com.example:capture","generation":42,"handoffToken":73,"active":true})",
+          "active handoff acknowledgement must use the strict process-bound schema");
+    Check(runtime::EncodeCaptureOwnerAckV1("", 42, 73, false).empty() &&
+              runtime::EncodeCaptureOwnerAckV1("bad/process", 42, 73, false).empty() &&
+              runtime::EncodeCaptureOwnerAckV1("com.example", 0, 73, false).empty() &&
+              runtime::EncodeCaptureOwnerAckV1("com.example", 42, 0, false).empty(),
+          "invalid acknowledgement process, generation, or token must fail closed");
+
+    g_send_count = 0;
+    for (int index = 0; index < 8; ++index)
+    {
+        Check(runtime::SendTelemetryV2Frame(1, payload, CaptureSend) ==
+                  runtime::TelemetrySendResult::kComplete,
+              "loaded telemetry frame must use the independent best-effort send path");
+    }
+    Check(runtime::SendTelemetryV2Frame(1, active_ack, CaptureSend) ==
+              runtime::TelemetrySendResult::kComplete &&
+              g_send_count == 9,
+          "critical ACK must remain sendable after eight loaded telemetry frames");
 
     Check(runtime::SendTelemetryV2Frame(1, payload, CaptureSend) ==
               runtime::TelemetrySendResult::kComplete,

@@ -667,6 +667,83 @@ namespace
 
 namespace echidna::runtime
 {
+    bool DecodeCapturePolicyFrameV1(std::string_view payload,
+                                    DecodedCapturePolicyFrame *frame,
+                                    std::string *error)
+    {
+        if (frame == nullptr)
+        {
+            return SetError(error, "capture-policy frame output is null");
+        }
+        *frame = {};
+        if (payload.empty() || payload.size() > kProfileSyncMaxTransportFrameBytes)
+        {
+            return SetError(error, "capture-policy frame byte length is outside the allowed range");
+        }
+
+        JsonValue root;
+        try
+        {
+            root = JsonParser(payload).parse();
+        }
+        catch (const JsonError &parse_error)
+        {
+            return SetError(error, parse_error.what());
+        }
+        catch (const std::exception &parse_error)
+        {
+            return SetError(error, std::string("JSON parser failure: ") + parse_error.what());
+        }
+
+        if (!RequireOnlyMembers(root,
+                                {"schemaVersion", "type", "handoffToken", "policy"},
+                                "capture-policy frame",
+                                error))
+        {
+            return false;
+        }
+        const JsonValue *schema = RequireMember(root, "schemaVersion", error);
+        const JsonValue *type = RequireMember(root, "type", error);
+        const JsonValue *token = RequireMember(root, "handoffToken", error);
+        const JsonValue *policy = RequireMember(root, "policy", error);
+        if (schema == nullptr || type == nullptr || token == nullptr || policy == nullptr)
+        {
+            return false;
+        }
+
+        uint64_t schema_version = 0;
+        if (!ParseUnsigned(*schema, &schema_version) || schema_version != 1)
+        {
+            return SetError(error, "capture-policy schemaVersion must be integer 1");
+        }
+        if (type->type != JsonType::kString || type->text != "capture_policy")
+        {
+            return SetError(error, "capture-policy type must be 'capture_policy'");
+        }
+        if (!ParseNonNegativeSigned64(*token, &frame->handoff_token) ||
+            frame->handoff_token == 0)
+        {
+            return SetError(error, "handoffToken must be a positive signed 64-bit integer");
+        }
+        if (policy->type != JsonType::kObject || policy->end <= policy->begin ||
+            policy->end > payload.size())
+        {
+            return SetError(error, "capture-policy policy must be a JSON object");
+        }
+        frame->policy_payload = payload.substr(policy->begin, policy->end - policy->begin);
+        if (frame->policy_payload.empty() ||
+            frame->policy_payload.size() > kProfileSyncMaxEnvelopeBytes)
+        {
+            *frame = {};
+            return SetError(error, "nested policy byte length is outside the allowed range");
+        }
+        if (error != nullptr)
+        {
+            error->clear();
+        }
+        return true;
+    }
+
     bool DecodeProfileSyncV2(std::string_view payload,
                              std::string_view process_name,
                              uint64_t now_epoch_ms,

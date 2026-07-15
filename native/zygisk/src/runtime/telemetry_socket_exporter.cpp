@@ -62,6 +62,34 @@ namespace echidna::runtime
             output->push_back('"');
         }
 
+        bool IsValidProcessName(std::string_view process)
+        {
+            if (process.empty() || process.size() > 255)
+            {
+                return false;
+            }
+            const auto alpha_numeric = [](unsigned char byte)
+            {
+                return (byte >= 'A' && byte <= 'Z') ||
+                       (byte >= 'a' && byte <= 'z') ||
+                       (byte >= '0' && byte <= '9');
+            };
+            const unsigned char first = static_cast<unsigned char>(process.front());
+            if (!alpha_numeric(first) && first != '_')
+            {
+                return false;
+            }
+            for (const unsigned char byte : process)
+            {
+                if (!alpha_numeric(byte) && byte != '_' && byte != '.' && byte != ':' &&
+                    byte != '-')
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         const char *StateFor(const utils::TelemetryDelta &delta)
         {
             if (delta.mutations != 0)
@@ -79,6 +107,24 @@ namespace echidna::runtime
             return "installed";
         }
     } // namespace
+
+    bool RebindTelemetryPendingEpoch(uint64_t evidence_epoch,
+                                     uint64_t *pending_epoch,
+                                     utils::TelemetryDelta *pending,
+                                     size_t pending_count) noexcept
+    {
+        if (evidence_epoch == 0 || pending_epoch == nullptr || pending == nullptr ||
+            pending_count == 0 || *pending_epoch == evidence_epoch)
+        {
+            return false;
+        }
+        for (size_t index = 0; index < pending_count; ++index)
+        {
+            pending[index].clear();
+        }
+        *pending_epoch = evidence_epoch;
+        return true;
+    }
 
     std::string EncodeTelemetryV2(const utils::TelemetryDelta &delta,
                                   uint32_t sequence,
@@ -116,6 +162,35 @@ namespace echidna::runtime
         payload.append(R"(,"mutations":)");
         payload.append(std::to_string(delta.mutations));
         payload.append("}}");
+        if (payload.size() > kTelemetryV2MaxFrameBytes)
+        {
+            return {};
+        }
+        return payload;
+    }
+
+    std::string EncodeCaptureOwnerAckV1(std::string_view process,
+                                        uint64_t generation,
+                                        uint64_t handoff_token,
+                                        bool active)
+    {
+        if (!IsValidProcessName(process) || generation == 0 || handoff_token == 0 ||
+            generation > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
+            handoff_token > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+        {
+            return {};
+        }
+
+        std::string payload;
+        payload.reserve(384);
+        payload.append(R"({"schemaVersion":1,"type":"capture_owner_ack","process":)");
+        AppendJsonString(&payload, process);
+        payload.append(R"(,"generation":)");
+        payload.append(std::to_string(generation));
+        payload.append(R"(,"handoffToken":)");
+        payload.append(std::to_string(handoff_token));
+        payload.append(R"(,"active":)");
+        payload.append(active ? "true}" : "false}");
         if (payload.size() > kTelemetryV2MaxFrameBytes)
         {
             return {};

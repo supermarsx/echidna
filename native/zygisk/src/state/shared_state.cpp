@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <string_view>
+#include <thread>
 
 namespace echidna
 {
@@ -15,6 +16,10 @@ namespace echidna
     {
         namespace
         {
+            constexpr uint32_t kAudioAdmissionActiveMask = uint32_t{1} << 31;
+            constexpr uint32_t kAudioAdmissionInFlightMask =
+                ~kAudioAdmissionActiveMask;
+
             bool IsWhitelisted(const utils::ConfigurationSnapshot &snapshot,
                                std::string_view process)
             {
@@ -52,6 +57,36 @@ namespace echidna
             refreshFromSharedMemory();
         }
 
+        SharedState::AudioProcessingPermit::~AudioProcessingPermit()
+        {
+            if (owner_)
+            {
+                owner_->releaseAudioProcessing();
+            }
+        }
+
+        SharedState::AudioProcessingPermit::AudioProcessingPermit(
+            AudioProcessingPermit &&other) noexcept
+            : owner_(other.owner_)
+        {
+            other.owner_ = nullptr;
+        }
+
+        SharedState::AudioProcessingPermit &
+        SharedState::AudioProcessingPermit::operator=(AudioProcessingPermit &&other) noexcept
+        {
+            if (this != &other)
+            {
+                if (owner_)
+                {
+                    owner_->releaseAudioProcessing();
+                }
+                owner_ = other.owner_;
+                other.owner_ = nullptr;
+            }
+            return *this;
+        }
+
         int SharedState::status() const
         {
             return static_cast<int>(status_.load(std::memory_order_acquire));
@@ -87,14 +122,35 @@ namespace echidna
         {
             std::scoped_lock lock(mutex_);
             current_process_ = process;
-            audio_processing_allowed_.store(
-                cached_snapshot_.hooks_enabled && IsWhitelisted(cached_snapshot_, process),
-                std::memory_order_release);
+            setAudioProcessingAllowed(
+                cached_snapshot_.hooks_enabled && IsWhitelisted(cached_snapshot_, process));
         }
 
         bool SharedState::audioProcessingAllowed() const
         {
-            return audio_processing_allowed_.load(std::memory_order_acquire);
+            return (audio_processing_usage_.load(std::memory_order_acquire) &
+                    kAudioAdmissionActiveMask) != 0;
+        }
+
+        SharedState::AudioProcessingPermit SharedState::acquireAudioProcessing()
+        {
+            uint32_t usage = audio_processing_usage_.load(std::memory_order_acquire);
+            while ((usage & kAudioAdmissionActiveMask) != 0)
+            {
+                if ((usage & kAudioAdmissionInFlightMask) == kAudioAdmissionInFlightMask)
+                {
+                    return {};
+                }
+                if (audio_processing_usage_.compare_exchange_weak(
+                        usage,
+                        usage + 1,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire))
+                {
+                    return AudioProcessingPermit(this);
+                }
+            }
+            return {};
         }
 
         bool SharedState::hooksEnabled() const
@@ -145,10 +201,9 @@ namespace echidna
             std::scoped_lock lock(mutex_);
             cached_snapshot_ = snapshot;
             hooks_enabled_.store(snapshot.hooks_enabled, std::memory_order_release);
-            audio_processing_allowed_.store(
+            setAudioProcessingAllowed(
                 snapshot.hooks_enabled && !current_process_.empty() &&
-                    IsWhitelisted(snapshot, current_process_),
-                std::memory_order_release);
+                IsWhitelisted(snapshot, current_process_));
             if (!snapshot.profile.empty())
             {
                 profile_ = snapshot.profile;
@@ -168,6 +223,28 @@ namespace echidna
         const utils::TelemetryAccumulator &SharedState::telemetry() const
         {
             return telemetry_accumulator_;
+        }
+
+        void SharedState::setAudioProcessingAllowed(bool allowed)
+        {
+            if (allowed)
+            {
+                audio_processing_usage_.fetch_or(kAudioAdmissionActiveMask,
+                                                 std::memory_order_release);
+                return;
+            }
+            audio_processing_usage_.fetch_and(kAudioAdmissionInFlightMask,
+                                              std::memory_order_acq_rel);
+            while ((audio_processing_usage_.load(std::memory_order_acquire) &
+                    kAudioAdmissionInFlightMask) != 0)
+            {
+                std::this_thread::yield();
+            }
+        }
+
+        void SharedState::releaseAudioProcessing()
+        {
+            audio_processing_usage_.fetch_sub(1, std::memory_order_release);
         }
 
     } // namespace state

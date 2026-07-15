@@ -75,6 +75,13 @@ namespace
                R"("engineMode":"native_first"}})";
     }
 
+    std::string CapturePolicyFrame(uint64_t handoff_token, std::string_view policy)
+    {
+        return std::string(
+                   R"({"schemaVersion":1,"type":"capture_policy","handoffToken":)") +
+               std::to_string(handoff_token) + R"(,"policy":)" + std::string(policy) + "}";
+    }
+
     bool WaitUntil(const std::function<bool()> &predicate,
                    std::chrono::milliseconds timeout)
     {
@@ -235,11 +242,33 @@ namespace
         return true;
     }
 
+    ssize_t RejectCriticalSend(int, const void *, size_t, int)
+    {
+        errno = EAGAIN;
+        return -1;
+    }
+
     bool SendFrame(int fd, std::string_view payload)
     {
         const uint32_t network_length = htonl(static_cast<uint32_t>(payload.size()));
         return SendBytes(fd, &network_length, sizeof(network_length)) &&
                SendBytes(fd, payload.data(), payload.size());
+    }
+
+    bool ReceiveFrame(int fd, std::string *payload)
+    {
+        uint32_t network_length = 0;
+        if (!ReadBytes(fd, &network_length, sizeof(network_length)))
+        {
+            return false;
+        }
+        const uint32_t length = ntohl(network_length);
+        if (length == 0 || length > echidna::runtime::kProfileSyncMaxEnvelopeBytes)
+        {
+            return false;
+        }
+        payload->assign(length, '\0');
+        return ReadBytes(fd, payload->data(), payload->size());
     }
 
     void TestSocketNegotiationAndInterruptibleStop()
@@ -252,10 +281,21 @@ namespace
         }
 
         std::atomic<int> callbacks{0};
+        std::vector<echidna::runtime::DecodedProfileSnapshot> snapshots;
+        echidna::runtime::ProfileSyncServer *server_pointer = nullptr;
         echidna::runtime::ProfileSyncServer server(
             std::string(kProcess),
-            [&](const echidna::runtime::DecodedProfileSnapshot &)
+            [&](const echidna::runtime::DecodedProfileSnapshot &snapshot)
             {
+                snapshots.push_back(snapshot);
+                if (server_pointer)
+                {
+                    (void)server_pointer->reportCaptureRouteState(
+                        snapshot.generation,
+                        snapshot.handoff_token,
+                        snapshot.connection_epoch,
+                        snapshot.nativeProcessAdmitted());
+                }
                 callbacks.fetch_add(1, std::memory_order_release);
             },
             [](std::string_view)
@@ -263,6 +303,7 @@ namespace
                 return true;
             },
             static_cast<int64_t>(::getuid()));
+        server_pointer = &server;
         server.start();
 
         pollfd listener_poll{listener, POLLIN, 0};
@@ -284,19 +325,47 @@ namespace
             return;
         }
 
-        std::string hello(echidna::runtime::kProfileSyncV2ZygiskHello.size(), '\0');
+        const std::string expected_hello =
+            std::string(echidna::runtime::kProfileSyncV3ZygiskHelloPrefix) +
+            std::string(kProcess) + "\n";
+        std::string hello(expected_hello.size(), '\0');
         CHECK(ReadBytes(client, hello.data(), hello.size()),
               "reader must send a complete negotiation hello");
-        CHECK(hello == echidna::runtime::kProfileSyncV2ZygiskHello,
-              "reader must negotiate the exact Zygisk v2 token");
+        CHECK(hello == expected_hello,
+              "reader must negotiate the exact process-bound Zygisk v3 token");
+        timeval publisher_timeout{};
+        publisher_timeout.tv_sec = 2;
+        CHECK(::setsockopt(client,
+                           SOL_SOCKET,
+                           SO_RCVTIMEO,
+                           &publisher_timeout,
+                           sizeof(publisher_timeout)) == 0,
+              "publisher must configure a bounded acknowledgement read");
 
-        CHECK(SendFrame(client, Envelope(100)), "publisher must send first framed policy");
+        CHECK(SendFrame(client, CapturePolicyFrame(7001, Envelope(100))),
+              "publisher must send first framed policy");
         CHECK(WaitUntil([&]()
                         { return callbacks.load(std::memory_order_acquire) == 1; },
                         2s),
               "reader must apply the initial policy frame");
         CHECK(echidna::state::SharedState::instance().audioProcessingAllowed(),
               "initial admitted policy must enable callback admission");
+        std::string acknowledgement;
+        CHECK(ReceiveFrame(client, &acknowledgement),
+              "installed native route must acknowledge the active generation");
+        CHECK(acknowledgement.find(R"("process":"com.example.app:capture")") !=
+                  std::string::npos &&
+                  acknowledgement.find(R"("generation":100)") != std::string::npos &&
+                  acknowledgement.find(R"("handoffToken":7001)") != std::string::npos &&
+                  acknowledgement.find(R"("active":true)") != std::string::npos,
+              "active acknowledgement must bind process, raw generation, and token");
+        const auto first_active = snapshots.back();
+        CHECK(!server.reportCaptureRouteState(99, 7001, first_active.connection_epoch, true) &&
+                  !server.reportCaptureRouteState(100, 7002, first_active.connection_epoch, true) &&
+                  !server.reportCaptureRouteState(100, 7001, first_active.connection_epoch + 1, true) &&
+                  !server.reportCaptureRouteState(100, 7001, first_active.connection_epoch, false) &&
+                  !server.reportCaptureRouteState(100, 7001, first_active.connection_epoch, true),
+              "wrong generation, token, epoch, state, and duplicate ACKs must fail closed");
 
         // EOF must revoke live admission but preserve the generation watermark.
         ::close(client);
@@ -324,9 +393,15 @@ namespace
         hello.assign(hello.size(), '\0');
         CHECK(ReadBytes(client, hello.data(), hello.size()),
               "reconnecting reader must renegotiate");
-        CHECK(hello == echidna::runtime::kProfileSyncV2ZygiskHello,
-              "reconnect hello must retain the exact v2 token");
-        CHECK(SendFrame(client, Envelope(100)),
+        CHECK(hello == expected_hello,
+              "reconnect hello must retain the exact process-bound v3 token");
+        CHECK(::setsockopt(client,
+                           SOL_SOCKET,
+                           SO_RCVTIMEO,
+                           &publisher_timeout,
+                           sizeof(publisher_timeout)) == 0,
+              "reconnected publisher must bound acknowledgement reads");
+        CHECK(SendFrame(client, CapturePolicyFrame(7002, Envelope(100))),
               "publisher must resend the exact retained generation");
         CHECK(WaitUntil([&]()
                         { return callbacks.load(std::memory_order_acquire) == 3; },
@@ -335,11 +410,20 @@ namespace
         CHECK(server.nativeProcessAdmitted() &&
                   echidna::state::SharedState::instance().audioProcessingAllowed(),
               "exact duplicate must restore the retained active snapshot");
+        CHECK(ReceiveFrame(client, &acknowledgement) &&
+                  acknowledgement.find(R"("generation":100)") != std::string::npos &&
+                  acknowledgement.find(R"("handoffToken":7002)") != std::string::npos,
+              "new authenticated socket incarnation must re-acknowledge retained policy");
+        CHECK(!server.reportCaptureRouteState(first_active.generation,
+                                              first_active.handoff_token,
+                                              first_active.connection_epoch,
+                                              true),
+              "a prior connection callback must not ACK a recycled descriptor incarnation");
 
         // The 750 ms timeout only bounds the cold initial frame. A healthy
         // connection must remain resident for later updates with no idle timeout.
         std::this_thread::sleep_for(900ms);
-        CHECK(SendFrame(client, Envelope(101)),
+        CHECK(SendFrame(client, CapturePolicyFrame(7003, Envelope(101))),
               "publisher must send a post-idle policy update");
         CHECK(WaitUntil([&]()
                         { return callbacks.load(std::memory_order_acquire) == 4; },
@@ -347,6 +431,22 @@ namespace
               "reader must keep consuming after the initial timeout window");
         CHECK(echidna::state::SharedState::instance().audioProcessingAllowed(),
               "admitted socket policy must enable the real callback admission gate");
+        CHECK(ReceiveFrame(client, &acknowledgement) &&
+                  acknowledgement.find(R"("generation":101)") != std::string::npos,
+              "later generation acknowledgement must preserve raw generation");
+
+        CHECK(SendFrame(client,
+                        CapturePolicyFrame(7004, Envelope(102, true, true, "lsposed"))),
+              "publisher must send native-owner revoke");
+        CHECK(WaitUntil([&]()
+                        { return callbacks.load(std::memory_order_acquire) == 5; },
+                        2s),
+              "native owner revoke must drain and notify the route callback");
+        CHECK(ReceiveFrame(client, &acknowledgement) &&
+                  acknowledgement.find(R"("generation":102)") != std::string::npos &&
+                  acknowledgement.find(R"("handoffToken":7004)") != std::string::npos &&
+                  acknowledgement.find(R"("active":false)") != std::string::npos,
+              "drained native route must acknowledge the exact inactive generation");
 
         const auto stop_started = std::chrono::steady_clock::now();
         server.stop();
@@ -361,6 +461,162 @@ namespace
         CHECK(::recv(client, &trailing, sizeof(trailing), 0) == 0,
               "stopped reader must close its publisher connection");
         ::close(client);
+        ::close(listener);
+    }
+
+    void TestColdDeniedPolicyIsTerminalWithoutReconnectChurn()
+    {
+        const int listener = CreatePublisherSocket();
+        CHECK(listener >= 0, "cold-deny publisher socket must bind");
+        if (listener < 0)
+        {
+            return;
+        }
+
+        std::atomic<int> callbacks{0};
+        echidna::runtime::ProfileSyncServer *server_pointer = nullptr;
+        echidna::runtime::ProfileSyncServer server(
+            std::string(kProcess),
+            [&](const echidna::runtime::DecodedProfileSnapshot &snapshot)
+            {
+                if (server_pointer)
+                {
+                    (void)server_pointer->reportCaptureRouteState(
+                        snapshot.generation,
+                        snapshot.handoff_token,
+                        snapshot.connection_epoch,
+                        snapshot.nativeProcessAdmitted());
+                }
+                callbacks.fetch_add(1, std::memory_order_release);
+            },
+            [](std::string_view)
+            {
+                return true;
+            },
+            static_cast<int64_t>(::getuid()));
+        server_pointer = &server;
+        server.start();
+
+        pollfd listener_poll{listener, POLLIN, 0};
+        CHECK(::poll(&listener_poll, 1, 2000) == 1,
+              "cold-deny reader must connect once");
+        int client = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+        CHECK(client >= 0, "cold-deny publisher must accept reader");
+        if (client < 0)
+        {
+            server.stop();
+            ::close(listener);
+            return;
+        }
+
+        const std::string expected_hello =
+            std::string(echidna::runtime::kProfileSyncV3ZygiskHelloPrefix) +
+            std::string(kProcess) + "\n";
+        std::string hello(expected_hello.size(), '\0');
+        CHECK(ReadBytes(client, hello.data(), hello.size()) && hello == expected_hello,
+              "cold-deny connection must authenticate the exact v3 process claim");
+        timeval timeout{};
+        timeout.tv_sec = 2;
+        CHECK(::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0,
+              "cold-deny ACK read must be bounded");
+
+        CHECK(SendFrame(client, CapturePolicyFrame(9001, Envelope(500, true, false))),
+              "publisher must send an explicit no-owner cold policy");
+        CHECK(WaitUntil([&]()
+                        { return callbacks.load(std::memory_order_acquire) == 1; },
+                        2s),
+              "cold denied policy must be applied as a terminal state");
+        std::string acknowledgement;
+        CHECK(ReceiveFrame(client, &acknowledgement) &&
+                  acknowledgement.find(R"("generation":500)") != std::string::npos &&
+                  acknowledgement.find(R"("handoffToken":9001)") != std::string::npos &&
+                  acknowledgement.find(R"("active":false)") != std::string::npos,
+              "cold denied policy must emit an authenticated inactive ACK");
+
+        std::this_thread::sleep_for(900ms);
+        listener_poll.revents = 0;
+        CHECK(::poll(&listener_poll, 1, 100) == 0,
+              "explicit cold denial must not hit the initial timeout and reconnect forever");
+        CHECK(SendFrame(client, CapturePolicyFrame(9002, Envelope(501, true, false))),
+              "cold-deny connection must remain resident for later policies");
+        CHECK(WaitUntil([&]()
+                        { return callbacks.load(std::memory_order_acquire) == 2; },
+                        2s) &&
+                  ReceiveFrame(client, &acknowledgement) &&
+                  acknowledgement.find(R"("handoffToken":9002)") != std::string::npos,
+              "resident denied connection must process and ACK later generations");
+
+        server.stop();
+        ::close(client);
+        ::close(listener);
+    }
+
+    void TestCriticalAcknowledgementFailureDisconnects()
+    {
+        const int listener = CreatePublisherSocket();
+        CHECK(listener >= 0, "critical-send publisher socket must bind");
+        if (listener < 0)
+        {
+            return;
+        }
+
+        std::atomic<bool> callback_done{false};
+        std::atomic<bool> acknowledgement_result{true};
+        echidna::runtime::ProfileSyncServer *server_pointer = nullptr;
+        echidna::runtime::ProfileSyncServer server(
+            std::string(kProcess),
+            [&](const echidna::runtime::DecodedProfileSnapshot &snapshot)
+            {
+                if (server_pointer)
+                {
+                    acknowledgement_result.store(
+                        server_pointer->reportCaptureRouteState(
+                            snapshot.generation,
+                            snapshot.handoff_token,
+                            snapshot.connection_epoch,
+                            snapshot.nativeProcessAdmitted()),
+                        std::memory_order_release);
+                }
+                callback_done.store(true, std::memory_order_release);
+            },
+            [](std::string_view)
+            {
+                return true;
+            },
+            static_cast<int64_t>(::getuid()),
+            RejectCriticalSend);
+        server_pointer = &server;
+        server.start();
+
+        pollfd listener_poll{listener, POLLIN, 0};
+        CHECK(::poll(&listener_poll, 1, 2000) == 1,
+              "critical-send reader must connect");
+        const int client = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+        CHECK(client >= 0, "critical-send publisher must accept reader");
+        if (client >= 0)
+        {
+            const std::string expected_hello =
+                std::string(echidna::runtime::kProfileSyncV3ZygiskHelloPrefix) +
+                std::string(kProcess) + "\n";
+            std::string hello(expected_hello.size(), '\0');
+            CHECK(ReadBytes(client, hello.data(), hello.size()) && hello == expected_hello,
+                  "critical-send connection must negotiate v3");
+            CHECK(SendFrame(client, CapturePolicyFrame(9100, Envelope(600))),
+                  "critical-send publisher must send active policy");
+            CHECK(WaitUntil([&]()
+                            { return callback_done.load(std::memory_order_acquire); },
+                            2s) &&
+                      !acknowledgement_result.load(std::memory_order_acquire),
+                  "ACK backpressure must be reported as a critical failure");
+            pollfd client_poll{client, POLLIN | POLLHUP, 0};
+            CHECK(::poll(&client_poll, 1, 2000) == 1,
+                  "critical ACK failure must interrupt the authenticated channel");
+            char byte = '\0';
+            CHECK(::recv(client, &byte, sizeof(byte), 0) == 0,
+                  "critical ACK failure must force endpoint replacement");
+            ::close(client);
+        }
+        server.stop();
         ::close(listener);
     }
 
@@ -499,6 +755,8 @@ int main()
     TestFrameInFlightDuringStopCannotPublishCallback();
     TestPublisherUidMismatchFailsClosed();
     TestSocketNegotiationAndInterruptibleStop();
+    TestColdDeniedPolicyIsTerminalWithoutReconnectChurn();
+    TestCriticalAcknowledgementFailureDisconnects();
 
     if (g_failures != 0)
     {

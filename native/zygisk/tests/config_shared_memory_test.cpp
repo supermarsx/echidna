@@ -2,8 +2,11 @@
 #include "state/shared_state.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -82,6 +85,34 @@ namespace
         CHECK(!state.isProcessWhitelisted("com.example.other:capture"),
               "unlisted packages must remain blocked");
     }
+
+    void TestAdmissionRevokeWaitsForDirectProcessingDrain()
+    {
+        using namespace std::chrono_literals;
+        auto &state = echidna::state::SharedState::instance();
+        echidna::utils::ConfigurationSnapshot admitted;
+        admitted.hooks_enabled = true;
+        admitted.process_whitelist = {"com.example.recorder"};
+        state.updateConfiguration(admitted);
+        state.prepareProcessAdmission("com.example.recorder:capture");
+
+        auto permit = state.acquireAudioProcessing();
+        CHECK(static_cast<bool>(permit), "admitted direct route must acquire a drain permit");
+        std::atomic<bool> revoke_done{false};
+        std::thread revoker([&]()
+                            {
+            state.updateConfiguration(echidna::utils::ConfigurationSnapshot{});
+            revoke_done.store(true, std::memory_order_release); });
+        std::this_thread::sleep_for(20ms);
+        CHECK(!revoke_done.load(std::memory_order_acquire),
+              "inactive acknowledgement gate must wait for an in-flight direct route");
+        permit = {};
+        revoker.join();
+        CHECK(revoke_done.load(std::memory_order_acquire) &&
+                  !state.audioProcessingAllowed() &&
+                  !state.acquireAudioProcessing(),
+              "revocation must finish only after drain and reject all new entrants");
+    }
 } // namespace
 
 int main()
@@ -90,6 +121,7 @@ int main()
     TestProfileUpdateOverwritesWithoutDeadlock();
     TestLongProfileIsNulTerminated();
     TestPackageWhitelistCoversColonProcess();
+    TestAdmissionRevokeWaitsForDirectProcessingDrain();
 
     if (g_failures != 0)
     {

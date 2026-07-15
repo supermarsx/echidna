@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "runtime/profile_sync_protocol.h"
+#include "runtime/telemetry_socket_exporter.h"
 
 namespace echidna
 {
@@ -33,7 +34,8 @@ namespace echidna
             ProfileSyncServer(std::string process_name,
                               SnapshotCallback callback,
                               PresetApplier preset_applier = {},
-                              int64_t expected_publisher_uid = -1);
+                              int64_t expected_publisher_uid = -1,
+                              TelemetrySendFn critical_send_fn = nullptr);
             ~ProfileSyncServer();
 
             /**
@@ -49,6 +51,25 @@ namespace echidna
 
             /** Current process-local native admission decision. */
             bool nativeProcessAdmitted() const;
+
+            /**
+             * Reports a fully applied capture-route state for the current
+             * process, generation, and authenticated publisher connection.
+             * Any critical write failure tears down the connection so a
+             * handoff can never advance on an acknowledgement that was lost.
+             */
+            bool reportCaptureRouteState(uint64_t generation,
+                                         uint64_t handoff_token,
+                                         uint64_t connection_epoch,
+                                         bool active);
+
+            /**
+             * Revokes a generation whose native route could not be applied and
+             * disconnects its publisher endpoint so control remains fail-closed.
+             */
+            bool rejectCaptureRouteState(uint64_t generation,
+                                         uint64_t handoff_token,
+                                         uint64_t connection_epoch);
 
             /**
              * @brief Starts the profile sync reader thread (idempotent).
@@ -75,28 +96,48 @@ namespace echidna
             // shutdowns it while holding client_mutex_ so a recycled fd can
             // never be touched by a concurrent teardown.
             int client_fd_{-1};
+            uint64_t client_epoch_{0};
             std::mutex client_mutex_;
+            std::mutex outbound_mutex_;
+            uint64_t acknowledged_generation_{0};
+            uint64_t acknowledged_handoff_token_{0};
+            uint64_t acknowledged_connection_epoch_{0};
+            bool acknowledged_active_{false};
+            bool has_acknowledgement_{false};
             std::string process_name_;
             SnapshotCallback callback_;
             std::mutex callback_mutex_;
             PresetApplier preset_applier_;
             int64_t expected_publisher_uid_{-1};
+            TelemetrySendFn critical_send_fn_{nullptr};
             mutable std::mutex state_mutex_;
             std::mutex wait_mutex_;
             std::mutex telemetry_wait_mutex_;
             std::condition_variable stop_requested_;
             uint64_t generation_{0};
+            uint64_t handoff_token_{0};
+            uint64_t policy_connection_epoch_{0};
             std::string generation_payload_;
             DecodedProfileSnapshot current_snapshot_;
             bool has_snapshot_{false};
             bool snapshot_published_{false};
+            uint64_t telemetry_epoch_{0};
+            uint64_t telemetry_generation_{0};
+            uint64_t telemetry_handoff_token_{0};
+            uint64_t telemetry_connection_epoch_{0};
+            bool telemetry_active_{false};
 
             void run();
             void runTelemetryExporter();
-            bool readAndApply(int client_fd);
+            bool readAndApply(int client_fd, uint64_t connection_epoch);
+            bool applyPolicyPayload(std::string_view payload,
+                                    uint64_t handoff_token,
+                                    uint64_t connection_epoch);
             bool waitBeforeReconnect(std::chrono::milliseconds delay);
             void revokeProcessAdmission(bool notify_callback);
             void dispatchSnapshot(const DecodedProfileSnapshot &snapshot);
+            void disableTelemetryLocked();
+            void dropAccumulatedTelemetry();
         };
 
     } // namespace runtime

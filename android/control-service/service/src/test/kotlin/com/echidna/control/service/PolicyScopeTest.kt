@@ -121,47 +121,6 @@ class PolicyScopeTest {
     }
 
     @Test
-    fun `capability policy is current scoped and control gated`() {
-        assertTrue(PublishedPolicyRegistry.publish(envelope(10L).toString()))
-        assertNull(
-            PublishedPolicyRegistry.capabilityForProcess(
-                "com.example.recorder",
-                "com.example.recorder",
-                nowEpochMs = 1_000L,
-            ),
-        )
-
-        val lsposedOwned = envelope(11L)
-        lsposedOwned.getJSONObject("captureOwners").put("com.example.recorder", "lsposed")
-        assertTrue(PublishedPolicyRegistry.publish(lsposedOwned.toString()))
-        val current = PublishedPolicyRegistry.capabilityForProcess(
-            "com.example.recorder",
-            "com.example.recorder",
-            nowEpochMs = 1_000L,
-        )
-        assertEquals(11L, current!!.generation)
-        assertTrue(String(current.preset).contains("recorder"))
-        assertNull(
-            PublishedPolicyRegistry.capabilityForProcess(
-                "com.example.recorder",
-                "com.example.recorder:remote",
-                1_000L,
-            ),
-        )
-
-        val bypassed = envelope(12L)
-        bypassed.getJSONObject("control").put("bypass", true)
-        assertTrue(PublishedPolicyRegistry.publish(bypassed.toString()))
-        assertNull(
-            PublishedPolicyRegistry.capabilityForProcess(
-                "com.example.recorder",
-                "com.example.recorder",
-                1_000L,
-            ),
-        )
-    }
-
-    @Test
     fun `registry preserves generation watermark and exact idempotence`() {
         val generationSeven = envelope(7L).toString()
         assertTrue(PublishedPolicyRegistry.publish(generationSeven))

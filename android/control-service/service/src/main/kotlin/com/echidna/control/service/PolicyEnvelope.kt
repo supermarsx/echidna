@@ -162,6 +162,32 @@ internal object PolicyEnvelopeCodec {
         )
     }
 
+    /** Process-scoped transport view with a coordinator-selected effective capture owner. */
+    fun encodeScopedForProcessWithOwner(
+        published: VersionedPolicyEnvelope,
+        packageName: String,
+        processName: String,
+        owner: String?,
+    ): String? {
+        if (!isValidPackageName(packageName) || !isValidProcessName(processName)) return null
+        if (processBase(processName) != packageName) return null
+        if (owner != null && owner !in CAPTURE_OWNERS) return null
+        val policyKeys = linkedSetOf(packageName, processName)
+        val scoped = scopeEnvelope(published.envelope, setOf(packageName), policyKeys)
+        val processAllowed = published.envelope.whitelist[processName]
+            ?: published.envelope.whitelist[packageName]
+            ?: false
+        val effectiveOwners = linkedMapOf<String, String>()
+        if (owner != null) effectiveOwners[processName] = owner
+        return encode(
+            scoped.copy(
+                whitelist = linkedMapOf(processName to processAllowed),
+                captureOwners = effectiveOwners,
+            ),
+            published.generation,
+        )
+    }
+
     private fun scopeEnvelope(
         envelope: PolicyEnvelope,
         packages: Set<String>,
