@@ -422,6 +422,142 @@ public final class LegacyPreprocessorSessionManagerTest {
     }
 
     @Test
+    public void telemetryPollsAtFourHertzOnlyForActiveCapabilityLease() {
+        Harness harness = new Harness();
+        harness.start(61);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+
+        harness.scheduler.advance(249L);
+        assertEquals(0, effect.telemetryReadCount);
+        harness.scheduler.advance(1L);
+        assertEquals(1, effect.telemetryReadCount);
+        assertEquals(1, harness.telemetry.snapshots.size());
+        LegacyPreprocessorSessionManager.TelemetrySnapshot reported =
+                LegacyPreprocessorSessionManager.decodeTelemetry(
+                        harness.telemetry.snapshots.get(0));
+        assertNotNull(reported);
+        assertEquals(61, reported.sessionId);
+        assertEquals(1L, reported.generation);
+
+        harness.manager.onStop(harness.record);
+        harness.scheduler.advance(1_000L);
+        assertEquals(1, effect.telemetryReadCount);
+        assertEquals(1, effect.releaseCount);
+
+        Harness revoked = new Harness();
+        revoked.start(62);
+        revoked.replySuccess(0);
+        revoked.scheduler.runReady();
+        FakeEffect revokedEffect = revoked.factory.created.get(0);
+        revoked.policy.eligible = false;
+        revoked.scheduler.advance(250L);
+        assertEquals(0, revokedEffect.telemetryReadCount);
+        assertEquals(1, revokedEffect.revokeCount);
+
+        Harness expired = new Harness();
+        expired.start(63);
+        expired.replySuccess(0);
+        expired.scheduler.runReady();
+        FakeEffect expiredEffect = expired.factory.created.get(0);
+        expired.clock.nowMs += 5_000L;
+        expired.scheduler.runReady();
+        assertEquals(0, expiredEffect.telemetryReadCount);
+        assertTrue(expired.diagnostics.codes.contains("capability_expired"));
+        assertEquals(1, expiredEffect.releaseCount);
+    }
+
+    @Test
+    public void telemetryRejectsReadFailuresWrongBindingsAndMalformedValues() {
+        Harness harness = new Harness();
+        harness.start(64);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+
+        effect.telemetryStatus = -5;
+        harness.scheduler.advance(250L);
+        effect.telemetryStatus = 48;
+        effect.telemetryError = new Exception("getParameter failed");
+        harness.scheduler.advance(250L);
+        effect.telemetryError = null;
+        effect.telemetryValues.add(new byte[48]);
+        effect.telemetryValues.add(telemetry(65, 1L, 1L, 3, 0, 0, 0, 0));
+        effect.telemetryValues.add(telemetry(64, 2L, 1L, 3, 0, 0, 0, 0));
+        effect.telemetryValues.add(telemetry(64, 1L, 1L, 3, 0, 0, 0, 0));
+        harness.scheduler.advance(250L);
+        harness.scheduler.advance(250L);
+        harness.scheduler.advance(250L);
+        harness.scheduler.advance(250L);
+
+        assertEquals(1, harness.telemetry.snapshots.size());
+        assertTrue(harness.diagnostics.codes.contains("telemetry_parameter_-5"));
+        assertTrue(harness.diagnostics.codes.contains("telemetry_read_failed"));
+        assertTrue(harness.diagnostics.codes.contains("telemetry_invalid"));
+        assertTrue(harness.diagnostics.codes.contains("telemetry_wrong_session"));
+        assertTrue(harness.diagnostics.codes.contains("telemetry_wrong_generation"));
+        assertTrue(harness.manager.ownsRoute(harness.record));
+    }
+
+    @Test
+    public void telemetrySequenceAndCountersAreMonotonicAcrossUint32Wrap() {
+        Harness harness = new Harness();
+        harness.start(66);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+        effect.telemetryValues.add(telemetry(
+                66, 1L, 0xffff_ffffL, 3,
+                0xffff_ffffL, 0xffff_ffffL, 0xffff_ffffL, 0xffff_ffffL));
+        effect.telemetryValues.add(telemetry(66, 1L, 0L, 3, 0L, 0L, 0L, 0L));
+        effect.telemetryValues.add(telemetry(66, 1L, 0L, 3, 0L, 0L, 0L, 0L));
+        effect.telemetryValues.add(telemetry(
+                66, 1L, 1L, 3, 0xffff_ffffL, 0L, 0L, 0L));
+
+        harness.scheduler.advance(250L);
+        harness.scheduler.advance(250L);
+        assertEquals(2, harness.telemetry.snapshots.size());
+        harness.scheduler.advance(250L);
+        harness.scheduler.advance(250L);
+        assertEquals(2, harness.telemetry.snapshots.size());
+        assertTrue(harness.diagnostics.codes.contains("telemetry_stale_sequence"));
+        assertTrue(harness.diagnostics.codes.contains("telemetry_counter_rollback"));
+
+        harness.telemetry.accept = false;
+        effect.telemetryValues.add(telemetry(66, 1L, 2L, 3, 1L, 1L, 0L, 0L));
+        harness.scheduler.advance(250L);
+        assertTrue(harness.diagnostics.codes.contains("telemetry_provider_unavailable"));
+        assertTrue(harness.manager.ownsRoute(harness.record));
+    }
+
+    @Test
+    public void telemetryDecoderRequiresExactCommittedEchtSchema() {
+        byte[] valid = telemetry(67, 9L, 4L, 7, 8L, 9L, 10L, 11L);
+        LegacyPreprocessorSessionManager.TelemetrySnapshot snapshot =
+                LegacyPreprocessorSessionManager.decodeTelemetry(valid);
+        assertNotNull(snapshot);
+        assertEquals(67, snapshot.sessionId);
+        assertEquals(9L, snapshot.generation);
+        assertEquals(4L, snapshot.sequence);
+        assertEquals(7, snapshot.flags);
+        assertEquals(11L, snapshot.mutations);
+
+        for (int offset : new int[] {0, 4, 6, 8, 44}) {
+            byte[] malformed = valid.clone();
+            malformed[offset] ^= 1;
+            assertEquals(null, LegacyPreprocessorSessionManager.decodeTelemetry(malformed));
+        }
+        byte[] badFlags = valid.clone();
+        badFlags[11] |= 8;
+        assertEquals(null, LegacyPreprocessorSessionManager.decodeTelemetry(badFlags));
+        byte[] zeroGeneration = valid.clone();
+        Arrays.fill(zeroGeneration, 16, 24, (byte) 0);
+        assertEquals(null, LegacyPreprocessorSessionManager.decodeTelemetry(zeroGeneration));
+        assertEquals(null, LegacyPreprocessorSessionManager.decodeTelemetry(new byte[47]));
+    }
+
+    @Test
     public void envelopeValidationRejectsWrongBindingsAndFutureIssueTime() {
         byte[] nonce = new byte[16];
         Arrays.fill(nonce, (byte) 7);
@@ -492,11 +628,39 @@ public final class LegacyPreprocessorSessionManagerTest {
         buffer.putLong(uuid.getLeastSignificantBits());
     }
 
+    private static byte[] telemetry(
+            int sessionId,
+            long generation,
+            long sequence,
+            int flags,
+            long blocks,
+            long frames,
+            long failures,
+            long mutations) {
+        return ByteBuffer.allocate(48)
+                .order(ByteOrder.BIG_ENDIAN)
+                .putInt(0x45434854)
+                .putShort((short) 1)
+                .putShort((short) 1)
+                .putShort((short) 48)
+                .putShort((short) flags)
+                .putInt(sessionId)
+                .putLong(generation)
+                .putInt((int) sequence)
+                .putInt((int) blocks)
+                .putInt((int) frames)
+                .putInt((int) failures)
+                .putInt((int) mutations)
+                .putInt(0)
+                .array();
+    }
+
     private static final class Harness {
         final Object record = new Object();
         final ManualClock clock = new ManualClock();
         final MutablePolicy policy = new MutablePolicy();
         final RecordingCapabilities capabilities = new RecordingCapabilities();
+        final RecordingTelemetry telemetry = new RecordingTelemetry();
         final RecordingEffectFactory factory = new RecordingEffectFactory();
         final RecordingDiagnostics diagnostics = new RecordingDiagnostics();
         final ManualScheduler scheduler = new ManualScheduler(clock);
@@ -513,6 +677,7 @@ public final class LegacyPreprocessorSessionManagerTest {
             manager = new LegacyPreprocessorSessionManager(
                     policy,
                     capabilities,
+                    telemetry,
                     effectFactory != null ? effectFactory : factory,
                     clock,
                     diagnostics,
@@ -565,6 +730,18 @@ public final class LegacyPreprocessorSessionManagerTest {
             assertTrue(
                     "missing diagnostic " + diagnostic + " in " + diagnostics.codes,
                     diagnostics.codes.contains(diagnostic));
+        }
+    }
+
+    private static final class RecordingTelemetry
+            implements LegacyPreprocessorSessionManager.TelemetryClient {
+        final List<byte[]> snapshots = new ArrayList<>();
+        boolean accept = true;
+
+        @Override
+        public boolean report(int sessionId, long generation, byte[] snapshot) {
+            snapshots.add(snapshot.clone());
+            return accept;
         }
     }
 
@@ -661,6 +838,13 @@ public final class LegacyPreprocessorSessionManagerTest {
         int releaseCount;
         byte[] lastAuthorizeParameter;
         Exception releaseError;
+        Exception telemetryError;
+        int telemetryStatus = 48;
+        byte[] telemetryOverride;
+        final Deque<byte[]> telemetryValues = new ArrayDeque<>();
+        long generation;
+        long telemetrySequence;
+        int telemetryReadCount;
 
         @Override
         public LegacyPreprocessorSessionManager.Descriptor descriptor() {
@@ -678,6 +862,7 @@ public final class LegacyPreprocessorSessionManagerTest {
                     parameter, LegacyPreprocessorSessionManager.AUTHORIZE_PARAMETER)) {
                 authorizeCount++;
                 lastAuthorizeParameter = parameter.clone();
+                generation = ByteBuffer.wrap(value).order(ByteOrder.BIG_ENDIAN).getLong(32);
                 return authorizeStatus;
             }
             if (Arrays.equals(parameter, LegacyPreprocessorSessionManager.REVOKE_PARAMETER)) {
@@ -685,6 +870,30 @@ public final class LegacyPreprocessorSessionManagerTest {
                 return revokeStatus;
             }
             throw new AssertionError("unexpected effect parameter");
+        }
+
+        @Override
+        public int getParameter(byte[] parameter, byte[] value) throws Exception {
+            assertArrayEquals(LegacyPreprocessorSessionManager.TELEMETRY_PARAMETER, parameter);
+            telemetryReadCount++;
+            if (telemetryError != null) throw telemetryError;
+            if (telemetryStatus == 48) {
+                byte[] snapshot = !telemetryValues.isEmpty()
+                        ? telemetryValues.removeFirst()
+                        : telemetryOverride != null
+                                ? telemetryOverride
+                                : telemetry(
+                                sessionId,
+                                generation,
+                                ++telemetrySequence,
+                                3,
+                                0,
+                                0,
+                                0,
+                                0);
+                System.arraycopy(snapshot, 0, value, 0, Math.min(snapshot.length, value.length));
+            }
+            return telemetryStatus;
         }
 
         @Override

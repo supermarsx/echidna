@@ -83,7 +83,7 @@ class EchidnaControlService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        authenticatedTelemetryStore = AuthenticatedTelemetryStore()
+        authenticatedTelemetryStore = AuthenticatedTelemetryRegistry.store
         syncBridge = ProfileSyncBridge(applicationContext, authenticatedTelemetryStore)
         profileStore = ProfileStore(File(filesDir, "profiles"), syncBridge)
         val rootExecutor = RootCommandExecutor()

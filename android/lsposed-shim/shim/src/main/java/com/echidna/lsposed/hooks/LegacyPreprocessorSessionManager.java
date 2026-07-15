@@ -30,6 +30,8 @@ final class LegacyPreprocessorSessionManager {
             0x45, 0x43, 0x48, 0x50, 0x00, 0x02, 0x00, 0x01};
     static final byte[] REVOKE_PARAMETER = {
             0x45, 0x43, 0x48, 0x50, 0x00, 0x02, 0x00, 0x02};
+    static final byte[] TELEMETRY_PARAMETER = {
+            0x45, 0x43, 0x48, 0x54, 0x00, 0x01, 0x00, 0x01};
     static final byte[] REVOKE_VALUE = {0};
 
     private static final long HEALTH_CHECK_MS = 250L;
@@ -38,6 +40,8 @@ final class LegacyPreprocessorSessionManager {
     private static final int MAX_SESSIONS = 64;
     private static final int MAX_PROCESS_BYTES = 255;
     private static final long MAX_PRESET_BYTES = 60L * 1024L;
+    private static final int TELEMETRY_VALUE_BYTES = 48;
+    private static final long UINT32_MASK = 0xffff_ffffL;
 
     interface PolicyAccess {
         Policy current();
@@ -63,6 +67,10 @@ final class LegacyPreprocessorSessionManager {
         void onFailure(String diagnostic);
     }
 
+    interface TelemetryClient {
+        boolean report(int sessionId, long generation, byte[] snapshot);
+    }
+
     interface EffectFactory {
         EffectHandle create(int sessionId) throws Exception;
     }
@@ -71,6 +79,7 @@ final class LegacyPreprocessorSessionManager {
         Descriptor descriptor() throws Exception;
         boolean hasControl() throws Exception;
         int setParameter(byte[] parameter, byte[] value) throws Exception;
+        int getParameter(byte[] parameter, byte[] value) throws Exception;
         int setEnabled(boolean enabled) throws Exception;
         void release() throws Exception;
     }
@@ -181,6 +190,7 @@ final class LegacyPreprocessorSessionManager {
         long healthToken;
         long pendingGeneration;
         long requestDeadlineMs;
+        TelemetrySnapshot telemetry;
 
         Session(Object record, int sessionId) {
             this.record = record;
@@ -190,6 +200,7 @@ final class LegacyPreprocessorSessionManager {
 
     private final PolicyAccess policyAccess;
     private final CapabilityClient capabilityClient;
+    private final TelemetryClient telemetryClient;
     private final EffectFactory effectFactory;
     private final Clock clock;
     private final Diagnostics diagnostics;
@@ -204,6 +215,7 @@ final class LegacyPreprocessorSessionManager {
     LegacyPreprocessorSessionManager(
             PolicyAccess policyAccess,
             CapabilityClient capabilityClient,
+            TelemetryClient telemetryClient,
             EffectFactory effectFactory,
             Clock clock,
             Diagnostics diagnostics,
@@ -212,6 +224,7 @@ final class LegacyPreprocessorSessionManager {
             RouteLeases leases) {
         this.policyAccess = policyAccess;
         this.capabilityClient = capabilityClient;
+        this.telemetryClient = telemetryClient;
         this.effectFactory = effectFactory;
         this.clock = clock;
         this.diagnostics = diagnostics;
@@ -494,6 +507,7 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         Policy policy = policyAccess.current();
+        long nowMs = clock.boottimeMs();
         try {
             if (session.effect == null || !session.effect.hasControl()) {
                 throw new EffectFailure("effect_control_lost");
@@ -501,6 +515,14 @@ final class LegacyPreprocessorSessionManager {
         } catch (Throwable error) {
             fallback(session, codeFor(error, "effect_control_check_failed"), error);
             return;
+        }
+        if (session.enabled && leases.contains(record)
+                && policy.eligible && policy.generation == session.generation) {
+            if (nowMs >= session.expiryMs) {
+                fallback(session, "capability_expired", null);
+                return;
+            }
+            pollTelemetry(session);
         }
         if (session.capabilityPending) {
             if (!policy.eligible) {
@@ -560,6 +582,7 @@ final class LegacyPreprocessorSessionManager {
         session.healthToken = 0L;
         session.pendingGeneration = 0L;
         session.requestDeadlineMs = 0L;
+        session.telemetry = null;
         session.effect = null;
         if (effect == null) {
             return;
@@ -605,6 +628,115 @@ final class LegacyPreprocessorSessionManager {
         }
         if (!effect.hasControl()) {
             throw new EffectFailure("effect_no_control");
+        }
+    }
+
+    private void pollTelemetry(Session session) {
+        byte[] raw = new byte[TELEMETRY_VALUE_BYTES];
+        try {
+            int status = session.effect.getParameter(TELEMETRY_PARAMETER, raw);
+            if (status != TELEMETRY_VALUE_BYTES) {
+                diagnostics.report("telemetry_parameter_" + status, null);
+                return;
+            }
+        } catch (Throwable error) {
+            diagnostics.report("telemetry_read_failed", error);
+            return;
+        }
+        TelemetrySnapshot snapshot = decodeTelemetry(raw);
+        if (snapshot == null) {
+            diagnostics.report("telemetry_invalid", null);
+            return;
+        }
+        if (snapshot.sessionId != session.sessionId) {
+            diagnostics.report("telemetry_wrong_session", null);
+            return;
+        }
+        if (snapshot.generation != session.generation) {
+            diagnostics.report("telemetry_wrong_generation", null);
+            return;
+        }
+        TelemetrySnapshot previous = session.telemetry;
+        if (previous != null) {
+            if (!newerUint32(snapshot.sequence, previous.sequence)) {
+                diagnostics.report("telemetry_stale_sequence", null);
+                return;
+            }
+            if (!forwardUint32(snapshot.blocks, previous.blocks)
+                    || !forwardUint32(snapshot.frames, previous.frames)
+                    || !forwardUint32(snapshot.failures, previous.failures)
+                    || !forwardUint32(snapshot.mutations, previous.mutations)) {
+                diagnostics.report("telemetry_counter_rollback", null);
+                return;
+            }
+        }
+        if (!telemetryClient.report(session.sessionId, session.generation, raw)) {
+            diagnostics.report("telemetry_provider_unavailable", null);
+            return;
+        }
+        session.telemetry = snapshot;
+    }
+
+    static TelemetrySnapshot decodeTelemetry(byte[] raw) {
+        if (raw == null || raw.length != TELEMETRY_VALUE_BYTES) {
+            return null;
+        }
+        ByteBuffer value = ByteBuffer.wrap(raw).order(ByteOrder.BIG_ENDIAN);
+        if (value.getInt() != 0x45434854 || value.getShort() != 1 || value.getShort() != 1
+                || value.getShort() != TELEMETRY_VALUE_BYTES) {
+            return null;
+        }
+        int flags = Short.toUnsignedInt(value.getShort());
+        int sessionId = value.getInt();
+        long generation = value.getLong();
+        long sequence = Integer.toUnsignedLong(value.getInt());
+        long blocks = Integer.toUnsignedLong(value.getInt());
+        long frames = Integer.toUnsignedLong(value.getInt());
+        long failures = Integer.toUnsignedLong(value.getInt());
+        long mutations = Integer.toUnsignedLong(value.getInt());
+        if ((flags & ~7) != 0 || generation <= 0L || value.getInt() != 0) {
+            return null;
+        }
+        return new TelemetrySnapshot(
+                sessionId, generation, sequence, flags, blocks, frames, failures, mutations);
+    }
+
+    private static boolean newerUint32(long next, long previous) {
+        long distance = (next - previous) & UINT32_MASK;
+        return distance >= 1L && distance <= 0x7fff_ffffL;
+    }
+
+    private static boolean forwardUint32(long next, long previous) {
+        return ((next - previous) & UINT32_MASK) <= 0x7fff_ffffL;
+    }
+
+    static final class TelemetrySnapshot {
+        final int sessionId;
+        final long generation;
+        final long sequence;
+        final int flags;
+        final long blocks;
+        final long frames;
+        final long failures;
+        final long mutations;
+
+        TelemetrySnapshot(
+                int sessionId,
+                long generation,
+                long sequence,
+                int flags,
+                long blocks,
+                long frames,
+                long failures,
+                long mutations) {
+            this.sessionId = sessionId;
+            this.generation = generation;
+            this.sequence = sequence;
+            this.flags = flags;
+            this.blocks = blocks;
+            this.frames = frames;
+            this.failures = failures;
+            this.mutations = mutations;
         }
     }
 
@@ -812,6 +944,7 @@ final class LegacyPreprocessorSessionManager {
         private final Method getDescriptor;
         private final Method hasControl;
         private final Method setParameter;
+        private final Method getParameter;
         private final Method setEnabled;
         private final Method release;
 
@@ -821,6 +954,8 @@ final class LegacyPreprocessorSessionManager {
             hasControl = effectClass.getMethod("hasControl");
             setParameter = effectClass.getDeclaredMethod("setParameter", byte[].class, byte[].class);
             setParameter.setAccessible(true);
+            getParameter = effectClass.getDeclaredMethod("getParameter", byte[].class, byte[].class);
+            getParameter.setAccessible(true);
             setEnabled = effectClass.getMethod("setEnabled", boolean.class);
             release = effectClass.getMethod("release");
         }
@@ -846,6 +981,11 @@ final class LegacyPreprocessorSessionManager {
         @Override
         public int setParameter(byte[] parameter, byte[] value) throws Exception {
             return (Integer) setParameter.invoke(effect, parameter, value);
+        }
+
+        @Override
+        public int getParameter(byte[] parameter, byte[] value) throws Exception {
+            return (Integer) getParameter.invoke(effect, parameter, value);
         }
 
         @Override

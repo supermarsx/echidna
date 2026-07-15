@@ -94,6 +94,7 @@ public final class AudioRecordHook {
                                         callback.onFailure(diagnostic);
                                     }
                                 }),
+                state::reportLegacyPreprocessorTelemetry,
                 new LegacyPreprocessorSessionManager.ReflectionEffectFactory(),
                 SystemClock::elapsedRealtime,
                 (code, error) -> XposedBridge.log(

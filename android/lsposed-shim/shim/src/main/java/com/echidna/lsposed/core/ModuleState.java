@@ -205,6 +205,12 @@ public final class ModuleState {
                 });
     }
 
+    public boolean reportLegacyPreprocessorTelemetry(
+            int audioSessionId, long generation, byte[] snapshot) {
+        return snapshotStore.reportLegacyPreprocessorTelemetry(
+                audioSessionId, generation, snapshot);
+    }
+
     public void invalidateAudioProcessingPermits() {
         policyEpoch.incrementAndGet();
     }

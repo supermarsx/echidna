@@ -34,6 +34,7 @@ final class ProfileSyncReceiver {
     private static final String TAG = "EchidnaPolicySync";
     private static final long RECONNECT_DELAY_MS = 1000L;
     private static final long CAPABILITY_PROVIDER_API_VERSION = 2L;
+    private static final long TELEMETRY_PROVIDER_API_VERSION = 3L;
     private static final ComponentName POLICY_COMPONENT = new ComponentName(
             "com.echidna.app",
             "com.echidna.control.service.PolicySnapshotService");
@@ -132,6 +133,45 @@ final class ProfileSyncReceiver {
         } catch (RejectedExecutionException error) {
             logFailure("capability request executor rejected work", error);
             return false;
+        }
+    }
+
+    boolean reportLegacyPreprocessorTelemetry(
+            int audioSessionId, long generation, byte[] snapshot) {
+        if (!started.get() || audioSessionId <= 0 || generation <= 0L
+                || snapshot == null || snapshot.length != 48) {
+            return false;
+        }
+        byte[] ownedSnapshot = snapshot.clone();
+        try {
+            executor.execute(() -> reportLegacyPreprocessorTelemetryOnExecutor(
+                    audioSessionId, generation, ownedSnapshot));
+            return true;
+        } catch (RejectedExecutionException error) {
+            logFailure("telemetry report executor rejected work", error);
+            return false;
+        }
+    }
+
+    private void reportLegacyPreprocessorTelemetryOnExecutor(
+            int audioSessionId, long generation, byte[] snapshot) {
+        IEchidnaPolicyProvider connected = provider;
+        if (connected == null) {
+            return;
+        }
+        try {
+            if (connected.getApiVersion() < TELEMETRY_PROVIDER_API_VERSION) {
+                return;
+            }
+            connected.reportLegacyPreprocessorTelemetry(
+                    audioSessionId, processName, generation, snapshot);
+        } catch (RemoteException error) {
+            if (!connected.asBinder().isBinderAlive()) {
+                logFailure("telemetry provider disconnected", error);
+                failClosedAndReconnect();
+            }
+        } catch (RuntimeException error) {
+            logFailure("telemetry provider report failed", error);
         }
     }
 

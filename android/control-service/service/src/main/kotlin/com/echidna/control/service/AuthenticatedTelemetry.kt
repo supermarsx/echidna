@@ -73,6 +73,7 @@ internal data class AuthenticatedTelemetryFrame(
     val generation: Long,
     val state: AuthenticatedTelemetryState,
     val deltas: AuthenticatedTelemetryDeltas,
+    val audioSessionId: Int = 0,
 )
 
 internal data class AuthenticatedPeer(
@@ -357,6 +358,7 @@ private data class TelemetryEntryKey(
     val process: String,
     val route: AuthenticatedTelemetryRoute,
     val generation: Long,
+    val audioSessionId: Int,
 )
 
 private data class MutableTelemetryEntry(
@@ -386,6 +388,7 @@ internal data class AuthenticatedTelemetryEntry(
     val frames: Long,
     val failures: Long,
     val mutations: Long,
+    val audioSessionId: Int,
 )
 
 internal data class AuthenticatedTelemetrySnapshot(
@@ -487,6 +490,7 @@ internal data class AuthenticatedTelemetrySnapshot(
                 item.put("pid", entry.pid)
                 item.put("process", entry.process)
             }
+            if (entry.audioSessionId > 0) item.put("audioSessionId", entry.audioSessionId)
             routes.put(item)
         }
         root.put("routes", routes)
@@ -527,9 +531,24 @@ internal class AuthenticatedTelemetryStore(
         frame: AuthenticatedTelemetryFrame,
         peer: AuthenticatedPeer,
         currentPolicyGeneration: Long,
+    ): TelemetryRecordResult = recordAt(
+        frame,
+        peer,
+        currentPolicyGeneration,
+        clockMs(),
+    )
+
+    fun recordAt(
+        frame: AuthenticatedTelemetryFrame,
+        peer: AuthenticatedPeer,
+        currentPolicyGeneration: Long,
+        receivedAtMs: Long,
     ): TelemetryRecordResult = synchronized(lock) {
         val now = clockMs()
         pruneLocked(currentPolicyGeneration, now)
+        if (receivedAtMs <= 0L || receivedAtMs > now) {
+            return@synchronized TelemetryRecordResult.STALE_SEQUENCE
+        }
         if (currentPolicyGeneration <= 0L || frame.generation != currentPolicyGeneration) {
             return@synchronized TelemetryRecordResult.STALE_GENERATION
         }
@@ -539,6 +558,7 @@ internal class AuthenticatedTelemetryStore(
             process = frame.process,
             route = frame.route,
             generation = frame.generation,
+            audioSessionId = frame.audioSessionId,
         )
         val current = entries[key]
         if (current != null && !isNewerSequence(frame.sequence, current.sequence)) {
@@ -552,7 +572,7 @@ internal class AuthenticatedTelemetryStore(
             state = frame.state,
             sequence = frame.sequence,
             senderMonotonicMs = frame.senderMonotonicMs,
-            receivedAtMs = now,
+            receivedAtMs = receivedAtMs,
             lastMutationAtMs = null,
             blocks = 0L,
             frames = 0L,
@@ -562,8 +582,8 @@ internal class AuthenticatedTelemetryStore(
         next.state = frame.state
         next.sequence = frame.sequence
         next.senderMonotonicMs = frame.senderMonotonicMs
-        next.receivedAtMs = now
-        if (frame.deltas.mutations > 0L) next.lastMutationAtMs = now
+        next.receivedAtMs = receivedAtMs
+        if (frame.deltas.mutations > 0L) next.lastMutationAtMs = receivedAtMs
         next.blocks = saturatingAdd(next.blocks, frame.deltas.blocks)
         next.frames = saturatingAdd(next.frames, frame.deltas.frames)
         next.failures = saturatingAdd(next.failures, frame.deltas.failures)
@@ -593,6 +613,7 @@ internal class AuthenticatedTelemetryStore(
                 frames = value.frames,
                 failures = value.failures,
                 mutations = value.mutations,
+                audioSessionId = key.audioSessionId,
             )
         }
         AuthenticatedTelemetrySnapshot(currentPolicyGeneration, now, immutable)
@@ -609,6 +630,11 @@ internal class AuthenticatedTelemetryStore(
             }
         }
     }
+}
+
+/** Process-wide store shared by the privileged control and exported policy provider services. */
+internal object AuthenticatedTelemetryRegistry {
+    val store = AuthenticatedTelemetryStore()
 }
 
 private fun isNewerSequence(next: Long, previous: Long): Boolean {

@@ -7,10 +7,15 @@ import android.os.Binder
 import android.os.IBinder
 import android.os.RemoteCallbackList
 import android.os.RemoteException
+import android.os.SystemClock
 import android.util.Log
 import java.io.Closeable
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -34,12 +39,23 @@ class PolicySnapshotService : Service() {
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "echidna-policy-provider").apply { isDaemon = true }
     }
+    private val telemetryExecutor = ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(128),
+        { runnable -> Thread(runnable, "echidna-preprocessor-telemetry").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
     private val registrationLock = Any()
     private val registrations = mutableMapOf<IBinder, Registration>()
     private val pendingGeneration = AtomicLong(0L)
     private val invalidationScheduled = AtomicBoolean(false)
     private var registryObservation: Closeable? = null
     private lateinit var capabilityIssuer: LegacyCapabilityIssuer
+    private lateinit var issuanceLedger: LegacyCapabilityIssuanceLedger
+    private lateinit var telemetryRelay: LegacyPreprocessorTelemetryRelay
     private val callbacks = object : RemoteCallbackList<IEchidnaPolicyListener>() {
         override fun onCallbackDied(
             callback: IEchidnaPolicyListener?,
@@ -55,6 +71,12 @@ class PolicySnapshotService : Service() {
         super.onCreate()
         registryObservation = PublishedPolicyRegistry.observe(::scheduleInvalidation)
         val flagStore = LegacyPreprocessorFlagStore(applicationContext)
+        issuanceLedger = LegacyCapabilityIssuanceLedger()
+        telemetryRelay = LegacyPreprocessorTelemetryRelay(
+            issuanceLedger,
+            AuthenticatedTelemetryRegistry.store,
+            PublishedPolicyRegistry::generation,
+        )
         val signingExecutor = BoundedCapabilityExecutor()
         capabilityIssuer = LegacyCapabilityIssuer(
             enabled = flagStore::isEnabled,
@@ -78,6 +100,8 @@ class PolicySnapshotService : Service() {
         callbacks.kill()
         synchronized(registrationLock) { registrations.clear() }
         executor.shutdownNow()
+        telemetryExecutor.shutdownNow()
+        if (::issuanceLedger.isInitialized) issuanceLedger.clear()
         if (::capabilityIssuer.isInitialized) capabilityIssuer.close()
         super.onDestroy()
     }
@@ -149,23 +173,63 @@ class PolicySnapshotService : Service() {
                 )
                 return
             }
+            val request = LegacyCapabilityRequest(
+                uid = callingUid,
+                packageName = packageName,
+                processName = processName!!,
+                audioSessionId = audioSessionId,
+                generation = generation,
+                nonce = nonce?.clone() ?: ByteArray(0),
+            )
             capabilityIssuer.request(
-                LegacyCapabilityRequest(
-                    uid = callingUid,
-                    packageName = packageName,
-                    processName = processName!!,
-                    audioSessionId = audioSessionId,
-                    generation = generation,
-                    nonce = nonce?.clone() ?: ByteArray(0),
-                ),
+                request,
                 object : LegacyCapabilityResultSink {
                     override fun isAlive(): Boolean = callback.asBinder().isBinderAlive
 
                     override fun complete(result: LegacyCapabilityResult) {
+                        if (result.status == LegacyCapabilityStatus.OK) {
+                            issuanceLedger.record(callingPid, request, result)
+                        }
                         notifyCapability(callback, result)
                     }
                 },
             )
+        }
+
+        override fun reportLegacyPreprocessorTelemetry(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            snapshot: ByteArray?,
+        ) {
+            val callingUid = Binder.getCallingUid()
+            val callingPid = Binder.getCallingPid()
+            val receivedAtMs = SystemClock.elapsedRealtime()
+            val packageName = authorizeCapabilityCaller(callingUid, callingPid, processName)
+                ?: return
+            if (
+                packageName != processName?.substringBefore(':') ||
+                snapshot == null || snapshot.size != PREPROCESSOR_TELEMETRY_VALUE_BYTES
+            ) {
+                return
+            }
+            val ownedSnapshot = snapshot.clone()
+            val ownedProcess = processName
+            try {
+                telemetryExecutor.execute {
+                    telemetryRelay.report(
+                        callingUid,
+                        callingPid,
+                        ownedProcess,
+                        audioSessionId,
+                        generation,
+                        ownedSnapshot,
+                        receivedAtMs,
+                    )
+                }
+            } catch (_: RejectedExecutionException) {
+                // One-way diagnostics are best effort; saturation must not block Binder threads.
+            }
         }
     }
 

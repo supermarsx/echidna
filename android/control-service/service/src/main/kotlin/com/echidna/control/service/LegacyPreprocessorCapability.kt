@@ -25,7 +25,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal const val CAPABILITY_PROVIDER_API_VERSION = 2L
+internal const val CAPABILITY_PROVIDER_API_VERSION = PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION
 internal const val LEGACY_CAPABILITY_LIFETIME_MS = 5_000L
 internal const val LEGACY_CAPABILITY_FIXED_BODY_BYTES = 110
 internal const val LEGACY_CAPABILITY_MAX_PRESET_BYTES = 60 * 1024

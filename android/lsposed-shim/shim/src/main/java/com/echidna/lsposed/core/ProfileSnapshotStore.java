@@ -103,6 +103,14 @@ public final class ProfileSnapshotStore {
                         audioSessionId, generation, nonce, callback);
     }
 
+    boolean reportLegacyPreprocessorTelemetry(
+            int audioSessionId, long generation, byte[] snapshot) {
+        ProfileSyncReceiver current = receiver;
+        return current != null
+                && current.reportLegacyPreprocessorTelemetry(
+                        audioSessionId, generation, snapshot);
+    }
+
     synchronized void resetForTests() {
         snapshot.set(ProfileSnapshot.empty());
         version.set(0L);
