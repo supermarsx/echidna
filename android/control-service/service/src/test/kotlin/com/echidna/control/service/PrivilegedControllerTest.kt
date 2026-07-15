@@ -10,7 +10,9 @@ class PrivilegedControllerTest {
         val runner = RecordingInstallRunner()
         val controller = PrivilegedController(
             runner,
-            SelinuxStateProbe { SelinuxState.ENFORCING_WITH_POLICY },
+            SelinuxStateProbe {
+                SelinuxAssessment(SelinuxState.ENFORCING, policyToolAvailable = true)
+            },
         )
 
         controller.installModule("/data/local/tmp/echidna.zip")
@@ -19,6 +21,10 @@ class PrivilegedControllerTest {
         assertFalse(commandText.contains("magiskpolicy"))
         assertFalse(commandText.contains("dyntransition"))
         assertFalse(commandText.contains("allow zygote"))
+        val status = controller.lastKnownStatus()
+        assertTrue(status.policyToolAvailable)
+        assertFalse(status.policyAppliedVerified)
+        assertFalse(status.nativeRouteVerified)
     }
 
     @Test

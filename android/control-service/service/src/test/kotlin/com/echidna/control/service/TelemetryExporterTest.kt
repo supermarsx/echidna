@@ -92,8 +92,12 @@ class TelemetryExporterTest {
     private fun statusJson(): String = JSONObject()
         .put("magiskModuleInstalled", true)
         .put("zygiskEnabled", true)
-        .put("selinuxState", "ENFORCING_WITH_POLICY")
-        .put("selinuxStatus", "Enforcing (policy patched)")
+        .put("selinuxState", "ENFORCING")
+        .put("selinuxStatus", "Enforcing (policy and capture route unverified)")
+        .put("policyToolAvailable", true)
+        .put("policyAppliedVerified", false)
+        .put("nativeRouteVerified", false)
+        .put("javaFallbackRecommended", true)
         .put("lastError", "/data/user/0/com.example.voice/cache failed")
         .put(
             "audioStack",

@@ -26,9 +26,12 @@ class StatusJsonParsingTest {
             {
               "magiskModuleInstalled": true,
               "zygiskEnabled": true,
-              "selinuxState": "ENFORCING_WITH_POLICY",
-              "selinuxStatus": "Enforcing (policy patched)",
-              "javaFallbackActive": false,
+              "selinuxState": "ENFORCING",
+              "selinuxStatus": "Enforcing (policy and capture route unverified)",
+              "policyToolAvailable": true,
+              "policyAppliedVerified": false,
+              "nativeRouteVerified": false,
+              "javaFallbackRecommended": true,
               "cpu": {
                 "primaryAbi": "arm64-v8a",
                 "supportedAbis": ["arm64-v8a", "armeabi-v7a"],
@@ -63,9 +66,12 @@ class StatusJsonParsingTest {
         status!!
         assertTrue(status.magiskModuleInstalled)
         assertTrue(status.zygiskEnabled)
-        assertEquals("ENFORCING_WITH_POLICY", status.selinuxState)
-        assertEquals("Enforcing (policy patched)", status.selinuxStatus)
-        assertFalse(status.javaFallbackActive)
+        assertEquals("ENFORCING", status.selinuxState)
+        assertEquals("Enforcing (policy and capture route unverified)", status.selinuxStatus)
+        assertTrue(status.policyToolAvailable)
+        assertFalse(status.policyAppliedVerified)
+        assertFalse(status.nativeRouteVerified)
+        assertTrue(status.javaFallbackRecommended)
         assertEquals("arm64-v8a", status.cpu.primaryAbi)
         assertEquals(listOf("arm64-v8a", "armeabi-v7a"), status.cpu.supportedAbis)
         assertEquals("AArch64", status.cpu.cpuFamily)

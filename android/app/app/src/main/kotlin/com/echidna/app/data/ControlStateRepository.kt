@@ -934,7 +934,15 @@ object ControlStateRepository {
             if (stack.framesPerBuffer > 0) add("Frames per buffer: ${stack.framesPerBuffer}")
             add("Magisk module: ${if (status.magiskModuleInstalled) "installed" else "not installed"}")
             add("Zygisk: ${if (status.zygiskEnabled) "enabled" else "disabled"}")
-            if (status.javaFallbackActive) add("Java fallback active (LSPosed shim path)")
+            add(
+                "Policy tool: " +
+                    if (status.policyToolAvailable) "available (application unverified)" else "unverified",
+            )
+            add(
+                "Native capture route: " +
+                    if (status.nativeRouteVerified) "verified" else "unverified",
+            )
+            if (status.javaFallbackRecommended) add("LSPosed compatibility path recommended")
             status.notes?.let { add(it) }
             status.lastError?.let { add("Last error: $it") }
         }
@@ -964,7 +972,7 @@ object ControlStateRepository {
             lastError = status.lastError,
             // Re-derive active against the fresh install signal (a module that just dropped out
             // must not read Active); still gated on master/bypass.
-            active = engineActive(nativeInstalled)
+            active = engineActive(nativeInstalled, status.nativeRouteVerified)
         )
     }
 
@@ -990,8 +998,12 @@ object ControlStateRepository {
      * ~2s telemetry poll and the status card snaps back to Active (t5-e7). Reads the live master
      * and bypass flags, so callers must update those first.
      */
-    private fun engineActive(nativeInstalled: Boolean = _engineStatus.value.nativeInstalled): Boolean =
+    private fun engineActive(
+        nativeInstalled: Boolean = _engineStatus.value.nativeInstalled,
+        routeVerified: Boolean = _moduleStatus.value?.nativeRouteVerified == true,
+    ): Boolean =
         nativeInstalled &&
+            routeVerified &&
             _masterEnabled.value &&
             !_bypass.value &&
             (_panicUntilEpochMs.value <= 0L || System.currentTimeMillis() >= _panicUntilEpochMs.value)

@@ -304,8 +304,13 @@ private fun EnvironmentGroup(moduleStatus: ModuleStatus?) {
     )
     MetricRow(
         label = "Java fallback",
-        value = if (moduleStatus.javaFallbackActive) "active" else "inactive",
-        description = "LSPosed-shim path used when native hooking is unavailable."
+        value = if (moduleStatus.javaFallbackRecommended) "recommended" else "not recommended",
+        description = "Recommendation only; this does not prove an LSPosed route is active."
+    )
+    MetricRow(
+        label = "Native capture route",
+        value = if (moduleStatus.nativeRouteVerified) "verified" else "unverified",
+        description = "Requires recent transformed-buffer runtime proof."
     )
     MetricRow(
         label = "Audio HAL",
@@ -547,7 +552,10 @@ private fun buildRawStatusJson(
                 .put("zygiskEnabled", moduleStatus.zygiskEnabled)
                 .put("selinuxState", moduleStatus.selinuxState)
                 .put("selinuxStatus", moduleStatus.selinuxStatus)
-                .put("javaFallbackActive", moduleStatus.javaFallbackActive)
+                .put("policyToolAvailable", moduleStatus.policyToolAvailable)
+                .put("policyAppliedVerified", moduleStatus.policyAppliedVerified)
+                .put("nativeRouteVerified", moduleStatus.nativeRouteVerified)
+                .put("javaFallbackRecommended", moduleStatus.javaFallbackRecommended)
                 .put(
                     "cpu",
                     JSONObject()

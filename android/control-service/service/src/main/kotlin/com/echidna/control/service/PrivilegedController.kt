@@ -37,7 +37,10 @@ class PrivilegedController(
         magiskModuleInstalled = false,
         zygiskEnabled = false,
         selinuxState = SelinuxState.DISABLED,
-        javaFallbackActive = true,
+        policyToolAvailable = false,
+        policyAppliedVerified = false,
+        nativeRouteVerified = false,
+        javaFallbackRecommended = true,
         lastError = "status not yet queried",
     )
 
@@ -71,12 +74,17 @@ class PrivilegedController(
     fun refreshStatus(): ModuleStatus {
         val (installed, installError) = queryModuleInstallationState()
         val zygiskActive = queryZygisk()
-        val selinuxState = selinuxChecker.evaluate()
+        val selinux = selinuxChecker.evaluate()
         val status = ModuleStatus(
             magiskModuleInstalled = installed,
             zygiskEnabled = zygiskActive,
-            selinuxState = selinuxState,
-            javaFallbackActive = selinuxState == SelinuxState.ENFORCING_JAVA_ONLY,
+            selinuxState = selinux.state,
+            policyToolAvailable = selinux.policyToolAvailable,
+            // Tool presence is not evidence that the module policy was applied successfully.
+            policyAppliedVerified = false,
+            // A route becomes verified only from transformed-buffer runtime telemetry.
+            nativeRouteVerified = false,
+            javaFallbackRecommended = selinux.state == SelinuxState.ENFORCING,
             lastError = installError,
         )
         cachedStatus = status

@@ -15,32 +15,32 @@ private const val SELINUX_ENFORCE = "$SELINUX_FS/enforce"
  * Evaluates whether SELinux tweaks are possible on the current device.
  */
 fun interface SelinuxStateProbe {
-    fun evaluate(): SelinuxState
+    fun evaluate(): SelinuxAssessment
 }
 
 class SelinuxCompatChecker(private val rootExecutor: PrivilegedCommandRunner) : SelinuxStateProbe {
-    override fun evaluate(): SelinuxState {
+    override fun evaluate(): SelinuxAssessment {
         if (!isSelinuxEnabled()) {
             Log.w(TAG, "SELinux appears to be disabled; falling back to permissive flow")
-            return SelinuxState.DISABLED
+            return SelinuxAssessment(SelinuxState.DISABLED, policyToolAvailable = false)
         }
         if (!isSelinuxEnforcing()) {
             Log.i(TAG, "SELinux is already permissive; native engine may operate without extra policy")
-            return SelinuxState.PERMISSIVE
+            return SelinuxAssessment(SelinuxState.PERMISSIVE, policyToolAvailable = false)
         }
 
         val hasRoot = hasRootAccess()
         val policyToolPresent = if (hasRoot) hasMagiskPolicyBinary() else false
 
         return if (policyToolPresent && hasRoot) {
-            Log.i(TAG, "magiskpolicy available; attempting enforcing mode policy patch")
-            SelinuxState.ENFORCING_WITH_POLICY
+            Log.i(TAG, "magiskpolicy is available; policy application and capture route are unverified")
+            SelinuxAssessment(SelinuxState.ENFORCING, policyToolAvailable = true)
         } else {
             Log.w(
                 TAG,
-                "SELinux is enforcing and no policy tool detected; switching to Java-only mode",
+                "SELinux is enforcing and no policy tool was verified; native route is unverified",
             )
-            SelinuxState.ENFORCING_JAVA_ONLY
+            SelinuxAssessment(SelinuxState.ENFORCING, policyToolAvailable = false)
         }
     }
 

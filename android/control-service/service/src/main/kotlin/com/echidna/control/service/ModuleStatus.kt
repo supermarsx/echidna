@@ -9,7 +9,10 @@ data class ModuleStatus(
     val magiskModuleInstalled: Boolean,
     val zygiskEnabled: Boolean,
     val selinuxState: SelinuxState,
-    val javaFallbackActive: Boolean,
+    val policyToolAvailable: Boolean,
+    val policyAppliedVerified: Boolean,
+    val nativeRouteVerified: Boolean,
+    val javaFallbackRecommended: Boolean,
     val lastError: String? = null,
 ) {
     fun toJson(): String {
@@ -17,7 +20,10 @@ data class ModuleStatus(
         json.put("magiskModuleInstalled", magiskModuleInstalled)
         json.put("zygiskEnabled", zygiskEnabled)
         json.put("selinuxState", selinuxState.name)
-        json.put("javaFallbackActive", javaFallbackActive)
+        json.put("policyToolAvailable", policyToolAvailable)
+        json.put("policyAppliedVerified", policyAppliedVerified)
+        json.put("nativeRouteVerified", nativeRouteVerified)
+        json.put("javaFallbackRecommended", javaFallbackRecommended)
         if (!lastError.isNullOrEmpty()) {
             json.put("lastError", lastError)
         }
@@ -31,6 +37,10 @@ data class ModuleStatus(
 enum class SelinuxState {
     DISABLED,
     PERMISSIVE,
-    ENFORCING_WITH_POLICY,
-    ENFORCING_JAVA_ONLY,
+    ENFORCING,
 }
+
+data class SelinuxAssessment(
+    val state: SelinuxState,
+    val policyToolAvailable: Boolean,
+)

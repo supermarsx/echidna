@@ -1183,32 +1183,32 @@ private fun buildAdvisoryAlerts(
                     )
                 )
             }
-            if (status.zygiskEnabled && status.javaFallbackActive) {
+            if (status.zygiskEnabled && status.javaFallbackRecommended) {
                 add(
                     AdvisoryAlert(
-                        title = "Native and Java fallback paths both appear active",
-                        detail = "Avoid scoping the same target app into both Zygisk and LSPosed unless " +
-                            "you are explicitly testing duplicate-hook behavior.",
+                        title = "Native capture route remains unverified",
+                        detail = "Zygisk availability does not prove audio buffers were transformed. " +
+                            "Use LSPosed compatibility mode only for targets assigned to that owner.",
                         category = "Install mix-up"
                     )
                 )
             }
-            if (!status.zygiskEnabled && status.javaFallbackActive) {
+            if (!status.zygiskEnabled && status.javaFallbackRecommended) {
                 add(
                     AdvisoryAlert(
-                        title = "LSPosed fallback active without Zygisk",
-                        detail = "The Java fallback may catch some AudioRecord paths, but native " +
-                            "coverage is incomplete without the Zygisk module path.",
+                        title = "LSPosed compatibility mode recommended",
+                        detail = "No native route is verified. LSPosed may cover selected AudioRecord " +
+                            "targets after its scope and capture owner are configured.",
                         category = "Install mix-up"
                     )
                 )
             }
-            if (!status.magiskModuleInstalled && status.javaFallbackActive) {
+            if (!status.magiskModuleInstalled && status.javaFallbackRecommended) {
                 add(
                     AdvisoryAlert(
-                        title = "Java fallback without native module",
-                        detail = "The LSPosed shim can cover some AudioRecord apps, but the native DSP " +
-                            "module is missing. Expect partial coverage only.",
+                        title = "Native module missing; fallback is only a recommendation",
+                        detail = "The app has not verified an active LSPosed route. Install and scope " +
+                            "the shim before relying on Java AudioRecord coverage.",
                         category = "Install mix-up"
                     )
                 )

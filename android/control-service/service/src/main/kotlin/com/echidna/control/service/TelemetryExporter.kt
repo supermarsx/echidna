@@ -79,7 +79,10 @@ internal class TelemetryExporter(private val filesDir: File) {
         copyBoolean(input, output, "zygiskEnabled")
         copyString(input, output, "selinuxState")
         copyString(input, output, "selinuxStatus")
-        copyBoolean(input, output, "javaFallbackActive")
+        copyBoolean(input, output, "policyToolAvailable")
+        copyBoolean(input, output, "policyAppliedVerified")
+        copyBoolean(input, output, "nativeRouteVerified")
+        copyBoolean(input, output, "javaFallbackRecommended")
         input.optString("lastError", "").takeIf { it.isNotBlank() }?.let {
             output.put("lastError", redactText(it))
         }

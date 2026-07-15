@@ -344,19 +344,27 @@ class EchidnaControlService : Service() {
     private fun humanReadableSelinux(state: SelinuxState): String = when (state) {
         SelinuxState.DISABLED -> "Disabled"
         SelinuxState.PERMISSIVE -> "Permissive"
-        SelinuxState.ENFORCING_WITH_POLICY -> "Enforcing (policy patched)"
-        SelinuxState.ENFORCING_JAVA_ONLY -> "Enforcing (Java-only fallback)"
+        SelinuxState.ENFORCING -> "Enforcing (policy and capture route unverified)"
     }
 
-    private fun statusNotes(status: ModuleStatus): String = when {
-        status.javaFallbackActive ->
-            "SELinux is enforcing without a policy tool; running Java-only compatibility mode."
-        !status.magiskModuleInstalled ->
-            "Echidna Magisk module not detected; install it to enable the native engine."
-        !status.zygiskEnabled ->
-            "Zygisk is disabled; enable it in Magisk to hook target apps."
-        else -> ""
-    }
+    private fun statusNotes(status: ModuleStatus): String = buildList {
+        if (status.policyToolAvailable) {
+            add("magiskpolicy is available, but this does not prove module policy was applied.")
+        } else if (status.selinuxState == SelinuxState.ENFORCING) {
+            add("No usable policy tool was verified while SELinux is enforcing.")
+        }
+        if (!status.magiskModuleInstalled) {
+            add("Echidna Magisk module not detected; install it to enable the native engine.")
+        } else if (!status.zygiskEnabled) {
+            add("Zygisk is disabled; enable it in Magisk to hook target apps.")
+        }
+        if (!status.nativeRouteVerified) {
+            add("No recent transformed-buffer proof is available; runtime capture remains unverified.")
+        }
+        if (status.javaFallbackRecommended) {
+            add("LSPosed compatibility mode is recommended until a native route is verified.")
+        }
+    }.joinToString(" ")
 
     private fun dispatchPrivileged(action: () -> ModuleStatus) {
         executor.execute {
@@ -368,12 +376,15 @@ class EchidnaControlService : Service() {
                     magiskModuleInstalled = false,
                     zygiskEnabled = false,
                     selinuxState = SelinuxState.DISABLED,
-                    javaFallbackActive = true,
+                    policyToolAvailable = false,
+                    policyAppliedVerified = false,
+                    nativeRouteVerified = false,
+                    javaFallbackRecommended = true,
                     lastError = exception.message ?: "privileged action failed",
                 )
             }
-            if (status.javaFallbackActive) {
-                Log.w(TAG, "Native engine unavailable; Java-only mode active: ${status.lastError}")
+            if (status.javaFallbackRecommended) {
+                Log.w(TAG, "Native route unverified; Java compatibility mode recommended")
             } else {
                 Log.d(TAG, "Native engine status: ${status.toJson()}")
             }
@@ -433,7 +444,10 @@ class EchidnaControlService : Service() {
         json.put("zygiskEnabled", false)
         json.put("selinuxState", SelinuxState.DISABLED.name)
         json.put("selinuxStatus", humanReadableSelinux(SelinuxState.DISABLED))
-        json.put("javaFallbackActive", true)
+        json.put("policyToolAvailable", false)
+        json.put("policyAppliedVerified", false)
+        json.put("nativeRouteVerified", false)
+        json.put("javaFallbackRecommended", true)
         json.put("lastError", message)
         json.put("notes", message)
         return json.toString()
