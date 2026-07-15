@@ -28,6 +28,8 @@ ARG CMDLINE_TOOLS_VERSION=11076708
 ARG CMDLINE_TOOLS_SHA256=2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258
 # NDK r27. sdkmanager validates this revision against Google's signed manifest.
 ARG NDK_VERSION=27.0.12077973
+ARG ANDROID_PLATFORM_VERSION=34
+ARG ANDROID_BUILD_TOOLS_VERSION=34.0.0
 
 ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     ANDROID_HOME=/opt/android-sdk \
@@ -67,7 +69,10 @@ RUN set -eux; \
     mv /tmp/cmdline-tools/cmdline-tools "${ANDROID_SDK_ROOT}/cmdline-tools/latest"; \
     rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-tools; \
     yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null; \
-    "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}"; \
+    "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
+        "ndk;${NDK_VERSION}" \
+        "platforms;android-${ANDROID_PLATFORM_VERSION}" \
+        "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"; \
     chmod -R a+rX "${ANDROID_SDK_ROOT}"
 
 # Non-root by default. SDK/NDK are world-readable, so on Linux you may also pass

@@ -24,4 +24,5 @@ fi
 
 echo "echidna/native-build: NDK=${ANDROID_NDK} PLATFORM=${ANDROID_PLATFORM}"
 echo "ABIs: ${ECHIDNA_ABIS:-arm64-v8a armeabi-v7a x86_64}"
-exec bash tools/build_native_ndk.sh
+bash tools/build_native_ndk.sh
+bash tools/build_trust_helper.sh

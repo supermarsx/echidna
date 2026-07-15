@@ -28,6 +28,10 @@ ui_print "! ⚠️  Do not continue unless you can disable Magisk modules from r
 
 WARNINGS=0
 ZYGISK_STATUS_HELPER="$MODPATH/common/zygisk-status.sh"
+TRUST_BOOTSTRAP_HELPER="$MODPATH/common/trust-bootstrap.sh"
+TRUST_DEX_HELPER="$MODPATH/common/echidna-trust-helper.jar"
+TRUST_DIGEST="$MODPATH/common/release-cert-sha256"
+TRUST_MODE="$MODPATH/common/trust-mode"
 
 compat_warn() {
   WARNINGS=$((WARNINGS + 1))
@@ -242,6 +246,10 @@ require_payload "$MODPATH/libs/$PRIMARY_ABI/libech_dsp.so"
 require_payload "$MODPATH/post-fs-data.sh"
 require_payload "$MODPATH/service.sh"
 require_payload "$ZYGISK_STATUS_HELPER"
+require_payload "$TRUST_BOOTSTRAP_HELPER"
+require_payload "$TRUST_DEX_HELPER"
+require_payload "$TRUST_DIGEST"
+require_payload "$TRUST_MODE"
 optional_payload "$MODPATH/sepolicy.rule"
 if [ "$IS64BIT" = "true" ] && [ -n "$SECONDARY32_ABI" ]; then
   optional_payload "$MODPATH/zygisk/$SECONDARY32_ABI.so"
@@ -292,6 +300,10 @@ rm -rf "$MODPATH/libs"
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
+set_perm "$TRUST_BOOTSTRAP_HELPER" 0 0 0755
+set_perm "$TRUST_DEX_HELPER" 0 0 0644
+set_perm "$TRUST_DIGEST" 0 0 0444
+set_perm "$TRUST_MODE" 0 0 0444
 
 if [ "$WARNINGS" -gt 0 ]; then
   ui_print "! Install completed with $WARNINGS compatibility warning(s)."

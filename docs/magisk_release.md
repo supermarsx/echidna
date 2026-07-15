@@ -45,6 +45,10 @@ Intended disable paths:
 - **Automatic boot watchdog:** the watchdog is intended to disable Echidna after repeated boots
   that do not reach the late-start service. It is a last-resort guard, not a replacement for
   manual recovery knowledge.
+- **Trust re-enrolment:** inspect `/data/adb/echidna/trust/status.txt`. For an intentional companion
+  signer or capability-key replacement, disable the module first, remove the pending/active pin only
+  while disabled, reinstall the trusted app/module pair, then reboot. Never replace a pin under a
+  live audio service.
 
 The install path should be loud about compatibility before reboot. Hard requirements should abort
 the install where they are known locally, while device-compatibility signals should alert without
@@ -117,6 +121,10 @@ module.prop                     # id=echidna, version templated at package time
 post-fs-data.sh                 # watchdog + region creation, labels, and narrow policy
 service.sh                      # watchdog clear + runtime library staging
 common/zygisk-status.sh         # shared, read-only Zygisk state probe
+common/echidna-trust-helper.jar # module-owned app_process Dex helper (classes.dex)
+common/release-cert-sha256      # normalized exact companion release signer pin
+common/trust-mode               # production, or an explicit non-production development marker
+common/trust-bootstrap.sh       # late signer/UID/dataDir/SPKI verifier and next-boot pinning
 sepolicy.rule                   # narrow config/telemetry region types and grants
 ```
 
@@ -133,8 +141,14 @@ for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib
   plus pre-sized config/telemetry region files). It applies dedicated region types and narrow app
   read/write grants matching `sepolicy.rule`. It does not grant zygote transitions or binder access.
 - **`service.sh`** marks late-start as reached, clears the watchdog, recreates safe runtime
-  permissions, and stages `libechidna.so`. It does not patch service-private audio structures or
-  widen SELinux.
+  permissions, stages `libechidna.so`, and invokes the trust bootstrap nonfatally. Trust failure
+  leaves the legacy preprocessor identity-bypassed; it never blocks boot, widens SELinux, replaces a
+  live key, or restarts audioserver.
+
+The helper supports API 26–33 only. It verifies the current PackageManager signer, user-0
+UID/dataDir, and app-owned P-256 SPKI before staging a root-owned read-only copy under
+`trust/next-boot/`. A new pin is inert until reboot and a separate effect-packaging concern binds it
+to `/system/etc/echidna/preprocessor_controller_p256.spki`.
 
 Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
 `echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem
@@ -143,10 +157,12 @@ See [developer_readme.md](developer_readme.md#known-limitations).
 
 ## Script usage
 
-From the repo root, after the native build:
+From the repo root, after the native build, build the Dex helper and provide the normalized signer
+pin:
 
 ```sh
-tools/build_magisk_module.sh
+bash tools/build_trust_helper.sh
+RELEASE_CERT_SHA256=<64-hex-release-cert-digest> tools/build_magisk_module.sh
 # → out/echidna-magisk.zip
 ```
 
@@ -155,6 +171,9 @@ Environment overrides:
 - `ECHIDNA_ABIS` (default `arm64-v8a armeabi-v7a x86_64`)
 - `ECHIDNA_VERSION` (default `0.0.0`) / `ECHIDNA_VERSION_CODE` (default: digits of version, else 1)
 - `ECHIDNA_BUILD_ROOT` (default `<repo>/build`), `ECHIDNA_OUT_DIR`, `ECHIDNA_ZIP_PATH`
+- `RELEASE_CERT_SHA256` (required exact companion signer pin)
+- `ECHIDNA_TRUST_HELPER_JAR` (default `build/trust-helper/echidna-trust-helper.jar`)
+- `ECHIDNA_TRUST_MODE` (`production` by default; explicit `development` is not releasable)
 
 The `echidna/magisk-packager` docker image runs this step in a pinned environment (see
 [developer_readme.md](developer_readme.md#docker-helper-images)).

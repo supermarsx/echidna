@@ -24,6 +24,7 @@ FULL_ENVIRONMENT = {
     "RELEASE_STORE_PASSWORD": "store-password",
     "RELEASE_KEY_ALIAS": "release",
     "RELEASE_KEY_PASSWORD": "key-password",
+    "RELEASE_CERT_SHA256": "aa" * 32,
 }
 
 
@@ -59,7 +60,7 @@ class ReleaseSigningConfigurationTest(unittest.TestCase):
         self.assertIn("invalid base64 keystore", checker.validate_environment(malformed)[0])
         self.assertEqual([], checker.validate_environment(wrapped))
 
-    def test_optional_certificate_pin_is_normalized_and_validated(self) -> None:
+    def test_required_certificate_pin_is_normalized_and_validated(self) -> None:
         environment = {
             **FULL_ENVIRONMENT,
             "RELEASE_CERT_SHA256": "AA:" * 31 + "AA",
@@ -71,7 +72,14 @@ class ReleaseSigningConfigurationTest(unittest.TestCase):
         )
 
         invalid = {**FULL_ENVIRONMENT, "RELEASE_CERT_SHA256": "not-a-digest"}
-        self.assertIn("exactly 64 hex digits", checker.validate_environment(invalid)[0])
+        self.assertIn("forbidden characters", checker.validate_environment(invalid)[0])
+        wildcard = {**FULL_ENVIRONMENT, "RELEASE_CERT_SHA256": "aa" * 32 + "*"}
+        self.assertIn("wildcard", checker.validate_environment(wildcard)[0])
+        debug = {
+            **FULL_ENVIRONMENT,
+            "RELEASE_CERT_SHA256": next(iter(checker.KNOWN_ANDROID_DEBUG_CERTIFICATES)),
+        }
+        self.assertIn("debug certificate", checker.validate_environment(debug)[0])
 
     def test_release_workflow_fails_closed_before_tag_creation(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(

@@ -17,6 +17,9 @@
 #   ECHIDNA_BUILD_ROOT     per-ABI build root      (default "<repo>/build")
 #   ECHIDNA_OUT_DIR        staging dir             (default "<repo>/out/magisk")
 #   ECHIDNA_ZIP_PATH       output zip              (default "<repo>/out/echidna-magisk.zip")
+#   ECHIDNA_TRUST_MODE     production (default) or explicit development
+#   RELEASE_CERT_SHA256    exact companion release certificate pin (required)
+#   ECHIDNA_TRUST_HELPER_JAR prebuilt app_process Dex/JAR helper
 ###############################################################################
 set -euo pipefail
 
@@ -28,6 +31,10 @@ ABIS="${ECHIDNA_ABIS:-arm64-v8a armeabi-v7a x86_64}"
 BUILD_ROOT="${ECHIDNA_BUILD_ROOT:-${ROOT_DIR}/build}"
 OUT_DIR="${ECHIDNA_OUT_DIR:-${ROOT_DIR}/out/magisk}"
 ZIP_PATH="${ECHIDNA_ZIP_PATH:-${ROOT_DIR}/out/echidna-magisk.zip}"
+TRUST_MODE="${ECHIDNA_TRUST_MODE:-production}"
+TRUST_HELPER_JAR="${ECHIDNA_TRUST_HELPER_JAR:-${ROOT_DIR}/build/trust-helper/echidna-trust-helper.jar}"
+RELEASE_CERT_DIGEST_RAW="${ECHIDNA_RELEASE_CERT_SHA256:-${RELEASE_CERT_SHA256:-}}"
+KNOWN_DEBUG_CERT="b545a99be69d7a147d2ebbcd3614d11ce6fcb550660f181f2a20ce0dd835544b"
 
 VERSION="${ECHIDNA_VERSION:-0.0.0}"
 VERSION_CODE="${ECHIDNA_VERSION_CODE:-}"
@@ -59,6 +66,31 @@ require_repo_output_path() {
 # --- Preconditions ---------------------------------------------------------
 require_repo_output_path "staging directory" "${OUT_DIR}"
 require_repo_output_path "zip path" "${ZIP_PATH}"
+case "${TRUST_MODE}" in
+  production|development) ;;
+  *) die "ECHIDNA_TRUST_MODE must be production or development" ;;
+esac
+[[ -n "${RELEASE_CERT_DIGEST_RAW}" ]] \
+  || die "RELEASE_CERT_SHA256 is required; use explicit ECHIDNA_TRUST_MODE=development for debug pins"
+if printf '%s' "${RELEASE_CERT_DIGEST_RAW}" | grep -q '[^0-9A-Fa-f:[:space:]]'; then
+  die "RELEASE_CERT_SHA256 contains forbidden characters or a wildcard"
+fi
+RELEASE_CERT_DIGEST="$(printf '%s' "${RELEASE_CERT_DIGEST_RAW}" \
+  | tr -d '[:space:]:' | tr 'A-F' 'a-f')"
+[[ "${RELEASE_CERT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] \
+  || die "RELEASE_CERT_SHA256 must normalize to exactly 64 hex digits"
+[[ "${RELEASE_CERT_DIGEST}" != "$(printf '0%.0s' {1..64})" ]] \
+  || die "all-zero release certificate digest is forbidden"
+if [[ "${TRUST_MODE}" == production && "${RELEASE_CERT_DIGEST}" == "${KNOWN_DEBUG_CERT}" ]]; then
+  die "production module refuses the known Android debug certificate"
+fi
+if [[ "${TRUST_MODE}" == development ]]; then
+  echo "WARNING: building explicitly non-production trust mode" >&2
+fi
+[[ -f "${TRUST_HELPER_JAR}" ]] || die "trust helper missing: ${TRUST_HELPER_JAR}"
+command -v unzip >/dev/null 2>&1 || die "unzip is required to validate the trust helper"
+[[ "$(unzip -Z1 "${TRUST_HELPER_JAR}" | grep -cx 'classes.dex')" -eq 1 ]] \
+  || die "trust helper must contain exactly one classes.dex"
 [[ -f "${TEMPLATE_DIR}/module.prop" ]] || die "missing module.prop template at ${TEMPLATE_DIR}"
 [[ -f "${TEMPLATE_DIR}/customize.sh" ]] || die "missing customize.sh at ${TEMPLATE_DIR}"
 [[ -f "${TEMPLATE_DIR}/META-INF/com/google/android/update-binary" ]] \
@@ -69,6 +101,8 @@ require_repo_output_path "zip path" "${ZIP_PATH}"
 [[ -f "${TEMPLATE_DIR}/sepolicy.rule" ]] || die "missing sepolicy.rule at ${TEMPLATE_DIR}"
 [[ -f "${TEMPLATE_DIR}/common/zygisk-status.sh" ]] \
   || die "missing Zygisk status helper at ${TEMPLATE_DIR}/common/zygisk-status.sh"
+[[ -f "${TEMPLATE_DIR}/common/trust-bootstrap.sh" ]] \
+  || die "missing trust bootstrap at ${TEMPLATE_DIR}/common/trust-bootstrap.sh"
 [[ -f "${ROOT_DIR}/license.md" ]] || die "missing repository license at ${ROOT_DIR}/license.md"
 
 # Fail loudly if any required per-ABI artifact is missing.
@@ -97,11 +131,18 @@ cp "${TEMPLATE_DIR}/customize.sh" "${OUT_DIR}/customize.sh"
 cp "${MAGISK_SCRIPTS_DIR}/post-fs-data.sh" "${OUT_DIR}/post-fs-data.sh"
 cp "${MAGISK_SCRIPTS_DIR}/service.sh" "${OUT_DIR}/service.sh"
 cp "${TEMPLATE_DIR}/common/zygisk-status.sh" "${OUT_DIR}/common/zygisk-status.sh"
+cp "${TEMPLATE_DIR}/common/trust-bootstrap.sh" "${OUT_DIR}/common/trust-bootstrap.sh"
+cp "${TRUST_HELPER_JAR}" "${OUT_DIR}/common/echidna-trust-helper.jar"
+printf '%s\n' "${RELEASE_CERT_DIGEST}" > "${OUT_DIR}/common/release-cert-sha256"
+printf '%s\n' "${TRUST_MODE}" > "${OUT_DIR}/common/trust-mode"
 cp "${ROOT_DIR}/license.md" "${OUT_DIR}/LICENSE.md"
 chmod 0755 "${OUT_DIR}/customize.sh" "${OUT_DIR}/post-fs-data.sh" \
   "${OUT_DIR}/service.sh" "${OUT_DIR}/META-INF/com/google/android/update-binary"
 chmod 0644 "${OUT_DIR}/LICENSE.md"
 chmod 0644 "${OUT_DIR}/common/zygisk-status.sh"
+chmod 0755 "${OUT_DIR}/common/trust-bootstrap.sh"
+chmod 0444 "${OUT_DIR}/common/echidna-trust-helper.jar" \
+  "${OUT_DIR}/common/release-cert-sha256" "${OUT_DIR}/common/trust-mode"
 
 # SELinux policy: makes the config/telemetry region readable by hooked app
 # domains under enforcing SELinux (Magisk applies sepolicy.rule at boot).

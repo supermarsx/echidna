@@ -13,6 +13,7 @@ LAST_BOOT_OK="$FAILSAFE_DIR/last-boot-ok"
 TMP_DIR="/data/local/tmp/echidna"
 CONFIG_BIN="$TMP_DIR/echidna_config.bin"
 TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
+TRUST_BOOTSTRAP="$MODDIR/common/trust-bootstrap.sh"
 
 log() {
     echo "[echidna][service] $1"
@@ -88,6 +89,16 @@ install_library() {
     fi
 }
 
+bootstrap_preprocessor_trust() {
+    if [ ! -x "$TRUST_BOOTSTRAP" ]; then
+        log "Trust bootstrap helper missing; legacy preprocessor remains identity-bypassed"
+        return 0
+    fi
+    if ! "$TRUST_BOOTSTRAP" "$MODDIR"; then
+        log "Trust bootstrap rejected; boot continues with legacy preprocessor identity bypass"
+    fi
+}
+
 marker="$(manual_disable_marker 2>/dev/null || true)"
 if [ -n "$marker" ]; then
     engage_failsafe "manual disable marker present at $marker"
@@ -95,3 +106,4 @@ fi
 clear_boot_watchdog
 prepare_runtime_dir
 install_library
+bootstrap_preprocessor_trust

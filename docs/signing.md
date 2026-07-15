@@ -69,6 +69,33 @@ payloads, rejects debug certificates and unexpected native libraries, checks bot
 `RELEASE_CERT_SHA256`, and verifies the release bundles before upload. Missing or invalid signing
 material never falls back to a publishable debug-signed artifact.
 
+The same normalized `RELEASE_CERT_SHA256` is embedded in the production Magisk module. Packaging
+requires the pin and the API-26-compatible app-process trust helper; missing, wildcard, all-zero,
+malformed, and known Android-debug pins are rejected. A local debug pin is accepted only with
+explicit `ECHIDNA_TRUST_MODE=development`, and that module is labelled non-production.
+
+## Companion trust bootstrap
+
+On Android 26 through 33, late-start `service.sh` invokes a module-owned Dex helper through
+`app_process`. The helper asks `PackageManager` for `com.echidna.app`, verifies its user-0 UID and
+data directory, and requires its current signer to match the embedded release pin. API 26/27 uses
+`GET_SIGNATURES`; API 28 through 33 uses `SigningInfo`, requires one current signer, and validates
+that the bounded, duplicate-free signing lineage contains the current signer exactly once. An old
+lineage certificate never substitutes for the pinned current signer.
+
+Only after that check does the helper read
+`${applicationInfo.dataDir}/files/echidna/preprocessor_controller_p256.spki`. It requires an
+app-UID-owned `0700` parent, regular `0600` file, 1–1024 byte canonical P-256 DER SPKI, stable inode
+metadata, and no symlink. It atomically writes the exact bytes root-owned and read-only to the
+module's inert `trust/next-boot/` directory. Existing pending or active bytes must match; silent key
+rotation is refused.
+
+This concern does not register or ship the legacy effect. A later packaging concern must bind the
+pinned file to `/system/etc/echidna/preprocessor_controller_p256.spki`. The late service never
+hot-replaces that active path and never restarts audioserver. Any trust error leaves the
+preprocessor in identity bypass and records recovery details under
+`/data/adb/echidna/trust/status.txt`.
+
 ## Signing-certificate migration
 
 Android package upgrades require the new APK to use the same signing certificate as the installed

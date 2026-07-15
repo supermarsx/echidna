@@ -242,6 +242,7 @@ jobs:
     needs: prepare
     env:
       ECHIDNA_VERSION: ${{ needs.prepare.outputs.tag }}
+      RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -252,11 +253,21 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
+      - name: Set up JDK for trust helper
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: Install Android NDK r27
-        run: sdkmanager --install "ndk;27.0.12077973" > /dev/null
+        run: |
+          sdkmanager --install \
+            "ndk;27.0.12077973" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" > /dev/null
 
       - name: Install build tools (Ninja, zip)
         run: |
@@ -270,6 +281,9 @@ jobs:
           set -euo pipefail
           export ANDROID_NDK="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
           ANDROID_PLATFORM=android-26 bash tools/build_native_ndk.sh
+
+      - name: Build API26-compatible app_process trust helper
+        run: bash tools/build_trust_helper.sh
 
       # Packages the per-ABI engine (zygisk/<abi>.so) + DSP libs into a flashable
       # Magisk zip at out/echidna-magisk.zip (tools/build_magisk_module.sh, t2-e14).

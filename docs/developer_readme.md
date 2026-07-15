@@ -144,6 +144,12 @@ tag, then verifies every APK and bundle before publication. Minification/resourc
 disabled for the first release (reflection-sensitive AIDL/JNI/Compose/LSPosed entry points);
 enabling R8 with a proven keep-rule set is a documented follow-up.
 
+The normalized release certificate pin also gates the Magisk trust bootstrap. Release tooling
+builds a module-owned API-26-compatible Dex helper, embeds the pin, and refuses missing or
+debug-only production inputs. At late-start on API 26–33, the helper verifies PackageManager's
+current `com.echidna.app` signer, user-0 UID/dataDir, and app-owned P-256 SPKI before staging an
+inert root-owned next-boot pin. It does not package/register the legacy effect or replace a live key.
+
 ### Native per-ABI build (NDK)
 
 The device libraries are cross-compiled per ABI by `tools/build_native_ndk.sh`, which configures the

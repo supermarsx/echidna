@@ -17,6 +17,7 @@ RUN set -eux; \
     apk add --no-cache \
         bash \
         coreutils \
+        unzip \
         zip
 
 # Non-root packager. On Linux pass `--user "$(id -u):$(id -g)"` so the emitted

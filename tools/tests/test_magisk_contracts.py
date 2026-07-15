@@ -16,6 +16,7 @@ SERVICE = REPO_ROOT / "android" / "control-service" / "magisk" / "service.sh"
 SEPOLICY = REPO_ROOT / "magisk" / "sepolicy.rule"
 PACKAGER = REPO_ROOT / "tools" / "build_magisk_module.sh"
 ZYGISK_STATUS = REPO_ROOT / "magisk" / "common" / "zygisk-status.sh"
+TRUST_BOOTSTRAP = REPO_ROOT / "magisk" / "common" / "trust-bootstrap.sh"
 
 
 class MagiskContractsTest(unittest.TestCase):
@@ -48,6 +49,21 @@ class MagiskContractsTest(unittest.TestCase):
         packager = PACKAGER.read_text(encoding="utf-8")
         self.assertIn('"${TEMPLATE_DIR}/common/zygisk-status.sh"', packager)
         self.assertIn('"${OUT_DIR}/common/zygisk-status.sh"', packager)
+
+    def test_packager_requires_release_pin_and_dex_trust_helper(self) -> None:
+        self.assertTrue(TRUST_BOOTSTRAP.is_file())
+        packager = PACKAGER.read_text(encoding="utf-8")
+        for token in (
+            "RELEASE_CERT_SHA256 is required",
+            "ECHIDNA_TRUST_MODE:-production",
+            "known Android debug certificate",
+            "echidna-trust-helper.jar",
+            "classes.dex",
+            "release-cert-sha256",
+            "trust-mode",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, packager)
 
     def test_packager_guards_recursive_output_cleanup(self) -> None:
         packager = PACKAGER.read_text(encoding="utf-8")

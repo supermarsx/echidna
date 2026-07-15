@@ -161,10 +161,13 @@ falls back to debug signing when no release key is present; hosted publication f
 
 ### 4. Build the flashable Magisk module
 
-With the native outputs present under `build/<abi>/lib/`:
+With the native outputs present under `build/<abi>/lib/`, build the API-26 Dex helper and supply the
+exact normalized companion signer pin:
 
 ```sh
-ECHIDNA_VERSION=25.1 bash tools/build_magisk_module.sh
+bash tools/build_trust_helper.sh
+RELEASE_CERT_SHA256=<64-hex-release-cert-digest> \
+  ECHIDNA_VERSION=25.1 bash tools/build_magisk_module.sh
 # → out/echidna-magisk.zip
 ```
 
@@ -179,12 +182,19 @@ META-INF/com/google/android/{update-binary,updater-script}
 module.prop                (id=echidna, minMagisk=24000)
 customize.sh               (ABI-selects the DSP + JNI engine, aborts on API<26 or Magisk<24)
 post-fs-data.sh / service.sh (narrow runtime labels/permissions + boot watchdog/library staging)
+common/echidna-trust-helper.jar (PackageManager signer/UID/dataDir + P-256 SPKI verifier)
+common/{release-cert-sha256,trust-mode,trust-bootstrap.sh} (fail-closed late trust bootstrap)
 ```
 
 The script fails loudly if any per-ABI `libechidna.so` / `libech_dsp.so` is missing. It is
 parameterized via `ECHIDNA_ABIS`, `ECHIDNA_VERSION`, `ECHIDNA_VERSION_CODE`,
 `ECHIDNA_BUILD_ROOT`, `ECHIDNA_OUT_DIR`, `ECHIDNA_ZIP_PATH`. See
 [the Magisk release guide](magisk_release.md) for the on-device layout details.
+
+Production is the default and rejects a missing, malformed, wildcard, all-zero, or known debug
+signer pin and a missing/non-Dex helper. Local debug packaging requires explicit
+`ECHIDNA_TRUST_MODE=development` plus the exact debug certificate digest; that output is labelled
+non-production and must not be published.
 
 GitHub Releases publish these parts separately. For normal installs, use the companion APK and
 Magisk zip; add the LSPosed shim only when you need the Java fallback.
