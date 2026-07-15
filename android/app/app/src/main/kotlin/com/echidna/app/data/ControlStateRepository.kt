@@ -64,6 +64,8 @@ object ControlStateRepository {
     private val _bypass = MutableStateFlow(false)
     val bypass: StateFlow<Boolean> = _bypass.asStateFlow()
 
+    private val _panicUntilEpochMs = MutableStateFlow(0L)
+
     private val _sidetoneEnabled = MutableStateFlow(false)
     val sidetoneEnabled: StateFlow<Boolean> = _sidetoneEnabled.asStateFlow()
 
@@ -339,18 +341,31 @@ object ControlStateRepository {
         synchronizeServiceState()
     }
 
-    /**
-     * Engages global panic (spec §12): the service forces bypass, disables master,
-     * and records a panic expiry [holdMs] in the future that the engine honours.
-     */
+    /** Engages the time-bounded global panic gate without overwriting base controls (spec §12). */
     fun triggerPanic(holdMs: Long = PANIC_HOLD_MS) {
-        _masterEnabled.value = false
-        _bypass.value = true
+        val now = System.currentTimeMillis()
+        val deadline = when {
+            holdMs <= 0L -> 0L
+            holdMs >= Long.MAX_VALUE - now -> Long.MAX_VALUE
+            else -> now + holdMs
+        }
+        _panicUntilEpochMs.value = deadline
         _engineStatus.value = _engineStatus.value.copy(active = false)
-        commitSettingsChange()
         if (::serviceClient.isInitialized) {
-            synchronizeServiceState()
             scope.launch { serviceClient.triggerPanic(holdMs) }
+        }
+        if (deadline > 0L) {
+            scope.launch {
+                while (_panicUntilEpochMs.value == deadline) {
+                    val remainingMs = deadline - System.currentTimeMillis()
+                    if (remainingMs <= 0L) break
+                    delay(remainingMs)
+                }
+                if (_panicUntilEpochMs.value == deadline) {
+                    _panicUntilEpochMs.value = 0L
+                    _engineStatus.value = _engineStatus.value.copy(active = engineActive())
+                }
+            }
         }
     }
 
@@ -956,6 +971,7 @@ object ControlStateRepository {
     private fun applyControlState(state: ControlState) {
         _masterEnabled.value = state.masterEnabled
         _bypass.value = state.bypass
+        _panicUntilEpochMs.value = state.panicUntilEpochMs
         _sidetoneEnabled.value = state.sidetoneEnabled
         _dspEngineMode.value = state.engineMode
         // Only adopt a persisted gain that fits the slider range; ignore the 0.0 default.
@@ -968,13 +984,17 @@ object ControlStateRepository {
 
     /**
      * The engine counts as genuinely "active" only when the native engine is installed/running
-     * AND the user's master switch is on AND bypass is off. Telemetry polls must never force this
+     * AND the user's master switch is on, bypass is off, and no timed panic gate is active.
+     * Telemetry polls must never force this
      * true — otherwise turning Master off (or enabling Bypass) is silently overwritten on the next
      * ~2s telemetry poll and the status card snaps back to Active (t5-e7). Reads the live master
      * and bypass flags, so callers must update those first.
      */
     private fun engineActive(nativeInstalled: Boolean = _engineStatus.value.nativeInstalled): Boolean =
-        nativeInstalled && _masterEnabled.value && !_bypass.value
+        nativeInstalled &&
+            _masterEnabled.value &&
+            !_bypass.value &&
+            (_panicUntilEpochMs.value <= 0L || System.currentTimeMillis() >= _panicUntilEpochMs.value)
 
     /** Reads the persisted whitelist + app bindings back from the service (schema §2). */
     suspend fun fetchWhitelistBindings(): WhitelistBindings = withContext(Dispatchers.IO) {

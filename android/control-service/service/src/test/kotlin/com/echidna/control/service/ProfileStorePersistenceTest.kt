@@ -98,6 +98,42 @@ class ProfileStorePersistenceTest {
     }
 
     @Test
+    fun `panic deadline survives restart then clears without changing base controls`() {
+        val first = ProfileStore(tempDir, PayloadBridge())
+        first.panic(1_000L)
+        first.close()
+        assertTrue(first.awaitClosed())
+
+        val restarted = ProfileStore(tempDir, PayloadBridge())
+        val restored = JSONObject(restarted.buildControlStateJson())
+        assertTrue(restored.getBoolean("masterEnabled"))
+        assertFalse(restored.getBoolean("bypass"))
+        assertTrue(restored.getLong("panicUntilEpochMs") > System.currentTimeMillis())
+
+        val expiryWaitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3L)
+        while (
+            JSONObject(restarted.buildControlStateJson()).getLong("panicUntilEpochMs") != 0L &&
+            System.nanoTime() < expiryWaitDeadline
+        ) {
+            Thread.sleep(10L)
+        }
+        val recovered = JSONObject(restarted.buildControlStateJson())
+        assertEquals(0L, recovered.getLong("panicUntilEpochMs"))
+        assertTrue(recovered.getBoolean("masterEnabled"))
+        assertFalse(recovered.getBoolean("bypass"))
+        restarted.close()
+        assertTrue(restarted.awaitClosed())
+
+        val secondRestart = ProfileStore(tempDir, PayloadBridge())
+        assertEquals(
+            0L,
+            JSONObject(secondRestart.buildControlStateJson()).getLong("panicUntilEpochMs"),
+        )
+        secondRestart.close()
+        assertTrue(secondRestart.awaitClosed())
+    }
+
+    @Test
     fun `main lifecycle close returns before queued IO and persistence stays off caller thread`() {
         val blockerStarted = CountDownLatch(1)
         val unblock = CountDownLatch(1)

@@ -5,6 +5,8 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
@@ -28,6 +30,11 @@ class ProfileStore(
     storageDir: File,
     private val syncBridge: ProfileSyncChannel,
     private val executor: ExecutorService = Executors.newSingleThreadExecutor(),
+    private val panicScheduler: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "echidna-panic-expiry").apply { isDaemon = true }
+        },
+    private val nowEpochMs: () -> Long = System::currentTimeMillis,
 ) {
     private val lock = ReentrantReadWriteLock()
     private val storageFile = File(storageDir, "profiles.json")
@@ -37,6 +44,8 @@ class ProfileStore(
     private val flushLock = Any()
     private var pendingSnapshot: String? = null
     private var flushScheduled = false
+    private val panicTaskLock = Any()
+    private var panicExpiryTask: ScheduledFuture<*>? = null
     @Volatile private var closing = false
 
     /**
@@ -115,6 +124,11 @@ class ProfileStore(
             if (closing) return
             closing = true
         }
+        synchronized(panicTaskLock) {
+            panicExpiryTask?.cancel(false)
+            panicExpiryTask = null
+        }
+        panicScheduler.shutdownNow()
         executor.shutdown()
         // Service.onDestroy runs on Android's main thread. Enforce the timeout from a daemon
         // watchdog instead of joining the persistence worker from that lifecycle callback.
@@ -131,8 +145,14 @@ class ProfileStore(
 
     /** Test/process-teardown join; production lifecycle code calls non-blocking [close] only. */
     internal fun awaitClosed(timeoutMs: Long = CLOSE_DRAIN_TIMEOUT_MS): Boolean {
+        val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0L))
+        val deadlineNanos = System.nanoTime() + timeoutNanos
         try {
-            return executor.awaitTermination(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            if (!executor.awaitTermination(timeoutNanos, TimeUnit.NANOSECONDS)) {
+                return false
+            }
+            val remainingNanos = (deadlineNanos - System.nanoTime()).coerceAtLeast(0L)
+            return panicScheduler.awaitTermination(remainingNanos, TimeUnit.NANOSECONDS)
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             return false
@@ -263,14 +283,22 @@ class ProfileStore(
         scheduleFlush(snapshot)
     }
 
-    /** Engages panic: forces bypass and records an expiry the engine honours (spec §12). */
+    /**
+     * Engages the time-bounded panic gate without overwriting the user's base master/bypass state.
+     * The deadline is persisted and independently cleared so recovery survives process restarts.
+     */
     fun panic(holdMs: Long) {
+        val now = nowEpochMs()
+        val deadline = when {
+            holdMs <= 0L -> 0L
+            holdMs >= Long.MAX_VALUE - now -> Long.MAX_VALUE
+            else -> now + holdMs
+        }
         val snapshot = lock.write {
-            bypass = true
-            masterEnabled = false
-            panicUntilEpochMs = if (holdMs > 0L) System.currentTimeMillis() + holdMs else 0L
+            panicUntilEpochMs = deadline
             buildSnapshotLocked()
         }
+        schedulePanicExpiry(deadline)
         scheduleFlush(snapshot)
     }
 
@@ -334,6 +362,50 @@ class ProfileStore(
         }
     }
 
+    private fun schedulePanicExpiry(deadlineEpochMs: Long) {
+        synchronized(panicTaskLock) {
+            panicExpiryTask?.cancel(false)
+            panicExpiryTask = null
+            if (deadlineEpochMs <= 0L || closing || panicScheduler.isShutdown) {
+                return
+            }
+            val delayMs = (deadlineEpochMs - nowEpochMs()).coerceAtLeast(0L)
+            try {
+                panicExpiryTask = panicScheduler.schedule(
+                    { expirePanic(deadlineEpochMs) },
+                    delayMs,
+                    TimeUnit.MILLISECONDS,
+                )
+            } catch (exception: RuntimeException) {
+                Log.w(STORE_TAG, "Unable to schedule panic expiry", exception)
+            }
+        }
+    }
+
+    private fun expirePanic(expectedDeadlineEpochMs: Long) {
+        var rescheduleDeadline = 0L
+        val snapshot = lock.write {
+            if (panicUntilEpochMs != expectedDeadlineEpochMs) {
+                return@write null
+            }
+            if (nowEpochMs() < expectedDeadlineEpochMs) {
+                // Wall clocks can move backwards while a monotonic scheduled delay is pending.
+                rescheduleDeadline = expectedDeadlineEpochMs
+                return@write null
+            }
+            panicUntilEpochMs = 0L
+            buildSnapshotLocked()
+        }
+        if (rescheduleDeadline > 0L) {
+            schedulePanicExpiry(rescheduleDeadline)
+        } else if (snapshot != null) {
+            synchronized(panicTaskLock) {
+                panicExpiryTask = null
+            }
+            scheduleFlush(snapshot)
+        }
+    }
+
     private fun drainPendingSnapshots() {
         while (!Thread.currentThread().isInterrupted) {
             val snapshot = synchronized(flushLock) {
@@ -368,6 +440,7 @@ class ProfileStore(
             return
         }
         try {
+            var panicWasExpired = false
             val snapshot = readProfileStoreAtomic(storageFile).let { content ->
                 val json = JSONObject(content)
                 lock.write {
@@ -391,6 +464,10 @@ class ProfileStore(
                         masterEnabled = controlJson.optBoolean("masterEnabled", masterEnabled)
                         bypass = controlJson.optBoolean("bypass", bypass)
                         panicUntilEpochMs = controlJson.optLong("panicUntilEpochMs", panicUntilEpochMs)
+                        if (panicUntilEpochMs > 0L && panicUntilEpochMs <= nowEpochMs()) {
+                            panicUntilEpochMs = 0L
+                            panicWasExpired = true
+                        }
                         sidetoneEnabled = controlJson.optBoolean("sidetoneEnabled", sidetoneEnabled)
                         sidetoneGainDb = controlJson.optDouble("sidetoneGainDb", sidetoneGainDb)
                         val persistedEngineMode = controlJson.optString("engineMode", engineMode)
@@ -400,6 +477,11 @@ class ProfileStore(
                 }
             }
             syncBridge.pushProfiles(snapshot)
+            val panicDeadline = lock.read { panicUntilEpochMs }
+            schedulePanicExpiry(panicDeadline)
+            if (panicWasExpired) {
+                scheduleFlush(snapshot)
+            }
         } catch (e: Exception) {
             Log.w(STORE_TAG, "Unable to read persisted profiles", e)
         }

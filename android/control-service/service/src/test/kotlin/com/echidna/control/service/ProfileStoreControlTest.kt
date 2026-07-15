@@ -87,13 +87,25 @@ class ProfileStoreControlTest {
     }
 
     @Test
-    fun `panic forces bypass, disables master and records a future expiry`() {
+    fun `panic preserves base controls and records a future expiry`() {
         val before = System.currentTimeMillis()
         store.panic(60_000L)
         val control = awaitNextSnapshot().getJSONObject("control")
-        assertTrue(control.getBoolean("bypass"))
-        assertFalse(control.getBoolean("masterEnabled"))
+        assertFalse(control.getBoolean("bypass"))
+        assertTrue(control.getBoolean("masterEnabled"))
         assertTrue("expiry must be in the future", control.getLong("panicUntilEpochMs") >= before + 60_000L)
+    }
+
+    @Test
+    fun `panic expires and republishes recovered base controls`() {
+        store.panic(250L)
+        val engaged = awaitNextSnapshot().getJSONObject("control")
+        assertTrue(engaged.getLong("panicUntilEpochMs") > 0L)
+
+        val recovered = awaitNextSnapshot().getJSONObject("control")
+        assertEquals(0L, recovered.getLong("panicUntilEpochMs"))
+        assertTrue(recovered.getBoolean("masterEnabled"))
+        assertFalse(recovered.getBoolean("bypass"))
     }
 
     @Test

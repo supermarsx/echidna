@@ -72,15 +72,17 @@ class ControlServiceBindingInstrumentedTest {
     }
 
     @Test
-    fun panicSetsBypassAndExpiry() {
+    fun panicPreservesBaseControlsAndSetsExpiry() {
         val service = bind()
+        service.setMasterEnabled(true)
+        service.setBypass(false)
         service.triggerPanic(60_000L)
         val json = JSONObject(service.controlState)
-        assertTrue("panic engages bypass", json.getBoolean("bypass"))
+        assertTrue("panic preserves master", json.getBoolean("masterEnabled"))
+        assertFalse("panic preserves bypass", json.getBoolean("bypass"))
         assertTrue("panic records a future expiry", json.getLong("panicUntilEpochMs") > 0L)
         // Reset so sibling tests start from a clean control state.
-        service.setBypass(false)
-        service.setMasterEnabled(true)
+        service.triggerPanic(0L)
     }
 
     @Test
