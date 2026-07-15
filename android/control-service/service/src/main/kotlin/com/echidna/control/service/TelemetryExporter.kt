@@ -9,7 +9,11 @@ import org.json.JSONObject
 private const val OPT_IN_FILENAME = "telemetry_opt_in"
 private const val DIAGNOSTICS_SCHEMA = "echidna.diagnostics.v1"
 
-internal class TelemetryExporter(private val filesDir: File) {
+internal class TelemetryExporter(
+    private val filesDir: File,
+    private val authenticatedStore: AuthenticatedTelemetryStore = AuthenticatedTelemetryStore(),
+    private val generationProvider: () -> Long = PublishedPolicyRegistry::generation,
+) {
     private val reader = TelemetryReader()
     private val optInFile = File(filesDir, OPT_IN_FILENAME)
 
@@ -28,16 +32,17 @@ internal class TelemetryExporter(private val filesDir: File) {
     }
 
     fun snapshotJson(): String {
-        val snapshot = reader.snapshot()
-        return snapshot?.toJson(includeSamples = true) ?: "{}"
+        return authenticatedStore
+            .snapshot(generationProvider())
+            .toLiveJson(reader.snapshot())
     }
 
     fun exportAnonymized(includeTrends: Boolean): String {
         if (!isOptedIn()) {
             return "{}"
         }
-        val snapshot = reader.snapshot() ?: return "{}"
-        return if (includeTrends) snapshot.toJson(includeSamples = false) else snapshot.anonymizedJson()
+        val snapshot = authenticatedStore.snapshot(generationProvider())
+        return snapshot.toAnonymizedJson(includeTrends)
     }
 
     fun exportDiagnostics(
@@ -52,7 +57,9 @@ internal class TelemetryExporter(private val filesDir: File) {
         val status = sanitizeStatus(parseJson(statusJson))
         val whitelist = sanitizeWhitelist(parseJson(whitelistBindingsJson))
         val control = sanitizeControl(parseJson(controlStateJson))
-        val telemetry = reader.snapshot()?.diagnosticsJson(includeTrends) ?: JSONObject()
+        val telemetry = authenticatedStore
+            .snapshot(generationProvider())
+            .toDiagnosticsJson(includeTrends, reader.snapshot())
         return JSONObject()
             .put("schema", DIAGNOSTICS_SCHEMA)
             .put("privacy", privacyJson())

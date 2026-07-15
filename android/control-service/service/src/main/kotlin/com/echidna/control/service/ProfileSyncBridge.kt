@@ -152,8 +152,15 @@ internal class LatestFrameMailbox {
  * one-slot newest-frame mailbox, so neither ProfileStore locks nor the publisher state lock are
  * held during socket I/O. Legacy/no-hello readers receive one inert v1 document and are closed.
  */
-class ProfileSyncBridge(context: Context) : ProfileSyncChannel, Closeable {
-    private val publisher = ProfileSnapshotPublisher(context.applicationContext, SOCKET_NAME)
+internal class ProfileSyncBridge(
+    context: Context,
+    telemetryStore: AuthenticatedTelemetryStore = AuthenticatedTelemetryStore(),
+) : ProfileSyncChannel, Closeable {
+    private val publisher = ProfileSnapshotPublisher(
+        context.applicationContext,
+        SOCKET_NAME,
+        telemetryStore,
+    )
 
     init {
         publisher.start()
@@ -177,6 +184,7 @@ private data class PublishedSnapshot(
 private class ProfileSnapshotPublisher(
     private val context: Context,
     private val socketName: String,
+    private val telemetryStore: AuthenticatedTelemetryStore,
 ) : Closeable {
     private val running = AtomicBoolean(false)
     private val stateLock = Any()
@@ -312,9 +320,14 @@ private class ProfileSnapshotPublisher(
                 }
                 initialFrame = scoped?.let(ProfileSyncWire::encodeFrame)
                 if (initialFrame != null) {
-                    client = ProfileClient(socket, role, packageNames) { closed ->
-                        clients.remove(closed)
-                    }
+                    client = ProfileClient(
+                        socket = socket,
+                        role = role,
+                        packageNames = packageNames,
+                        peer = AuthenticatedPeer(credentials.uid, credentials.pid),
+                        telemetryStore = telemetryStore,
+                        onClosed = { closed -> clients.remove(closed) },
+                    )
                     client!!.offer(initialFrame!!)
                     clients.add(client!!)
                 }
@@ -376,6 +389,8 @@ private class ProfileClient(
     private val socket: LocalSocket,
     private val role: ProfileSyncClientRole,
     private val packageNames: Set<String>,
+    private val peer: AuthenticatedPeer,
+    private val telemetryStore: AuthenticatedTelemetryStore,
     private val onClosed: (ProfileClient) -> Unit,
 ) : Closeable {
     private val open = AtomicBoolean(true)
@@ -431,10 +446,23 @@ private class ProfileClient(
     private fun monitorInput() {
         try {
             val input = socket.inputStream
-            while (open.get() && input.read() >= 0) {
-                // Reserved for bounded client-to-service telemetry frames. It never writes policy.
+            val rateLimiter = PeerTelemetryRateLimiter()
+            while (open.get()) {
+                val frame = AuthenticatedTelemetryWire.readFrame(input) ?: return
+                if (!rateLimiter.allow(telemetryStore.nowMs())) {
+                    throw IOException("Telemetry peer exceeded the bounded receive rate")
+                }
+                if (!processBelongsToPeerPackages(frame.process, packageNames)) {
+                    throw IOException("Telemetry process is not owned by the authenticated peer")
+                }
+                telemetryStore.record(
+                    frame = frame,
+                    peer = peer,
+                    currentPolicyGeneration = PublishedPolicyRegistry.generation(),
+                )
             }
-        } catch (_: IOException) {
+        } catch (exception: IOException) {
+            Log.v(SYNC_TAG, "Dropping telemetry peer: ${exception.message}")
             // Closing the socket is also how the watchdog interrupts a blocked writer.
         } finally {
             close()

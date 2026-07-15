@@ -50,7 +50,7 @@ import java.util.Locale
  * detail that the standard panels omit — per audio-API hook status, audio-pipeline
  * counters, performance timing, the de-faked SELinux/HAL/Magisk environment probe, and
  * a raw status dump. Every value comes from a real flow ([TelemetrySnapshot] parsed from
- * the native shared-memory ring buffer, or [ModuleStatus] from the control service's
+ * authenticated native socket telemetry, or [ModuleStatus] from the control service's
  * getModuleStatus()). When the engine is not active — e.g. an unrooted device — the
  * telemetry-backed groups honestly show "unavailable"/"engine not active" rather than
  * fabricated zeros, and the environment probe still reports the real device state.
@@ -65,11 +65,8 @@ fun AdvancedDiagnosticsSection(
     bypass: Boolean
 ) {
     var expanded by remember { mutableStateOf(false) }
-    // The engine is only feeding live telemetry once it has processed audio callbacks or
-    // reported hook attempts; otherwise pipeline/performance numbers would be meaningless.
-    val telemetryLive = telemetry.totalCallbacks > 0L ||
-        telemetry.samples.isNotEmpty() ||
-        telemetry.hooks.isNotEmpty()
+    // Legacy shared-memory counters are explicitly unverified and cannot make the runtime live.
+    val telemetryLive = telemetry.hasVerifiedRuntimeTelemetry
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {

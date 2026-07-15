@@ -61,6 +61,7 @@ class EchidnaControlService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val telemetryExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor()
+    private lateinit var authenticatedTelemetryStore: AuthenticatedTelemetryStore
     private lateinit var syncBridge: ProfileSyncBridge
     private lateinit var profileStore: ProfileStore
     private lateinit var privilegedController: PrivilegedController
@@ -80,12 +81,13 @@ class EchidnaControlService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        syncBridge = ProfileSyncBridge(applicationContext)
+        authenticatedTelemetryStore = AuthenticatedTelemetryStore()
+        syncBridge = ProfileSyncBridge(applicationContext, authenticatedTelemetryStore)
         profileStore = ProfileStore(File(filesDir, "profiles"), syncBridge)
         val rootExecutor = RootCommandExecutor()
         val selinuxChecker = SelinuxCompatChecker(rootExecutor)
         privilegedController = PrivilegedController(rootExecutor, selinuxChecker)
-        telemetryExporter = TelemetryExporter(filesDir)
+        telemetryExporter = TelemetryExporter(filesDir, authenticatedTelemetryStore)
         audioStackProbe = AudioStackProbe(this)
         cpuArchProbe = CpuArchProbe()
         executor.execute {

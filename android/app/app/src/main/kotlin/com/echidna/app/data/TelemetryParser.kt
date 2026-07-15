@@ -6,6 +6,7 @@ import com.echidna.app.model.CpuArchInfo
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.HookTelemetry
 import com.echidna.app.model.ModuleStatus
+import com.echidna.app.model.RuntimeRouteTelemetry
 import com.echidna.app.model.TelemetrySample
 import com.echidna.app.model.TelemetrySnapshot
 import com.echidna.app.model.WhitelistBindings
@@ -38,6 +39,13 @@ internal object TelemetryParser {
 
         val samples = parseSamples(root.optJSONArray("samples"))
         val hooks = parseHooks(root.optJSONArray("hooks"))
+        val verifiedV2 = root.optInt("schemaVersion", 0) == 2 &&
+            root.optString("type", "") == "telemetrySnapshot" &&
+            root.optString("verification", "") == "authenticated_socket_v2"
+        val currentPolicyGeneration = root.optLong("currentPolicyGeneration", 0L)
+            .takeIf { verifiedV2 && it > 0L }
+            ?: 0L
+        val routes = if (verifiedV2) parseRuntimeRoutes(root.optJSONArray("routes")) else emptyList()
 
         return TelemetrySnapshot(
             totalCallbacks = totalCallbacks,
@@ -54,7 +62,10 @@ internal object TelemetryParser {
             xruns = xruns,
             warnings = warnings,
             samples = samples,
-            hooks = hooks
+            hooks = hooks,
+            verification = if (verifiedV2) "authenticated_socket_v2" else "unverified",
+            currentPolicyGeneration = currentPolicyGeneration,
+            routes = routes
         )
     }
 
@@ -186,4 +197,32 @@ internal object TelemetryParser {
         }
         return list
     }
+
+    private fun parseRuntimeRoutes(array: JSONArray?): List<RuntimeRouteTelemetry> {
+        if (array == null) return emptyList()
+        val count = array.length().coerceAtMost(MAX_RUNTIME_ROUTES)
+        val routes = ArrayList<RuntimeRouteTelemetry>(count)
+        for (index in 0 until count) {
+            val item = array.optJSONObject(index) ?: continue
+            val generation = item.optLong("generation", 0L)
+            val mutations = item.optLong("mutations", 0L)
+            if (generation <= 0L || mutations < 0L) continue
+            routes += RuntimeRouteTelemetry(
+                process = item.optString("process", ""),
+                route = item.optString("route", "unknown"),
+                generation = generation,
+                state = item.optString("state", "error"),
+                sequence = item.optLong("sequence", 0L),
+                ageMs = item.optLong("ageMs", Long.MAX_VALUE).coerceAtLeast(0L),
+                recentMutation = item.optBoolean("recentMutation", false),
+                blocks = item.optLong("blocks", 0L).coerceAtLeast(0L),
+                frames = item.optLong("frames", 0L).coerceAtLeast(0L),
+                failures = item.optLong("failures", 0L).coerceAtLeast(0L),
+                mutations = mutations,
+            )
+        }
+        return routes
+    }
+
+    private const val MAX_RUNTIME_ROUTES = 128
 }

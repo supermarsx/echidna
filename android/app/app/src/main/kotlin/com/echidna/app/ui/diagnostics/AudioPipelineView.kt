@@ -51,9 +51,8 @@ import java.util.Locale
  * reported `successes > 0`), the rest are dimmed with their honest per-hook status.
  *
  * All motion is gated on REAL data. The flow only animates (moving dots along the
- * connectors + a pulsing DSP node) when the engine is genuinely hooking AND processing
- * audio — an installed hook plus a non-zero processed-block counter
- * ([TelemetrySnapshot.totalCallbacks], the count of echidna_process_block invocations).
+ * connectors + a pulsing DSP node) only when authenticated telemetry reports a mutation for the
+ * current policy generation within the service's receive-side freshness window.
  * When the engine is idle / not hooking (e.g. an unrooted device) the pipeline is drawn
  * static and greyed with an explicit "not active" note — never faked motion.
  */
@@ -77,8 +76,9 @@ fun AudioPipelineView(
     val activeIndex = PIPELINE_HOOKS.indices.firstOrNull { (byIndex[it]?.successes ?: 0) > 0 }
     val activeHook = activeIndex?.let { byIndex[it] }
 
-    // echidna_process_block is running when the processed-block counter is non-zero.
-    val processing = telemetry.totalCallbacks > 0L
+    // Callback totals can be stale or legacy. Only a recent, current-generation mutation proves
+    // that output audio was actually transformed.
+    val processing = telemetry.isVerifiedProcessing
     val hooking = activeIndex != null
     // Only animate the live flow when a hook is installed AND blocks are being processed.
     val animate = hooking && processing

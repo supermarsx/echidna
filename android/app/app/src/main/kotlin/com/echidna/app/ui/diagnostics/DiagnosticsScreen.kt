@@ -106,7 +106,10 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                         )
                     }
                     item {
-                        AudioMetersCard(metrics = metrics, active = status.active)
+                        AudioMetersCard(
+                            metrics = metrics,
+                            active = status.active && telemetry.isVerifiedProcessing,
+                        )
                     }
                     item {
                         OverviewProbeCard(
@@ -150,7 +153,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                     item {
                         RuntimeStatsCard(
                             telemetry = telemetry,
-                            active = status.active
+                            active = telemetry.isVerifiedProcessing,
                         )
                     }
                 }
