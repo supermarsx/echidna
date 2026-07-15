@@ -23,6 +23,7 @@ public final class ProfileSnapshotStore {
             new AtomicReference<>(ProfileSnapshot.empty());
     private final AtomicLong version = new AtomicLong(0L);
     private final AtomicBoolean receiverStarted = new AtomicBoolean(false);
+    private volatile ProfileSyncReceiver receiver;
     private long highestGeneration;
     private String highestGenerationPayload = "";
 
@@ -79,8 +80,27 @@ public final class ProfileSnapshotStore {
     /** Lazily starts the background receiver exactly once per process. */
     public void ensureStarted(String packageName, String processName) {
         if (receiverStarted.compareAndSet(false, true)) {
-            new ProfileSyncReceiver(this, processName).start();
+            ProfileSyncReceiver next = new ProfileSyncReceiver(this, processName);
+            receiver = next;
+            next.start();
         }
+    }
+
+    interface LegacyCapabilityCallback {
+        void onResult(int status, long generation, byte[] envelope, String diagnostic);
+
+        void onFailure(String diagnostic);
+    }
+
+    boolean requestLegacyPreprocessorCapability(
+            int audioSessionId,
+            long generation,
+            byte[] nonce,
+            LegacyCapabilityCallback callback) {
+        ProfileSyncReceiver current = receiver;
+        return current != null
+                && current.requestLegacyPreprocessorCapability(
+                        audioSessionId, generation, nonce, callback);
     }
 
     synchronized void resetForTests() {
@@ -89,5 +109,6 @@ public final class ProfileSnapshotStore {
         highestGeneration = 0L;
         highestGenerationPayload = "";
         receiverStarted.set(false);
+        receiver = null;
     }
 }

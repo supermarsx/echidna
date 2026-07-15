@@ -26,6 +26,22 @@ public final class ModuleState {
         EchidnaStatus getStatus();
     }
 
+    public interface LegacyCapabilityCallback {
+        void onResult(int status, long generation, byte[] envelope, String diagnostic);
+
+        void onFailure(String diagnostic);
+    }
+
+    public static final class LegacyPreprocessorPolicy {
+        public final boolean eligible;
+        public final long generation;
+
+        LegacyPreprocessorPolicy(boolean eligible, long generation) {
+            this.eligible = eligible;
+            this.generation = generation;
+        }
+    }
+
     private static final class Holder {
         private static final ModuleState INSTANCE = new ModuleState(
                 ProfileSnapshotStore.getInstance(),
@@ -151,6 +167,46 @@ public final class ModuleState {
             policyEpoch.incrementAndGet();
         }
         nativeController.setBypass(isBypassActive());
+    }
+
+    public LegacyPreprocessorPolicy legacyPreprocessorPolicy() {
+        refreshPolicyIfNeeded(false);
+        long generation = snapshotStore.getSnapshot().generation();
+        return new LegacyPreprocessorPolicy(
+                generation > 0L && hooksActivated.get() && !isBypassActive(), generation);
+    }
+
+    public boolean requestLegacyPreprocessorCapability(
+            int audioSessionId,
+            long generation,
+            byte[] nonce,
+            LegacyCapabilityCallback callback) {
+        if (callback == null) {
+            return false;
+        }
+        return snapshotStore.requestLegacyPreprocessorCapability(
+                audioSessionId,
+                generation,
+                nonce,
+                new ProfileSnapshotStore.LegacyCapabilityCallback() {
+                    @Override
+                    public void onResult(
+                            int status,
+                            long callbackGeneration,
+                            byte[] envelope,
+                            String diagnostic) {
+                        callback.onResult(status, callbackGeneration, envelope, diagnostic);
+                    }
+
+                    @Override
+                    public void onFailure(String diagnostic) {
+                        callback.onFailure(diagnostic);
+                    }
+                });
+    }
+
+    public void invalidateAudioProcessingPermits() {
+        policyEpoch.incrementAndGet();
     }
 
     public static final long INVALID_AUDIO_PROCESSING_PERMIT = -1L;

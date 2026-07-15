@@ -2,12 +2,14 @@ package com.echidna.lsposed.hooks;
 
 import android.media.AudioRecord;
 import android.os.Build;
+import android.os.SystemClock;
 
 import com.echidna.lsposed.core.AudioFormatUtils;
 import com.echidna.lsposed.core.ModuleState;
 import com.echidna.lsposed.core.NativeBridge;
 
 import java.nio.ByteBuffer;
+import java.security.SecureRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -15,14 +17,15 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Installs hooks for AudioRecord.read overloads and forwards captured buffers into the
- * native Echidna pipeline via JNI.
+ * Installs AudioRecord lifecycle and read hooks. A fully authorized session uses the legacy
+ * preprocessor; all other reads remain on the policy-gated direct JNI fallback.
  */
 public final class AudioRecordHook {
 
     private static final String TAG = "EchidnaAudioRecord";
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
     private static final AtomicBoolean HOOK_FAILURE_LOGGED = new AtomicBoolean(false);
+    private static volatile LegacyPreprocessorSessionManager sessionManager;
 
     private AudioRecordHook() {
     }
@@ -33,6 +36,9 @@ public final class AudioRecordHook {
         }
         try {
             Class<?> audioRecordClass = XposedHelpers.findClass("android.media.AudioRecord", classLoader);
+            LegacyPreprocessorSessionManager manager = createSessionManager(moduleState);
+            sessionManager = manager;
+            hookLifecycle(audioRecordClass, manager);
             hookByteArray(audioRecordClass, moduleState);
             hookByteArrayWithMode(audioRecordClass, moduleState);
             hookShortArray(audioRecordClass, moduleState);
@@ -45,6 +51,130 @@ public final class AudioRecordHook {
         } catch (Throwable throwable) {
             INSTALLED.set(false);
             XposedBridge.log(TAG + ": unable to install AudioRecord hooks: " + throwable);
+        }
+    }
+
+    private static LegacyPreprocessorSessionManager createSessionManager(ModuleState state) {
+        return new LegacyPreprocessorSessionManager(
+                new LegacyPreprocessorSessionManager.PolicyAccess() {
+                    @Override
+                    public LegacyPreprocessorSessionManager.Policy current() {
+                        ModuleState.LegacyPreprocessorPolicy policy =
+                                state.legacyPreprocessorPolicy();
+                        return new LegacyPreprocessorSessionManager.Policy(
+                                policy.eligible, policy.generation);
+                    }
+
+                    @Override
+                    public void invalidateDirectPermits() {
+                        state.invalidateAudioProcessingPermits();
+                    }
+                },
+                (sessionId, generation, nonce, callback) ->
+                        state.requestLegacyPreprocessorCapability(
+                                sessionId,
+                                generation,
+                                nonce,
+                                new ModuleState.LegacyCapabilityCallback() {
+                                    @Override
+                                    public void onResult(
+                                            int status,
+                                            long callbackGeneration,
+                                            byte[] envelope,
+                                            String diagnostic) {
+                                        callback.onResult(
+                                                status,
+                                                callbackGeneration,
+                                                envelope,
+                                                diagnostic);
+                                    }
+
+                                    @Override
+                                    public void onFailure(String diagnostic) {
+                                        callback.onFailure(diagnostic);
+                                    }
+                                }),
+                new LegacyPreprocessorSessionManager.ReflectionEffectFactory(),
+                SystemClock::elapsedRealtime,
+                (code, error) -> XposedBridge.log(
+                        TAG + ": legacy_preprocessor_" + code
+                                + (error != null ? ": " + error : "")),
+                new LegacyPreprocessorSessionManager.DefaultScheduler(128),
+                new SecureRandom(),
+                new LegacyPreprocessorSessionManager.RouteLeases());
+    }
+
+    private static void hookLifecycle(
+            Class<?> audioRecordClass,
+            LegacyPreprocessorSessionManager manager) {
+        XposedBridge.hookAllConstructors(audioRecordClass, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                AudioRecord record = asAudioRecord(param.thisObject);
+                if (record == null) {
+                    return;
+                }
+                manager.onInitialized(
+                        record,
+                        safeSessionId(record),
+                        safeState(record) == AudioRecord.STATE_INITIALIZED);
+            }
+        });
+        XposedBridge.hookAllMethods(audioRecordClass, "startRecording", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                if (param.hasThrowable()) {
+                    return;
+                }
+                AudioRecord record = asAudioRecord(param.thisObject);
+                if (record != null
+                        && safeRecordingState(record) == AudioRecord.RECORDSTATE_RECORDING) {
+                    manager.onStart(record, safeSessionId(record));
+                }
+            }
+        });
+        XposedBridge.hookAllMethods(audioRecordClass, "stop", new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                manager.onStop(param.thisObject);
+            }
+        });
+        XposedBridge.hookAllMethods(audioRecordClass, "release", new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                manager.onRelease(param.thisObject);
+            }
+        });
+    }
+
+    private static AudioRecord asAudioRecord(Object value) {
+        return value instanceof AudioRecord ? (AudioRecord) value : null;
+    }
+
+    private static int safeSessionId(AudioRecord record) {
+        try {
+            return record.getAudioSessionId();
+        } catch (Throwable error) {
+            logHookFailure("AudioRecord session query failed", error);
+            return 0;
+        }
+    }
+
+    private static int safeState(AudioRecord record) {
+        try {
+            return record.getState();
+        } catch (Throwable error) {
+            logHookFailure("AudioRecord state query failed", error);
+            return AudioRecord.STATE_UNINITIALIZED;
+        }
+    }
+
+    private static int safeRecordingState(AudioRecord record) {
+        try {
+            return record.getRecordingState();
+        } catch (Throwable error) {
+            logHookFailure("AudioRecord recording-state query failed", error);
+            return AudioRecord.RECORDSTATE_STOPPED;
         }
     }
 
@@ -187,6 +317,10 @@ public final class AudioRecordHook {
         }
 
         private void afterHookedMethodSafely(MethodHookParam param) {
+            LegacyPreprocessorSessionManager manager = sessionManager;
+            if (manager != null && manager.ownsRoute(param.thisObject)) {
+                return;
+            }
             Object result = param.getResult();
             if (!(result instanceof Integer)) {
                 return;

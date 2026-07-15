@@ -10,10 +10,12 @@ import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
 
+import com.echidna.control.service.IEchidnaCapabilityCallback;
 import com.echidna.control.service.IEchidnaPolicyListener;
 import com.echidna.control.service.IEchidnaPolicyProvider;
 
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -31,6 +33,7 @@ final class ProfileSyncReceiver {
 
     private static final String TAG = "EchidnaPolicySync";
     private static final long RECONNECT_DELAY_MS = 1000L;
+    private static final long CAPABILITY_PROVIDER_API_VERSION = 2L;
     private static final ComponentName POLICY_COMPONENT = new ComponentName(
             "com.echidna.app",
             "com.echidna.control.service.PolicySnapshotService");
@@ -109,6 +112,89 @@ final class ProfileSyncReceiver {
     void start() {
         if (started.compareAndSet(false, true)) {
             executor.execute(this::bindExplicitProvider);
+        }
+    }
+
+    boolean requestLegacyPreprocessorCapability(
+            int audioSessionId,
+            long generation,
+            byte[] nonce,
+            ProfileSnapshotStore.LegacyCapabilityCallback callback) {
+        if (!started.get() || audioSessionId <= 0 || generation <= 0L
+                || nonce == null || nonce.length != 16 || callback == null) {
+            return false;
+        }
+        byte[] requestNonce = nonce.clone();
+        try {
+            executor.execute(() -> requestLegacyPreprocessorCapabilityOnExecutor(
+                    audioSessionId, generation, requestNonce, callback));
+            return true;
+        } catch (RejectedExecutionException error) {
+            logFailure("capability request executor rejected work", error);
+            return false;
+        }
+    }
+
+    private void requestLegacyPreprocessorCapabilityOnExecutor(
+            int audioSessionId,
+            long generation,
+            byte[] nonce,
+            ProfileSnapshotStore.LegacyCapabilityCallback callback) {
+        IEchidnaPolicyProvider connected = provider;
+        if (connected == null) {
+            callback.onFailure("unavailable");
+            return;
+        }
+        AtomicBoolean delivered = new AtomicBoolean(false);
+        try {
+            if (connected.getApiVersion() < CAPABILITY_PROVIDER_API_VERSION) {
+                callback.onFailure("unsupported");
+                return;
+            }
+            connected.requestLegacyPreprocessorCapability(
+                    audioSessionId,
+                    processName,
+                    generation,
+                    nonce,
+                    new IEchidnaCapabilityCallback.Stub() {
+                        @Override
+                        public void onCapabilityResult(
+                                int status,
+                                long callbackGeneration,
+                                byte[] envelope,
+                                String diagnostic) {
+                            if (!delivered.compareAndSet(false, true)) {
+                                return;
+                            }
+                            // AIDL unmarshals a process-private byte array. Re-dispatch the owned
+                            // instance without copying a bounded payload on the Binder thread.
+                            byte[] result = envelope;
+                            try {
+                                executor.execute(() -> callback.onResult(
+                                        status,
+                                        callbackGeneration,
+                                        result,
+                                        diagnostic));
+                            } catch (RejectedExecutionException error) {
+                                callback.onFailure("callback_executor_rejected");
+                            }
+                        }
+                    });
+        } catch (RemoteException error) {
+            if (delivered.compareAndSet(false, true)) {
+                callback.onFailure(connected.asBinder().isBinderAlive()
+                        ? "unsupported"
+                        : "disconnected");
+            }
+            if (!connected.asBinder().isBinderAlive()) {
+                logFailure("capability provider disconnected", error);
+                failClosedAndReconnect();
+            }
+        } catch (RuntimeException error) {
+            if (delivered.compareAndSet(false, true)) {
+                callback.onFailure("request_failed");
+            }
+            logFailure("capability provider request failed", error);
         }
     }
 

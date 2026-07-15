@@ -125,6 +125,46 @@ public final class ModuleStatePolicyTest {
     }
 
     @Test
+    public void legacyPreprocessorPolicySharesGenerationAndInvalidatesDirectPermit()
+            throws Exception {
+        store.update(snapshot(true, null, true, true, true, false));
+
+        ModuleState.LegacyPreprocessorPolicy policy = state.legacyPreprocessorPolicy();
+        assertTrue(policy.eligible);
+        assertEquals(store.getSnapshot().generation(), policy.generation);
+
+        long permit = state.beginAudioProcessing();
+        assertTrue(state.isAudioProcessingPermitCurrent(permit));
+        state.invalidateAudioProcessingPermits();
+        assertFalse(state.isAudioProcessingPermitCurrent(permit));
+
+        AtomicBoolean callbackInvoked = new AtomicBoolean(false);
+        assertFalse(state.requestLegacyPreprocessorCapability(
+                77,
+                policy.generation,
+                new byte[16],
+                new ModuleState.LegacyCapabilityCallback() {
+                    @Override
+                    public void onResult(
+                            int status,
+                            long generation,
+                            byte[] envelope,
+                            String diagnostic) {
+                        callbackInvoked.set(true);
+                    }
+
+                    @Override
+                    public void onFailure(String diagnostic) {
+                        callbackInvoked.set(true);
+                    }
+                }));
+        assertFalse(callbackInvoked.get());
+
+        state.setBypassOverride(true);
+        assertFalse(state.legacyPreprocessorPolicy().eligible);
+    }
+
+    @Test
     public void generationWatermarkRejectsRollbackAndConflictButRestoresExactBytes()
             throws Exception {
         generation = 1L;
