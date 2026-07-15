@@ -3,26 +3,6 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
-def repoRoot = file('../../..')
-def nativeRuntimeLibsDir = file("$buildDir/generated/echidnaRuntimeJniLibs")
-def nativeRuntimeAbis = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
-def stageEchidnaRuntimeJniLibs = tasks.register('stageEchidnaRuntimeJniLibs', Copy) {
-    def nativeBuildRoot = new File(repoRoot, 'build')
-    onlyIf {
-        nativeRuntimeAbis.any { abi ->
-            new File(nativeBuildRoot, "$abi/lib/libechidna.so").exists() &&
-                new File(nativeBuildRoot, "$abi/lib/libech_dsp.so").exists()
-        }
-    }
-    into nativeRuntimeLibsDir
-    nativeRuntimeAbis.each { abi ->
-        from(new File(nativeBuildRoot, "$abi/lib")) {
-            include 'libechidna.so', 'libech_dsp.so'
-            into abi
-        }
-    }
-}
-
 android {
     namespace 'com.echidna.control'
     compileSdk 34
@@ -47,12 +27,6 @@ android {
         buildConfig = false
     }
 
-    sourceSets {
-        main {
-            jniLibs.srcDir nativeRuntimeLibsDir
-        }
-    }
-
     externalNativeBuild {
         cmake {
             path "src/main/cpp/CMakeLists.txt"
@@ -69,10 +43,6 @@ android {
         // android.jar throws "not mocked" on. Return defaults so JSON-based unit tests execute.
         unitTests.returnDefaultValues = true
     }
-}
-
-tasks.named('preBuild') {
-    dependsOn stageEchidnaRuntimeJniLibs
 }
 
 dependencies {

@@ -3,6 +3,43 @@ plugins {
 }
 
 import java.util.Properties
+import java.util.zip.ZipFile
+
+def repoRoot = file('../../..')
+def nativeBuildRoot = new File(repoRoot, 'build')
+def shimNativeAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64']
+def shimNativeLibraries = ['libechidna_shim_jni.so', 'libech_dsp.so']
+def stagedShimJniLibs = layout.buildDirectory.dir('generated/echidnaShimJniLibs')
+def requiredShimNativeFiles = shimNativeAbis.collectMany { abi ->
+    shimNativeLibraries.collect { library -> new File(nativeBuildRoot, "$abi/lib/$library") }
+}
+
+def stageEchidnaShimJniLibs = tasks.register('stageEchidnaShimJniLibs', Sync) {
+    inputs.files(requiredShimNativeFiles)
+        .withPropertyName('echidnaShimNativeLibraries')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir(stagedShimJniLibs)
+    // This directory is an owned canonical mirror, not a cache that may retain undeclared .so
+    // residue. Always execute Sync so preBuild deletes stale/hostile files even when declared
+    // inputs have not changed since the previous build.
+    outputs.upToDateWhen { false }
+    into(stagedShimJniLibs)
+    shimNativeAbis.each { abi ->
+        from(new File(nativeBuildRoot, "$abi/lib")) {
+            include shimNativeLibraries
+            into abi
+        }
+    }
+    doFirst {
+        def missing = requiredShimNativeFiles.findAll { !it.isFile() }
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                'Missing dedicated LSPosed JNI artifacts. Build native ABIs first with ' +
+                    'tools/build_native_ndk.sh:\n  ' + missing.join('\n  ')
+            )
+        }
+    }
+}
 
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
@@ -58,6 +95,14 @@ android {
         buildConfig = false
     }
 
+    sourceSets {
+        main {
+            // Only the dedicated shim JNI bridge and its DSP dependency belong in this APK.
+            // The full Zygisk libechidna.so module must never be packaged into an app namespace.
+            jniLibs.srcDir stagedShimJniLibs
+        }
+    }
+
     lint {
         warningsAsErrors true
         abortOnError false
@@ -68,4 +113,36 @@ dependencies {
     compileOnly 'de.robv.android.xposed:api:82'
     compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
     compileOnly 'androidx.annotation:annotation:1.7.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+}
+
+tasks.named('preBuild') {
+    dependsOn stageEchidnaShimJniLibs
+}
+
+tasks.register('verifyDebugNativePackaging') {
+    dependsOn 'assembleDebug'
+    doLast {
+        def apk = file("$buildDir/outputs/apk/debug/shim-debug.apk")
+        if (!apk.isFile()) {
+            throw new GradleException("Missing shim debug APK: $apk")
+        }
+        def expected = shimNativeAbis.collectMany { abi ->
+            shimNativeLibraries.collect { library -> "lib/$abi/$library" }
+        }.toSet()
+        def packaged
+        new ZipFile(apk).withCloseable { zip ->
+            packaged = zip.entries().findAll { !it.directory && it.name.startsWith('lib/') }
+                .collect { it.name }.toSet()
+        }
+        if (packaged != expected) {
+            throw new GradleException(
+                "Shim native package mismatch. Expected $expected but found $packaged"
+            )
+        }
+        if (packaged.any { it.endsWith('/libechidna.so') }) {
+            throw new GradleException('Full Zygisk libechidna.so leaked into the shim APK')
+        }
+    }
 }

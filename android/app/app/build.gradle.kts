@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import java.util.zip.ZipFile
 
 plugins {
     id("com.android.application")
@@ -175,4 +176,36 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     // Compose test manifest (activity for createAndroidComposeRule) — already provided
     // by the debugImplementation("androidx.compose.ui:ui-test-manifest") line above.
+}
+
+tasks.register("verifyDebugNativePackaging") {
+    dependsOn("assembleDebug")
+    doLast {
+        val apk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
+        check(apk.isFile) { "Missing companion debug APK: $apk" }
+
+        val expected = setOf(
+            "lib/arm64-v8a/libechidna_control_jni.so",
+            "lib/armeabi-v7a/libechidna_control_jni.so",
+            "lib/x86/libechidna_control_jni.so",
+            "lib/x86_64/libechidna_control_jni.so",
+        )
+        val packaged = ZipFile(apk).use { zip ->
+            zip.entries().asSequence()
+                .filter { !it.isDirectory && it.name.startsWith("lib/") }
+                .map { it.name }
+                .toSet()
+        }
+        check(packaged == expected) {
+            "Companion native package mismatch. Expected $expected but found $packaged"
+        }
+        val forbidden = setOf(
+            "libechidna.so",
+            "libechidna_shim_jni.so",
+            "libech_dsp.so",
+        )
+        check(packaged.none { entry -> forbidden.any(entry::endsWith) }) {
+            "A Zygisk/shim/DSP library leaked into the companion APK: $packaged"
+        }
+    }
 }
