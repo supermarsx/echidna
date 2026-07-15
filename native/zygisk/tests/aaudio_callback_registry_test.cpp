@@ -192,6 +192,27 @@ namespace
               "slot reuse must not dispatch to stale user data");
     }
 
+    void TestBoundStreamIdentityIsRequired()
+    {
+        echidna::hooks::AAudioCallbackRegistry registry;
+        int calls = 0;
+        void *builder = reinterpret_cast<void *>(uintptr_t{0xA1000});
+        void *stream = reinterpret_cast<void *>(uintptr_t{0xA2000});
+        void *other_stream = reinterpret_cast<void *>(uintptr_t{0xA3000});
+        void *proxy = registry.registerCallback(builder, CallbackA, &calls);
+        CHECK(registry.attachOpenedStream(builder, stream), "stream identity attaches");
+
+        echidna::hooks::AAudioCallbackTarget target;
+        CHECK(!registry.beginInvocation(proxy, other_stream, &target),
+              "proxy must reject a stream it never owned");
+        CHECK(registry.beginInvocation(proxy, stream, &target),
+              "proxy must accept its exact opened stream");
+        registry.endInvocation(proxy);
+        registry.closeStream(stream);
+        CHECK(!registry.beginInvocation(proxy, stream, &target),
+              "closed stream stays rejected even while its builder remains live");
+    }
+
     void TestThousandsOfRegistrationsReuseSlots()
     {
         echidna::hooks::AAudioCallbackRegistry registry;
@@ -418,6 +439,7 @@ int main()
     TestConcurrentStreamsNeverCrossTalk();
     TestReentrantInvocationAndBuilderTeardown();
     TestStaleTokenRejectedAfterSlotReuse();
+    TestBoundStreamIdentityIsRequired();
     TestThousandsOfRegistrationsReuseSlots();
     TestConcurrentRetirementWaitsForInvocationQuiescence();
     TestGenerationWrapPermanentlyExhaustsSlots();

@@ -9,6 +9,11 @@
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
 
+namespace echidna::runtime
+{
+    struct DecodedProfileSnapshot;
+}
+
 namespace echidna::hooks
 {
     class AAudioHookManager : public HookManager
@@ -31,4 +36,7 @@ namespace echidna::hooks
         runtime::InlineHook hook_read_;
         HookInstallInfo last_info_;
     };
+
+    /** Publishes one already-authenticated process snapshot to live AAudio streams. */
+    bool PublishAAudioProfile(const runtime::DecodedProfileSnapshot &snapshot);
 } // namespace echidna::hooks

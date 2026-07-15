@@ -13,14 +13,13 @@
 #define ANDROID_LOG_WARN 0
 #endif
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <time.h>
 
 #include "echidna/api.h"
 #include "hooks/aaudio_callback_registry.h"
-#include "hooks/capture_buffer_router.h"
+#include "hooks/aaudio_stream_registry.h"
+#include "runtime/profile_sync_protocol.h"
 #include "state/shared_state.h"
 #include "utils/telemetry_accumulator.h"
 
@@ -41,6 +40,13 @@ namespace echidna::hooks
         DeleteBuilderFn gOriginalDeleteBuilder = nullptr;
         ReadFn gOriginalRead = nullptr;
         AAudioCallbackRegistry gCallbackRegistry;
+        AAudioStreamRegistry gStreamRegistry;
+        const AAudioDspApi gDspApi{
+            echidna_stream_create,
+            echidna_stream_process,
+            echidna_stream_update,
+            echidna_stream_destroy,
+        };
 
         enum : int32_t
         {
@@ -49,14 +55,6 @@ namespace echidna::hooks
             kAAudioDirectionInput = 1,
             kAAudioResultOk = 0,
             kAAudioCallbackContinue = 0,
-        };
-
-        struct StreamConfig
-        {
-            uint32_t sample_rate{0};
-            uint32_t channels{0};
-            audio::PcmFormat format{audio::PcmFormat::kSigned16};
-            bool valid{false};
         };
 
         struct StreamFns
@@ -75,14 +73,9 @@ namespace echidna::hooks
 
         StreamFns gStreamFns;
 
-        bool ProcessingAllowed()
+        echidna_stream_config_t QueryStreamConfig(void *stream)
         {
-            return state::SharedState::instance().audioProcessingAllowed();
-        }
-
-        StreamConfig QueryStreamConfig(void *stream)
-        {
-            StreamConfig config;
+            echidna_stream_config_t config{};
             if (!stream || !gStreamFns.complete())
             {
                 return config;
@@ -99,46 +92,47 @@ namespace echidna::hooks
             }
             if (format == kAAudioFormatI16)
             {
-                config.format = audio::PcmFormat::kSigned16;
+                config.format = ECHIDNA_PCM_FORMAT_SIGNED_16;
             }
             else if (format == kAAudioFormatFloat)
             {
-                config.format = audio::PcmFormat::kFloat32;
+                config.format = ECHIDNA_PCM_FORMAT_FLOAT_32;
             }
             else
             {
                 return config;
             }
+            config.struct_size = sizeof(config);
             config.sample_rate = static_cast<uint32_t>(sample_rate);
-            config.channels = static_cast<uint32_t>(channels);
-            config.valid = true;
+            config.channel_count = static_cast<uint32_t>(channels);
+            config.max_frames = static_cast<uint32_t>(
+                32768U / static_cast<uint32_t>(channels));
             return config;
         }
 
-        bool ProcessPcmBuffer(const StreamConfig &config,
+        void RecordUnroutedBlock(uint32_t frames,
+                                 utils::TelemetryBlockOutcome outcome)
+        {
+            state::SharedState::instance().telemetry().recordBlock(
+                utils::TelemetryRoute::kAAudio, frames, outcome);
+        }
+
+        void ProcessPcmBuffer(void *stream,
+                              AAudioProcessOwner owner,
                               void *buffer,
                               uint32_t frames)
         {
-            if (!config.valid || !buffer || frames == 0)
-            {
-                return false;
-            }
-            const uint64_t sample_count =
-                static_cast<uint64_t>(frames) * config.channels;
-            if (sample_count == 0 || sample_count > kMaxRealtimeCaptureSamples)
-            {
-                return false;
-            }
-            const size_t bytes_per_sample =
-                config.format == audio::PcmFormat::kFloat32 ? sizeof(float) : sizeof(int16_t);
-            const size_t byte_count = static_cast<size_t>(sample_count) * bytes_per_sample;
             utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kAAudio);
-            return RouteCaptureBufferInPlace(buffer,
-                                             byte_count,
-                                             config.format,
-                                             config.sample_rate,
-                                             config.channels,
-                                             echidna_process_block);
+            const AAudioProcessResult result =
+                gStreamRegistry.process(stream, owner, buffer, frames);
+            if (result == AAudioProcessResult::kBypassed)
+            {
+                RecordUnroutedBlock(frames, utils::TelemetryBlockOutcome::kBypassed);
+            }
+            else if (result == AAudioProcessResult::kUnavailable)
+            {
+                RecordUnroutedBlock(frames, utils::TelemetryBlockOutcome::kFailure);
+            }
         }
 
         int32_t ForwardRead(void *stream,
@@ -148,16 +142,14 @@ namespace echidna::hooks
         {
             const int32_t read_frames =
                 gOriginalRead ? gOriginalRead(stream, buffer, frames, timeout_ns) : -1;
-            if (read_frames <= 0 || !buffer || !ProcessingAllowed())
+            if (read_frames <= 0 || !buffer)
             {
                 return read_frames;
             }
-            const StreamConfig config = QueryStreamConfig(stream);
-            if (!config.valid)
-            {
-                return read_frames;
-            }
-            (void)ProcessPcmBuffer(config, buffer, static_cast<uint32_t>(read_frames));
+            ProcessPcmBuffer(stream,
+                             AAudioProcessOwner::kRead,
+                             buffer,
+                             static_cast<uint32_t>(read_frames));
             return read_frames;
         }
 
@@ -186,22 +178,16 @@ namespace echidna::hooks
             }
             InvocationGuard invocation(proxy_context);
 
-            bool attempted = false;
-            if (audio_data && frames > 0 && ProcessingAllowed())
+            if (audio_data && frames > 0)
             {
-                const StreamConfig config = QueryStreamConfig(stream);
-                if (config.valid)
-                {
-                    attempted = true;
-                    (void)ProcessPcmBuffer(config,
-                                           audio_data,
-                                           static_cast<uint32_t>(frames));
-                }
+                ProcessPcmBuffer(stream,
+                                 AAudioProcessOwner::kCallback,
+                                 audio_data,
+                                 static_cast<uint32_t>(frames));
             }
 
             const int result = target.callback(
                 stream, target.user_data, audio_data, frames);
-            (void)attempted;
             return result;
         }
 
@@ -234,24 +220,35 @@ namespace echidna::hooks
                 gOriginalOpenStream ? gOriginalOpenStream(builder, stream_out) : -1;
             if (result == kAAudioResultOk && stream_out && *stream_out)
             {
-                const StreamConfig config = QueryStreamConfig(*stream_out);
-                if (config.valid)
+                const bool callback_owned =
+                    gCallbackRegistry.attachOpenedStream(builder, *stream_out);
+                const echidna_stream_config_t config = QueryStreamConfig(*stream_out);
+                if (config.struct_size == sizeof(config))
                 {
-                    (void)echidna_prepare_stream(config.sample_rate, config.channels);
+                    const bool ready = gStreamRegistry.open(
+                        *stream_out,
+                        config,
+                        callback_owned ? AAudioProcessOwner::kCallback
+                                       : AAudioProcessOwner::kRead,
+                        gDspApi);
+                    if (!ready)
+                    {
+                        __android_log_print(ANDROID_LOG_WARN,
+                                            "echidna",
+                                            "AAudio stream opened without DSP handle");
+                    }
                 }
-                (void)gCallbackRegistry.attachOpenedStream(builder, *stream_out);
             }
             return result;
         }
 
         int32_t ForwardCloseStream(void *stream)
         {
-            const int32_t result = gOriginalCloseStream ? gOriginalCloseStream(stream) : -1;
-            if (result == kAAudioResultOk)
-            {
-                gCallbackRegistry.closeStream(stream);
-            }
-            return result;
+            // Stop proxy admission before quiescing and destroying the DSP
+            // handle. A failed platform close remains permanently bypassed.
+            gCallbackRegistry.closeStream(stream);
+            gStreamRegistry.close(stream);
+            return gOriginalCloseStream ? gOriginalCloseStream(stream) : -1;
         }
 
         int32_t ForwardDeleteBuilder(void *builder)
@@ -267,6 +264,22 @@ namespace echidna::hooks
     } // namespace
 
     AAudioHookManager::AAudioHookManager(utils::PltResolver &resolver) : resolver_(resolver) {}
+
+    bool PublishAAudioProfile(const runtime::DecodedProfileSnapshot &snapshot)
+    {
+        const bool published = gStreamRegistry.publishProfile(snapshot.generation,
+                                                              snapshot.nativeProcessAdmitted(),
+                                                              snapshot.preset_json,
+                                                              gDspApi);
+        if (!published)
+        {
+            __android_log_print(ANDROID_LOG_WARN,
+                                "echidna",
+                                "AAudio profile publication failed generation=%llu",
+                                static_cast<unsigned long long>(snapshot.generation));
+        }
+        return published;
+    }
 
     bool AAudioHookManager::install()
     {

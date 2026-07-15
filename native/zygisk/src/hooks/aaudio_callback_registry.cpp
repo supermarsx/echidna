@@ -5,6 +5,8 @@ namespace echidna::hooks
 
     static_assert(std::atomic<uint32_t>::is_always_lock_free,
                   "AAudio callback registry requires lock-free 32-bit atomics");
+    static_assert(std::atomic<void *>::is_always_lock_free,
+                  "AAudio callback stream validation requires lock-free pointers");
     static_assert(sizeof(uintptr_t) >= sizeof(uint32_t),
                   "AAudio callback tokens require at least 32-bit uintptr_t");
     static_assert(AAudioCallbackRegistry::kMaxRegistrations == 256,
@@ -90,7 +92,11 @@ namespace echidna::hooks
         context.callback = nullptr;
         context.user_data = nullptr;
         context.builder = nullptr;
-        context.streams.fill(nullptr);
+        for (auto &stream : context.streams)
+        {
+            stream.store(nullptr, std::memory_order_relaxed);
+        }
+        context.stream_tracking_started.store(0, std::memory_order_relaxed);
         context.stream_overflow = false;
         context.allocated = false;
 
@@ -112,9 +118,9 @@ namespace echidna::hooks
         {
             return;
         }
-        for (void *stream : context.streams)
+        for (const auto &stream : context.streams)
         {
-            if (stream)
+            if (stream.load(std::memory_order_acquire))
             {
                 return;
             }
@@ -197,7 +203,11 @@ namespace echidna::hooks
             context.callback = callback;
             context.user_data = user_data;
             context.builder = builder;
-            context.streams.fill(nullptr);
+            for (auto &stream : context.streams)
+            {
+                stream.store(nullptr, std::memory_order_relaxed);
+            }
+            context.stream_tracking_started.store(0, std::memory_order_relaxed);
             context.stream_overflow = false;
             context.generation.store(generation, std::memory_order_relaxed);
             context.usage.store(kActiveMask, std::memory_order_release);
@@ -212,18 +222,19 @@ namespace echidna::hooks
         {
             return;
         }
-        for (void *entry : context.streams)
+        for (const auto &entry : context.streams)
         {
-            if (entry == stream)
+            if (entry.load(std::memory_order_acquire) == stream)
             {
                 return;
             }
         }
-        for (void *&entry : context.streams)
+        for (auto &entry : context.streams)
         {
-            if (!entry)
+            if (!entry.load(std::memory_order_relaxed))
             {
-                entry = stream;
+                entry.store(stream, std::memory_order_release);
+                context.stream_tracking_started.store(1, std::memory_order_release);
                 return;
             }
         }
@@ -255,7 +266,6 @@ namespace echidna::hooks
                                                  void *stream,
                                                  AAudioCallbackTarget *target)
     {
-        (void)stream;
         if (!target)
         {
             return false;
@@ -287,6 +297,20 @@ namespace echidna::hooks
                 {
                     context->usage.fetch_sub(1, std::memory_order_acq_rel);
                     return false;
+                }
+                if (context->stream_tracking_started.load(std::memory_order_acquire) != 0)
+                {
+                    bool matched_stream = false;
+                    for (const auto &entry : context->streams)
+                    {
+                        matched_stream = matched_stream ||
+                                         entry.load(std::memory_order_acquire) == stream;
+                    }
+                    if (!matched_stream)
+                    {
+                        context->usage.fetch_sub(1, std::memory_order_acq_rel);
+                        return false;
+                    }
                 }
                 target->callback = context->callback;
                 target->user_data = context->user_data;
@@ -348,11 +372,11 @@ namespace echidna::hooks
             {
                 continue;
             }
-            for (void *&entry : context.streams)
+            for (auto &entry : context.streams)
             {
-                if (entry == stream)
+                if (entry.load(std::memory_order_acquire) == stream)
                 {
-                    entry = nullptr;
+                    entry.store(nullptr, std::memory_order_release);
                 }
             }
             tryRetireLocked(context);

@@ -60,7 +60,8 @@ namespace echidna::hooks
             AAudioDataCallback callback{nullptr};
             void *user_data{nullptr};
             void *builder{nullptr};
-            std::array<void *, kMaxStreamsPerRegistration> streams{};
+            std::array<std::atomic<void *>, kMaxStreamsPerRegistration> streams{};
+            std::atomic<uint32_t> stream_tracking_started{0};
             bool allocated{false};
             bool stream_overflow{false};
         };
