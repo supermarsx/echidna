@@ -11,12 +11,14 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "docs-requirements.txt"
+      - ".github/puppeteer-ci.json"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "docs-requirements.txt"
+      - ".github/puppeteer-ci.json"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -50,7 +52,10 @@ jobs:
         run: pip install -r docs-requirements.txt
 
       - name: Validate Mermaid diagrams
-        run: python tools/check_mermaid.py
+        # GitHub's Ubuntu runner disables the user-namespace sandbox Chromium
+        # otherwise expects. This config is CI-scoped; local runs keep the
+        # browser sandbox unless the caller opts into the same file explicitly.
+        run: python tools/check_mermaid.py --puppeteer-config .github/puppeteer-ci.json
 
       - name: Build site (strict)
         run: mkdocs build --strict --site-dir site

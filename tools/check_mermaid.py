@@ -61,6 +61,7 @@ def render_block(
     block: MermaidBlock,
     workdir: Path,
     command_prefix: list[str],
+    puppeteer_config: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     base = f"{block.source.stem}-{block.index}"
     input_path = workdir / f"{base}.mmd"
@@ -74,6 +75,8 @@ def render_block(
         str(output_path),
         "--quiet",
     ]
+    if puppeteer_config is not None:
+        command.extend(["--puppeteerConfigFile", str(puppeteer_config.resolve())])
     return subprocess.run(
         command,
         cwd=workdir,
@@ -97,9 +100,23 @@ def main() -> int:
         default=DEFAULT_MERMAID_VERSION,
         help="Mermaid CLI version to use.",
     )
+    parser.add_argument(
+        "--puppeteer-config",
+        type=Path,
+        help=(
+            "Optional Puppeteer JSON configuration passed to Mermaid CLI. "
+            "The docs workflow uses a CI-only no-sandbox configuration because "
+            "GitHub's Ubuntu runner disables Chromium's usable sandbox."
+        ),
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
+    puppeteer_config = args.puppeteer_config
+    if puppeteer_config is not None:
+        puppeteer_config = puppeteer_config.resolve()
+        if not puppeteer_config.is_file():
+            parser.error(f"Puppeteer configuration not found: {puppeteer_config}")
     blocks = [
         block
         for markdown_file in iter_markdown_files(root)
@@ -115,7 +132,12 @@ def main() -> int:
         workdir = Path(tmp)
         for block in blocks:
             relative = block.source.relative_to(root)
-            result = render_block(block, workdir, command_prefix)
+            result = render_block(
+                block,
+                workdir,
+                command_prefix,
+                puppeteer_config=puppeteer_config,
+            )
             if result.returncode == 0:
                 print(f"OK {relative}:{block.fence_line} block {block.index}")
                 continue
