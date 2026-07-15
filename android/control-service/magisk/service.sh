@@ -5,8 +5,6 @@ MODDIR="${0%/*}"
 LIB_SRC="$MODDIR/lib/libechidna.so"
 RUNTIME_DIR="/data/adb/echidna"
 LIB_DST="$RUNTIME_DIR/lib/libechidna.so"
-OFFSETS_SRC="$MODDIR/common/echidna_af_offsets.txt"
-OFFSETS_DST="/data/local/tmp/echidna_af_offsets.txt"
 FAILSAFE_DIR="$RUNTIME_DIR/failsafe"
 FAILSAFE_REASON="$FAILSAFE_DIR/reason.txt"
 BOOT_MARKER="$FAILSAFE_DIR/boot-in-progress"
@@ -42,7 +40,7 @@ engage_failsafe() {
     if [ -d "$MODDIR/zygisk" ]; then
         touch "$MODDIR/zygisk/unloaded" 2>/dev/null || true
     fi
-    rm -f "$LIB_DST" "$CONFIG_BIN" "$TELEMETRY_BIN" "$OFFSETS_DST" 2>/dev/null || true
+    rm -f "$LIB_DST" "$CONFIG_BIN" "$TELEMETRY_BIN" 2>/dev/null || true
     exit 0
 }
 
@@ -90,31 +88,6 @@ install_library() {
     fi
 }
 
-install_offsets() {
-    if [ -f "$OFFSETS_SRC" ]; then
-        cp "$OFFSETS_SRC" "$OFFSETS_DST"
-        chmod 0644 "$OFFSETS_DST"
-        log "Staged AudioFlinger offsets into $OFFSETS_DST"
-    fi
-}
-
-patch_selinux() {
-    if [ "$(getenforce 2>/dev/null || echo Enforcing)" != "Enforcing" ]; then
-        return
-    fi
-    if command -v magiskpolicy >/dev/null 2>&1; then
-        if magiskpolicy --live "allow zygote zygote process dyntransition" \
-            "allow zygote zygote binder call" \
-            "allow zygote zygote binder transfer"; then
-            log "Applied SELinux relaxations for native engine"
-        else
-            log "Failed to adjust SELinux policy; Java-only fallback may be required"
-        fi
-    else
-        log "magiskpolicy not available; native engine may require Java fallback"
-    fi
-}
-
 marker="$(manual_disable_marker 2>/dev/null || true)"
 if [ -n "$marker" ]; then
     engage_failsafe "manual disable marker present at $marker"
@@ -122,5 +95,3 @@ fi
 clear_boot_watchdog
 prepare_runtime_dir
 install_library
-install_offsets
-patch_selinux

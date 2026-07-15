@@ -15,7 +15,6 @@ BOOT_FAIL_LIMIT="${ECHIDNA_BOOT_FAIL_LIMIT:-2}"
 # live under /data.
 TMP_DIR="/data/local/tmp/echidna"
 PLUGIN_DIR="$TMP_DIR/plugins"
-OFFSETS_DST="/data/local/tmp/echidna_af_offsets.txt"
 # Shared config/telemetry regions read by hooked app processes. They must exist,
 # be pre-sized (a hooked app maps them read-only and cannot create/grow them),
 # and carry SELinux types that app domains can reach (see magisk/sepolicy.rule).
@@ -23,6 +22,7 @@ OFFSETS_DST="/data/local/tmp/echidna_af_offsets.txt"
 CONFIG_BIN="$TMP_DIR/echidna_config.bin"
 TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
 REGION_BYTES=65536
+ZYGISK_STATUS_HELPER="$MODDIR/common/zygisk-status.sh"
 
 log() {
     echo "[echidna][post-fs] $1"
@@ -50,7 +50,7 @@ engage_failsafe() {
     if [ -d "$MODDIR/zygisk" ]; then
         touch "$MODDIR/zygisk/unloaded" 2>/dev/null || true
     fi
-    rm -f "$LIB_DST" "$CONFIG_BIN" "$TELEMETRY_BIN" "$OFFSETS_DST" 2>/dev/null || true
+    rm -f "$LIB_DST" "$CONFIG_BIN" "$TELEMETRY_BIN" 2>/dev/null || true
     exit 0
 }
 
@@ -131,8 +131,11 @@ bootstrap() {
 
 prepare_tmp() {
     mkdir -p "$PLUGIN_DIR"
-    chmod 0771 "$TMP_DIR"
-    chmod 0771 "$PLUGIN_DIR"
+    # Hooked apps need traversal, config reads, and telemetry-file writes, but
+    # never directory writes. World-writable directories would let an app
+    # unlink/replace the root-published regions when SELinux is permissive.
+    chmod 0755 "$TMP_DIR"
+    chmod 0755 "$PLUGIN_DIR"
 }
 
 apply_sepolicy() {
@@ -191,7 +194,12 @@ ensure_permissions() {
 
 report_status() {
     if command -v magisk >/dev/null 2>&1; then
-        magisk --zygisk >/dev/null 2>&1 || log "Zygisk appears disabled"
+        if [ -r "$ZYGISK_STATUS_HELPER" ]; then
+            . "$ZYGISK_STATUS_HELPER"
+            echidna_zygisk_enabled || log "Zygisk appears disabled"
+        else
+            log "Zygisk status helper missing; cannot verify loader state"
+        fi
     fi
     if [ ! -f "$LIB_DST" ]; then
         log "libechidna.so not staged; companion app will show Java-only mode"

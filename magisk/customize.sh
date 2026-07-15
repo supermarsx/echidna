@@ -27,6 +27,7 @@ ui_print "! ⚠️  You are responsible for recovery. The software is provided a
 ui_print "! ⚠️  Do not continue unless you can disable Magisk modules from recovery/adb/safe mode."
 
 WARNINGS=0
+ZYGISK_STATUS_HELPER="$MODPATH/common/zygisk-status.sh"
 
 compat_warn() {
   WARNINGS=$((WARNINGS + 1))
@@ -179,7 +180,7 @@ print_device_compat_report() {
   fi
 
   if command -v magisk >/dev/null 2>&1; then
-    magisk --zygisk >/dev/null 2>&1 || \
+    echidna_zygisk_enabled || \
       compat_warn "Zygisk does not appear enabled; enable it in Magisk before rebooting"
   else
     compat_warn "magisk command is unavailable during install; cannot verify Zygisk state"
@@ -240,12 +241,14 @@ require_payload "$MODPATH/zygisk/$PRIMARY_ABI.so"
 require_payload "$MODPATH/libs/$PRIMARY_ABI/libech_dsp.so"
 require_payload "$MODPATH/post-fs-data.sh"
 require_payload "$MODPATH/service.sh"
+require_payload "$ZYGISK_STATUS_HELPER"
 optional_payload "$MODPATH/sepolicy.rule"
 if [ "$IS64BIT" = "true" ] && [ -n "$SECONDARY32_ABI" ]; then
   optional_payload "$MODPATH/zygisk/$SECONDARY32_ABI.so"
   optional_payload "$MODPATH/libs/$SECONDARY32_ABI/libech_dsp.so"
 fi
 
+. "$ZYGISK_STATUS_HELPER"
 print_device_compat_report
 
 # --- Place the DSP engine on the default linker search path ----------------

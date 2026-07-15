@@ -17,7 +17,6 @@
 #   ECHIDNA_BUILD_ROOT     per-ABI build root      (default "<repo>/build")
 #   ECHIDNA_OUT_DIR        staging dir             (default "<repo>/out/magisk")
 #   ECHIDNA_ZIP_PATH       output zip              (default "<repo>/out/echidna-magisk.zip")
-#   ECHIDNA_AF_OFFSETS     optional AudioFlinger offsets file to bundle
 ###############################################################################
 set -euo pipefail
 
@@ -36,11 +35,30 @@ if [[ -z "${VERSION_CODE}" ]]; then
   VERSION_CODE="$(echo "${VERSION}" | tr -cd '0-9')"
   [[ -z "${VERSION_CODE}" ]] && VERSION_CODE="1"
 fi
-OFFSETS_FILE="${ECHIDNA_AF_OFFSETS:-${ROOT_DIR}/out/echidna_af_offsets.txt}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
+canonical_path() {
+  realpath -m -- "$1"
+}
+
+require_repo_output_path() {
+  local label="$1"
+  local candidate
+  candidate="$(canonical_path "$2")"
+  local root
+  root="$(canonical_path "${ROOT_DIR}")"
+  case "${candidate}" in
+    "${root}/out/"*|"${root}/build/"*) ;;
+    *)
+      die "refusing unsafe ${label} outside repository out/ or build/: ${candidate}"
+      ;;
+  esac
+}
+
 # --- Preconditions ---------------------------------------------------------
+require_repo_output_path "staging directory" "${OUT_DIR}"
+require_repo_output_path "zip path" "${ZIP_PATH}"
 [[ -f "${TEMPLATE_DIR}/module.prop" ]] || die "missing module.prop template at ${TEMPLATE_DIR}"
 [[ -f "${TEMPLATE_DIR}/customize.sh" ]] || die "missing customize.sh at ${TEMPLATE_DIR}"
 [[ -f "${TEMPLATE_DIR}/META-INF/com/google/android/update-binary" ]] \
@@ -49,6 +67,8 @@ die() { echo "error: $*" >&2; exit 1; }
   || die "missing post-fs-data.sh at ${MAGISK_SCRIPTS_DIR}"
 [[ -f "${MAGISK_SCRIPTS_DIR}/service.sh" ]] || die "missing service.sh at ${MAGISK_SCRIPTS_DIR}"
 [[ -f "${TEMPLATE_DIR}/sepolicy.rule" ]] || die "missing sepolicy.rule at ${TEMPLATE_DIR}"
+[[ -f "${TEMPLATE_DIR}/common/zygisk-status.sh" ]] \
+  || die "missing Zygisk status helper at ${TEMPLATE_DIR}/common/zygisk-status.sh"
 [[ -f "${ROOT_DIR}/license.md" ]] || die "missing repository license at ${ROOT_DIR}/license.md"
 
 # Fail loudly if any required per-ABI artifact is missing.
@@ -63,7 +83,8 @@ done
 
 # --- Assemble the module tree ---------------------------------------------
 rm -rf "${OUT_DIR}"
-mkdir -p "${OUT_DIR}/zygisk" "${OUT_DIR}/META-INF/com/google/android"
+mkdir -p "${OUT_DIR}/zygisk" "${OUT_DIR}/common" \
+  "${OUT_DIR}/META-INF/com/google/android"
 
 # Installer stub (makes the zip flashable via Magisk Manager / recovery).
 cp "${TEMPLATE_DIR}/META-INF/com/google/android/update-binary" \
@@ -75,10 +96,12 @@ cp "${TEMPLATE_DIR}/META-INF/com/google/android/updater-script" \
 cp "${TEMPLATE_DIR}/customize.sh" "${OUT_DIR}/customize.sh"
 cp "${MAGISK_SCRIPTS_DIR}/post-fs-data.sh" "${OUT_DIR}/post-fs-data.sh"
 cp "${MAGISK_SCRIPTS_DIR}/service.sh" "${OUT_DIR}/service.sh"
+cp "${TEMPLATE_DIR}/common/zygisk-status.sh" "${OUT_DIR}/common/zygisk-status.sh"
 cp "${ROOT_DIR}/license.md" "${OUT_DIR}/LICENSE.md"
 chmod 0755 "${OUT_DIR}/customize.sh" "${OUT_DIR}/post-fs-data.sh" \
   "${OUT_DIR}/service.sh" "${OUT_DIR}/META-INF/com/google/android/update-binary"
 chmod 0644 "${OUT_DIR}/LICENSE.md"
+chmod 0644 "${OUT_DIR}/common/zygisk-status.sh"
 
 # SELinux policy: makes the config/telemetry region readable by hooked app
 # domains under enforcing SELinux (Magisk applies sepolicy.rule at boot).
@@ -98,12 +121,6 @@ for abi in ${ABIS}; do
   mkdir -p "${OUT_DIR}/libs/${abi}"
   cp "${BUILD_ROOT}/${abi}/lib/libech_dsp.so" "${OUT_DIR}/libs/${abi}/libech_dsp.so"
 done
-
-# Optional AudioFlinger offsets, staged by service.sh at boot.
-if [[ -f "${OFFSETS_FILE}" ]]; then
-  mkdir -p "${OUT_DIR}/common"
-  cp "${OFFSETS_FILE}" "${OUT_DIR}/common/echidna_af_offsets.txt"
-fi
 
 # --- Zip -------------------------------------------------------------------
 rm -f "${ZIP_PATH}"
