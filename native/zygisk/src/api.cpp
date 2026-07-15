@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -26,7 +27,7 @@
 
 #include "echidna/dsp/api.h"
 #include "state/shared_state.h"
-#include "utils/telemetry_shared_memory.h"
+#include "utils/telemetry_accumulator.h"
 
 using echidna::state::SharedState;
 
@@ -174,25 +175,41 @@ namespace
     {
         float rms_db{-120.0f};
         float peak_db{-120.0f};
+        bool finite{true};
+        bool changed{false};
     };
 
-    /** Compute RMS and peak dB for an interleaved float buffer. */
-    LevelStats CalculateLevels(const float *data, size_t samples)
+    /** Compute levels while folding finite and mutation checks into the same pass. */
+    LevelStats CalculateLevels(const float *data,
+                               size_t samples,
+                               const float *reference = nullptr)
     {
         if (!data || samples == 0)
         {
             return {};
         }
+        LevelStats stats;
         double sum_squares = 0.0;
         float peak = 0.0f;
         for (size_t i = 0; i < samples; ++i)
         {
             const float sample = data[i];
+            if (!std::isfinite(sample))
+            {
+                return {-120.0f, -120.0f, false, false};
+            }
+            if (reference &&
+                std::bit_cast<uint32_t>(sample) != std::bit_cast<uint32_t>(reference[i]))
+            {
+                stats.changed = true;
+            }
             peak = std::max(peak, std::fabs(sample));
             sum_squares += static_cast<double>(sample) * static_cast<double>(sample);
         }
         const float rms = static_cast<float>(std::sqrt(sum_squares / samples));
-        return {LinearToDb(rms), LinearToDb(peak)};
+        stats.rms_db = LinearToDb(rms);
+        stats.peak_db = LinearToDb(peak);
+        return stats;
     }
 
     bool ComputeSampleCount(uint32_t frames, uint32_t channels, size_t *out)
@@ -555,7 +572,9 @@ echidna_result_t echidna_process_block(const float *input,
         sample_count > kMaxRealtimeSamples)
     {
         state.setStatus(echidna::state::InternalStatus::kError);
-        state.telemetry().recordCallback(0, 0, 0, echidna::utils::kTelemetryFlagError, 0);
+        state.telemetry().recordBlock(echidna::utils::CurrentTelemetryRoute(),
+                                      frames,
+                                      echidna::utils::TelemetryBlockOutcome::kFailure);
         return ECHIDNA_RESULT_INVALID_ARGUMENT;
     }
 
@@ -567,18 +586,26 @@ echidna_result_t echidna_process_block(const float *input,
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
 
     echidna_result_t result = ECHIDNA_RESULT_OK;
-    uint32_t flags = echidna::utils::kTelemetryFlagDsp;
+    auto telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kUnchanged;
     LevelStats input_levels = CalculateLevels(input, sample_count);
     LevelStats output_levels;
     float detected_pitch = 0.0f;
     float target_pitch = 0.0f;
     float formant_shift_cents = 0.0f;
     float formant_width = 0.0f;
+    if (!input_levels.finite)
+    {
+        state.setStatus(echidna::state::InternalStatus::kError);
+        state.telemetry().recordBlock(echidna::utils::CurrentTelemetryRoute(),
+                                      frames,
+                                      echidna::utils::TelemetryBlockOutcome::kFailure);
+        return ECHIDNA_RESULT_INVALID_ARGUMENT;
+    }
     const bool bypassed = state.isBypassed(MonotonicNowNs());
 
     if (bypassed)
     {
-        flags |= echidna::utils::kTelemetryFlagBypassed;
+        telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kBypassed;
         output_levels = input_levels;
         if (output && output != input)
         {
@@ -590,6 +617,9 @@ echidna_result_t echidna_process_block(const float *input,
         std::unique_lock lock(DspMutex(), std::try_to_lock);
         if (!lock.owns_lock())
         {
+            state.telemetry().recordBlock(echidna::utils::CurrentTelemetryRoute(),
+                                          frames,
+                                          echidna::utils::TelemetryBlockOutcome::kFailure);
             return ECHIDNA_RESULT_NOT_AVAILABLE;
         }
         auto &dsp = GetDspBridge();
@@ -599,7 +629,7 @@ echidna_result_t echidna_process_block(const float *input,
                      : ECHIDNA_RESULT_NOT_INITIALISED;
         if (result != ECHIDNA_RESULT_OK)
         {
-            flags |= echidna::utils::kTelemetryFlagError;
+            telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kFailure;
         }
         else
         {
@@ -625,7 +655,7 @@ echidna_result_t echidna_process_block(const float *input,
                 result = ToEchidnaResult(dsp_status);
                 if (result != ECHIDNA_RESULT_OK)
                 {
-                    flags |= echidna::utils::kTelemetryFlagError;
+                    telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kFailure;
                     if (output && output != input)
                     {
                         std::memcpy(output, input, sizeof(float) * sample_count);
@@ -633,13 +663,33 @@ echidna_result_t echidna_process_block(const float *input,
                 }
                 else
                 {
-                    if (output && process_output != output)
+                    output_levels = CalculateLevels(process_output, sample_count, input);
+                    if (!output_levels.finite)
+                    {
+                        result = ECHIDNA_RESULT_ERROR;
+                        telemetry_outcome =
+                            echidna::utils::TelemetryBlockOutcome::kFailure;
+                        if (output && output != input)
+                        {
+                            std::memcpy(output, input, sizeof(float) * sample_count);
+                        }
+                    }
+                    else
+                    {
+                        telemetry_outcome = output_levels.changed
+                                                ? echidna::utils::TelemetryBlockOutcome::kMutated
+                                                : echidna::utils::TelemetryBlockOutcome::kUnchanged;
+                    }
+                    if (output_levels.finite && output && process_output != output)
                     {
                         std::memcpy(output, process_output, sizeof(float) * sample_count);
                     }
-                    output_levels = CalculateLevels(process_output, sample_count);
-                    detected_pitch =
-                        EstimatePitchHz(process_output, frames, channel_count, sample_rate);
+                    detected_pitch = output_levels.finite
+                                         ? EstimatePitchHz(process_output,
+                                                           frames,
+                                                           channel_count,
+                                                           sample_rate)
+                                         : 0.0f;
                     if (detected_pitch > 0.0f)
                     {
                         const float midi =
@@ -655,6 +705,8 @@ echidna_result_t echidna_process_block(const float *input,
             else if (output && output != input)
             {
                 std::memcpy(output, input, sizeof(float) * sample_count);
+                result = ECHIDNA_RESULT_ERROR;
+                telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kFailure;
             }
         }
     }
@@ -678,16 +730,11 @@ echidna_result_t echidna_process_block(const float *input,
                                   static_cast<uint64_t>(wall_end.tv_nsec);
     const uint32_t xruns = bypassed ? 0 : UpdateWatchdog(wall_us, timestamp_ns, state);
 
-    state.telemetry().recordCallback(timestamp_ns, wall_us, cpu_us, flags, xruns);
-    state.telemetry().updateAudioLevels(input_levels.rms_db,
-                                        output_levels.rms_db,
-                                        input_levels.peak_db,
-                                        output_levels.peak_db,
-                                        detected_pitch,
-                                        target_pitch,
-                                        formant_shift_cents,
-                                        formant_width,
-                                        xruns);
+    (void)cpu_us;
+    (void)xruns;
+    state.telemetry().recordBlock(echidna::utils::CurrentTelemetryRoute(),
+                                  frames,
+                                  telemetry_outcome);
 
     if (bypassed)
     {

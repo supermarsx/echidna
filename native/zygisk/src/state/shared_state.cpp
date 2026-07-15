@@ -160,14 +160,14 @@ namespace echidna
             updateConfiguration(shared_memory_.snapshot());
         }
 
-        utils::TelemetrySharedMemory &SharedState::telemetry()
+        utils::TelemetryAccumulator &SharedState::telemetry()
         {
-            return telemetry_memory_;
+            return telemetry_accumulator_;
         }
 
-        const utils::TelemetrySharedMemory &SharedState::telemetry() const
+        const utils::TelemetryAccumulator &SharedState::telemetry() const
         {
-            return telemetry_memory_;
+            return telemetry_accumulator_;
         }
 
     } // namespace state

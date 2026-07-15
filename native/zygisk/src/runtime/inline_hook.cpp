@@ -39,7 +39,7 @@ namespace echidna
              *
              * This is deliberately not a silent `return false`: it complements the
              * per-hook telemetry failure that the calling hook manager records (via
-             * TelemetrySharedMemory::registerHookResult, since install() returns
+             * the process-local telemetry accumulator, since install() returns
              * false) by making the ABI-level root cause unambiguous in logcat. On
              * host builds without liblog it still surfaces on stderr so the signal is
              * never lost.

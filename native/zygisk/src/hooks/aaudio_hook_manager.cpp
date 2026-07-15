@@ -22,7 +22,7 @@
 #include "hooks/aaudio_callback_registry.h"
 #include "hooks/capture_buffer_router.h"
 #include "state/shared_state.h"
-#include "utils/telemetry_shared_memory.h"
+#include "utils/telemetry_accumulator.h"
 
 namespace echidna::hooks
 {
@@ -74,48 +74,6 @@ namespace echidna::hooks
         };
 
         StreamFns gStreamFns;
-
-        struct TimingStart
-        {
-            timespec wall{};
-            timespec cpu{};
-        };
-
-        TimingStart StartTiming()
-        {
-            TimingStart start;
-            clock_gettime(CLOCK_MONOTONIC, &start.wall);
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start.cpu);
-            return start;
-        }
-
-        void RecordHookCall(state::SharedState &shared_state,
-                            const TimingStart &start,
-                            uint32_t flags)
-        {
-            timespec wall_end{};
-            timespec cpu_end{};
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
-            clock_gettime(CLOCK_MONOTONIC, &wall_end);
-
-            const int64_t wall_ns =
-                (static_cast<int64_t>(wall_end.tv_sec) - start.wall.tv_sec) * 1000000000ll +
-                (static_cast<int64_t>(wall_end.tv_nsec) - start.wall.tv_nsec);
-            const int64_t cpu_ns =
-                (static_cast<int64_t>(cpu_end.tv_sec) - start.cpu.tv_sec) * 1000000000ll +
-                (static_cast<int64_t>(cpu_end.tv_nsec) - start.cpu.tv_nsec);
-            const uint64_t timestamp_ns =
-                static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
-                static_cast<uint64_t>(wall_end.tv_nsec);
-
-            shared_state.telemetry().recordCallback(
-                timestamp_ns,
-                static_cast<uint32_t>(std::max<int64_t>(wall_ns, 0) / 1000),
-                static_cast<uint32_t>(std::max<int64_t>(cpu_ns, 0) / 1000),
-                flags,
-                0);
-            shared_state.setStatus(state::InternalStatus::kHooked);
-        }
 
         bool ProcessingAllowed()
         {
@@ -174,6 +132,7 @@ namespace echidna::hooks
             const size_t bytes_per_sample =
                 config.format == audio::PcmFormat::kFloat32 ? sizeof(float) : sizeof(int16_t);
             const size_t byte_count = static_cast<size_t>(sample_count) * bytes_per_sample;
+            utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kAAudio);
             return RouteCaptureBufferInPlace(buffer,
                                              byte_count,
                                              config.format,
@@ -198,15 +157,7 @@ namespace echidna::hooks
             {
                 return read_frames;
             }
-            auto &shared_state = state::SharedState::instance();
-            const TimingStart timing = StartTiming();
-            const bool processed =
-                ProcessPcmBuffer(config, buffer, static_cast<uint32_t>(read_frames));
-            RecordHookCall(shared_state,
-                           timing,
-                           utils::kTelemetryFlagCallback |
-                               (processed ? utils::kTelemetryFlagDsp
-                                          : utils::kTelemetryFlagError));
+            (void)ProcessPcmBuffer(config, buffer, static_cast<uint32_t>(read_frames));
             return read_frames;
         }
 
@@ -236,31 +187,21 @@ namespace echidna::hooks
             InvocationGuard invocation(proxy_context);
 
             bool attempted = false;
-            bool processed = false;
-            TimingStart timing{};
             if (audio_data && frames > 0 && ProcessingAllowed())
             {
                 const StreamConfig config = QueryStreamConfig(stream);
                 if (config.valid)
                 {
                     attempted = true;
-                    timing = StartTiming();
-                    processed =
-                        ProcessPcmBuffer(config, audio_data, static_cast<uint32_t>(frames));
+                    (void)ProcessPcmBuffer(config,
+                                           audio_data,
+                                           static_cast<uint32_t>(frames));
                 }
             }
 
             const int result = target.callback(
                 stream, target.user_data, audio_data, frames);
-            if (attempted)
-            {
-                auto &shared_state = state::SharedState::instance();
-                RecordHookCall(shared_state,
-                               timing,
-                               utils::kTelemetryFlagCallback |
-                                   (processed ? utils::kTelemetryFlagDsp
-                                              : utils::kTelemetryFlagError));
-            }
+            (void)attempted;
             return result;
         }
 

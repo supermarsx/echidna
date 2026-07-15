@@ -70,6 +70,7 @@ namespace echidna
             std::atomic<bool> running_{false};
             std::atomic<bool> accepting_payloads_{true};
             std::thread worker_;
+            std::thread telemetry_worker_;
             // The worker exclusively closes this descriptor. stop() only
             // shutdowns it while holding client_mutex_ so a recycled fd can
             // never be touched by a concurrent teardown.
@@ -82,6 +83,7 @@ namespace echidna
             int64_t expected_publisher_uid_{-1};
             mutable std::mutex state_mutex_;
             std::mutex wait_mutex_;
+            std::mutex telemetry_wait_mutex_;
             std::condition_variable stop_requested_;
             uint64_t generation_{0};
             std::string generation_payload_;
@@ -90,6 +92,7 @@ namespace echidna
             bool snapshot_published_{false};
 
             void run();
+            void runTelemetryExporter();
             bool readAndApply(int client_fd);
             bool waitBeforeReconnect(std::chrono::milliseconds delay);
             void revokeProcessAdmission(bool notify_callback);

@@ -131,12 +131,19 @@ target_include_directories(process_utils_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(process_utils_test PRIVATE cxx_std_20)
 
+add_executable(telemetry_accumulator_test
+    telemetry_accumulator_test.cpp
+    ../src/utils/telemetry_accumulator.cpp)
+target_include_directories(telemetry_accumulator_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(telemetry_accumulator_test PRIVATE cxx_std_20)
+
 if(NOT WIN32)
   add_executable(config_shared_memory_test
       config_shared_memory_test.cpp
       ../src/state/shared_state.cpp
       ../src/utils/config_shared_memory.cpp
-      ../src/utils/telemetry_shared_memory.cpp)
+      ../src/utils/telemetry_accumulator.cpp)
   target_include_directories(config_shared_memory_test
       PRIVATE
           ${CMAKE_CURRENT_SOURCE_DIR}/../src)
@@ -150,7 +157,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
       ../src/runtime/profile_sync_protocol.cpp
       ../src/state/shared_state.cpp
       ../src/utils/config_shared_memory.cpp
-      ../src/utils/telemetry_shared_memory.cpp
+      ../src/utils/telemetry_accumulator.cpp
+      ../src/runtime/telemetry_socket_exporter.cpp
       ../src/utils/process_utils.cpp)
   target_link_libraries(profile_sync_server_test PRIVATE Threads::Threads)
   target_include_directories(profile_sync_server_test
@@ -159,6 +167,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
           ${CMAKE_CURRENT_SOURCE_DIR}/../include
           ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
   target_compile_features(profile_sync_server_test PRIVATE cxx_std_20)
+endif()
+
+if(NOT WIN32)
+  add_executable(telemetry_socket_exporter_test
+      telemetry_socket_exporter_test.cpp
+      ../src/runtime/telemetry_socket_exporter.cpp
+      ../src/utils/telemetry_accumulator.cpp)
+  target_include_directories(telemetry_socket_exporter_test
+      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+  target_compile_features(telemetry_socket_exporter_test PRIVATE cxx_std_20)
 endif()
 
 # Emit into the top-level build dir so a `./build/<...>/zygisk_dsp_smoke_test`
@@ -176,9 +194,12 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     capture_route_reachability_test
     profile_sync_protocol_test
     activation_gate_test
-    process_utils_test)
+    process_utils_test
+    telemetry_accumulator_test)
 if(NOT WIN32)
-  list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS config_shared_memory_test)
+  list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS
+      config_shared_memory_test
+      telemetry_socket_exporter_test)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
   list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS profile_sync_server_test)
@@ -201,8 +222,10 @@ add_test(NAME capture_route_reachability_test COMMAND capture_route_reachability
 add_test(NAME profile_sync_protocol_test COMMAND profile_sync_protocol_test)
 add_test(NAME activation_gate_test COMMAND activation_gate_test)
 add_test(NAME process_utils_test COMMAND process_utils_test)
+add_test(NAME telemetry_accumulator_test COMMAND telemetry_accumulator_test)
 if(NOT WIN32)
   add_test(NAME config_shared_memory_test COMMAND config_shared_memory_test)
+  add_test(NAME telemetry_socket_exporter_test COMMAND telemetry_socket_exporter_test)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
   add_test(NAME profile_sync_server_test COMMAND profile_sync_server_test)

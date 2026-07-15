@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "utils/config_shared_memory.h"
-#include "utils/telemetry_shared_memory.h"
+#include "utils/telemetry_accumulator.h"
 
 namespace echidna
 {
@@ -96,10 +96,10 @@ namespace echidna
             void refreshFromSharedMemory();
 
             /**
-             * @brief Accessor for telemetry shared memory.
+             * @brief Accessor for process-local realtime telemetry counters.
              */
-            utils::TelemetrySharedMemory &telemetry();
-            const utils::TelemetrySharedMemory &telemetry() const;
+            utils::TelemetryAccumulator &telemetry();
+            const utils::TelemetryAccumulator &telemetry() const;
 
         private:
             SharedState();
@@ -114,7 +114,7 @@ namespace echidna
             std::atomic<uint64_t> bypass_until_ns_;
             utils::ConfigSharedMemory shared_memory_;
             utils::ConfigurationSnapshot cached_snapshot_;
-            utils::TelemetrySharedMemory telemetry_memory_;
+            utils::TelemetryAccumulator telemetry_accumulator_;
         };
 
     } // namespace state

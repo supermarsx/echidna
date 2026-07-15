@@ -9,11 +9,13 @@
 #endif
 
 #include <arpa/inet.h>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -21,6 +23,7 @@
 
 #include "echidna/api.h"
 #include "runtime/reconnect_backoff.h"
+#include "runtime/telemetry_socket_exporter.h"
 #include "state/shared_state.h"
 #include "utils/config_shared_memory.h"
 #include "utils/process_utils.h"
@@ -349,6 +352,8 @@ namespace echidna::runtime
         }
         worker_ = std::thread([this]()
                               { run(); });
+        telemetry_worker_ = std::thread([this]()
+                                        { runTelemetryExporter(); });
     }
 
     void ProfileSyncServer::stop()
@@ -389,6 +394,10 @@ namespace echidna::runtime
         if (worker_.joinable())
         {
             worker_.join();
+        }
+        if (telemetry_worker_.joinable())
+        {
+            telemetry_worker_.join();
         }
         // A frame may already have passed recv() before shutdown and then waited
         // behind the first revoke. Clear again after join so it cannot leave the
@@ -456,6 +465,116 @@ namespace echidna::runtime
                     break;
                 }
                 reconnect_backoff.recordFailure();
+            }
+        }
+    }
+
+    void ProfileSyncServer::runTelemetryExporter()
+    {
+        constexpr auto kExportInterval = std::chrono::milliseconds(250);
+        constexpr size_t kRouteCount =
+            static_cast<size_t>(utils::TelemetryRoute::kCount);
+        std::array<utils::TelemetryDelta, kRouteCount> pending{};
+        for (size_t index = 0; index < kRouteCount; ++index)
+        {
+            pending[index].route = static_cast<utils::TelemetryRoute>(index);
+        }
+        size_t next_route = 0;
+        uint32_t sequence = 0;
+
+        while (running_.load(std::memory_order_acquire))
+        {
+            {
+                std::unique_lock lock(telemetry_wait_mutex_);
+                stop_requested_.wait_for(lock,
+                                         kExportInterval,
+                                         [this]()
+                                         {
+                                             return !running_.load(std::memory_order_acquire);
+                                         });
+            }
+            if (!running_.load(std::memory_order_acquire))
+            {
+                break;
+            }
+
+            auto &accumulator = state::SharedState::instance().telemetry();
+            for (size_t index = 0; index < kRouteCount; ++index)
+            {
+                pending[index].merge(
+                    accumulator.take(static_cast<utils::TelemetryRoute>(index)));
+            }
+
+            uint64_t generation = 0;
+            {
+                std::scoped_lock lock(state_mutex_);
+                if (snapshot_published_)
+                {
+                    generation = generation_;
+                }
+            }
+            if (generation == 0)
+            {
+                continue;
+            }
+
+            size_t selected = kRouteCount;
+            for (size_t offset = 0; offset < kRouteCount; ++offset)
+            {
+                const size_t candidate = (next_route + offset) % kRouteCount;
+                if (pending[candidate].pending())
+                {
+                    selected = candidate;
+                    break;
+                }
+            }
+            if (selected == kRouteCount)
+            {
+                continue;
+            }
+
+            int export_fd = -1;
+            {
+                std::scoped_lock lock(client_mutex_);
+                if (client_fd_ >= 0)
+                {
+#ifdef F_DUPFD_CLOEXEC
+                    export_fd = ::fcntl(client_fd_, F_DUPFD_CLOEXEC, 0);
+#else
+                    export_fd = ::dup(client_fd_);
+#endif
+                }
+            }
+            if (export_fd < 0)
+            {
+                continue;
+            }
+
+            uint32_t candidate_sequence = sequence + 1;
+            if (candidate_sequence == 0)
+            {
+                candidate_sequence = 1;
+            }
+            const auto monotonic_ms_raw =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            const uint64_t monotonic_ms = monotonic_ms_raw > 0
+                                              ? static_cast<uint64_t>(monotonic_ms_raw)
+                                              : 0;
+            const std::string payload = EncodeTelemetryV2(pending[selected],
+                                                          candidate_sequence,
+                                                          monotonic_ms,
+                                                          process_name_,
+                                                          generation);
+            const TelemetrySendResult send_result =
+                SendTelemetryV2Frame(export_fd, payload);
+            ::close(export_fd);
+            if (send_result == TelemetrySendResult::kComplete)
+            {
+                sequence = candidate_sequence;
+                pending[selected].clear();
+                next_route = (selected + 1) % kRouteCount;
             }
         }
     }

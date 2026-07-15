@@ -31,7 +31,7 @@
 #include "hooks/opensl_buffer_fifo.h"
 #include "hooks/opensl_pcm_contract.h"
 #include "state/shared_state.h"
-#include "utils/telemetry_shared_memory.h"
+#include "utils/telemetry_accumulator.h"
 
 namespace echidna::hooks
 {
@@ -251,6 +251,9 @@ namespace echidna::hooks
             {
                 return false;
             }
+#ifndef ECHIDNA_OPENSL_TESTING
+            utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kOpenSl);
+#endif
             return RouteCaptureBufferInPlace(buffer.data,
                                              buffer.bytes,
                                              queue.contract.format,
@@ -260,52 +263,6 @@ namespace echidna::hooks
                                              gTestProcessBlock);
 #else
                                              echidna_process_block);
-#endif
-        }
-
-        struct TimingStart
-        {
-            timespec wall{};
-            timespec cpu{};
-        };
-
-        TimingStart StartTiming()
-        {
-            TimingStart start;
-            clock_gettime(CLOCK_MONOTONIC, &start.wall);
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start.cpu);
-            return start;
-        }
-
-        void RecordHookCall(const TimingStart &start, bool processed)
-        {
-#ifdef ECHIDNA_OPENSL_TESTING
-            (void)start;
-            (void)processed;
-#else
-            timespec wall_end{};
-            timespec cpu_end{};
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
-            clock_gettime(CLOCK_MONOTONIC, &wall_end);
-            const int64_t wall_ns =
-                (static_cast<int64_t>(wall_end.tv_sec) - start.wall.tv_sec) * 1000000000ll +
-                (static_cast<int64_t>(wall_end.tv_nsec) - start.wall.tv_nsec);
-            const int64_t cpu_ns =
-                (static_cast<int64_t>(cpu_end.tv_sec) - start.cpu.tv_sec) * 1000000000ll +
-                (static_cast<int64_t>(cpu_end.tv_nsec) - start.cpu.tv_nsec);
-            const uint64_t timestamp_ns =
-                static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
-                static_cast<uint64_t>(wall_end.tv_nsec);
-            auto &shared_state = state::SharedState::instance();
-            shared_state.telemetry().recordCallback(
-                timestamp_ns,
-                static_cast<uint32_t>(std::max<int64_t>(wall_ns, 0) / 1000),
-                static_cast<uint32_t>(std::max<int64_t>(cpu_ns, 0) / 1000),
-                utils::kTelemetryFlagCallback |
-                    (processed ? utils::kTelemetryFlagDsp
-                               : utils::kTelemetryFlagError),
-                0);
-            shared_state.setStatus(state::InternalStatus::kHooked);
 #endif
         }
 
@@ -333,9 +290,7 @@ namespace echidna::hooks
                 const auto buffer = queue->buffers.pop();
                 if (buffer && ProcessingAllowed())
                 {
-                    const TimingStart timing = StartTiming();
-                    const bool processed = ProcessBuffer(*queue, *buffer);
-                    RecordHookCall(timing, processed);
+                    (void)ProcessBuffer(*queue, *buffer);
                 }
             }
             token->callback(caller, token->user_data);

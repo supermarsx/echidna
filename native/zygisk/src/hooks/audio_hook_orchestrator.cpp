@@ -15,10 +15,26 @@
 #endif
 
 #include <string>
+#include <string_view>
 #include <time.h>
 
 #include "state/shared_state.h"
 #include "utils/process_utils.h"
+#include "utils/telemetry_accumulator.h"
+
+namespace
+{
+    echidna::utils::TelemetryRoute RouteForHook(std::string_view name)
+    {
+        using echidna::utils::TelemetryRoute;
+        if (name == "AAudio") return TelemetryRoute::kAAudio;
+        if (name == "AudioRecord") return TelemetryRoute::kAudioRecord;
+        if (name == "OpenSL") return TelemetryRoute::kOpenSl;
+        if (name == "tinyalsa_pcm_read") return TelemetryRoute::kTinyAlsa;
+        if (name == "libc_read") return TelemetryRoute::kLibcRead;
+        return TelemetryRoute::kUnknown;
+    }
+}
 
 namespace echidna
 {
@@ -36,24 +52,11 @@ namespace echidna
 
         bool AudioHookOrchestrator::attempt(HookManager &manager)
         {
-            auto monotonic_now = []()
-            {
-                timespec ts{};
-                clock_gettime(CLOCK_MONOTONIC, &ts);
-                return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull +
-                       static_cast<uint64_t>(ts.tv_nsec);
-            };
-
             const bool success = manager.install();
             const auto &info = manager.lastInstallInfo();
             const auto &route = manager.routeDescriptor();
-            state::SharedState::instance().telemetry().registerHookResult(
-                manager.name(),
-                success,
-                monotonic_now(),
-                info.library,
-                info.symbol,
-                info.reason);
+            state::SharedState::instance().telemetry().recordInstall(
+                RouteForHook(manager.name()), success);
             __android_log_print(success ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
                                 "echidna",
                                 "hook install result name='%s' success=%d library='%s' "

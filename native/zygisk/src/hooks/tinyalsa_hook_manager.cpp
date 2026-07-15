@@ -24,7 +24,7 @@
 #include "hooks/capture_buffer_router.h"
 #include "hooks/tinyalsa_contract.h"
 #include "state/shared_state.h"
-#include "utils/telemetry_shared_memory.h"
+#include "utils/telemetry_accumulator.h"
 
 namespace echidna::hooks
 {
@@ -132,41 +132,13 @@ namespace echidna::hooks
                            size_t bytes,
                            const TinyAlsaPcmContract &contract)
         {
+            utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kTinyAlsa);
             return RouteCaptureBufferInPlace(data,
                                              bytes,
                                              contract.format,
                                              contract.sample_rate,
                                              contract.channels,
                                              echidna_process_block);
-        }
-
-        void RecordProcessing(const timespec &wall_start,
-                              const timespec &cpu_start,
-                              bool processed)
-        {
-            timespec wall_end{};
-            timespec cpu_end{};
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
-            clock_gettime(CLOCK_MONOTONIC, &wall_end);
-            const int64_t wall_ns =
-                (static_cast<int64_t>(wall_end.tv_sec) - wall_start.tv_sec) * 1000000000ll +
-                (static_cast<int64_t>(wall_end.tv_nsec) - wall_start.tv_nsec);
-            const int64_t cpu_ns =
-                (static_cast<int64_t>(cpu_end.tv_sec) - cpu_start.tv_sec) * 1000000000ll +
-                (static_cast<int64_t>(cpu_end.tv_nsec) - cpu_start.tv_nsec);
-            const uint64_t timestamp_ns =
-                static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
-                static_cast<uint64_t>(wall_end.tv_nsec);
-            auto &shared_state = state::SharedState::instance();
-            shared_state.telemetry().recordCallback(
-                timestamp_ns,
-                static_cast<uint32_t>(std::max<int64_t>(wall_ns, 0) / 1000),
-                static_cast<uint32_t>(std::max<int64_t>(cpu_ns, 0) / 1000),
-                utils::kTelemetryFlagCallback |
-                    (processed ? utils::kTelemetryFlagDsp
-                               : utils::kTelemetryFlagError),
-                0);
-            shared_state.setStatus(state::InternalStatus::kHooked);
         }
 
         int ForwardReadBytes(void *pcm,
@@ -189,12 +161,7 @@ namespace echidna::hooks
             {
                 return result;
             }
-            timespec wall_start{};
-            timespec cpu_start{};
-            clock_gettime(CLOCK_MONOTONIC, &wall_start);
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
-            const bool processed = ProcessBuffer(data, bytes, context->contract);
-            RecordProcessing(wall_start, cpu_start, processed);
+            (void)ProcessBuffer(data, bytes, context->contract);
             return result;
         }
 
@@ -221,12 +188,7 @@ namespace echidna::hooks
             {
                 return result;
             }
-            timespec wall_start{};
-            timespec cpu_start{};
-            clock_gettime(CLOCK_MONOTONIC, &wall_start);
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
-            const bool processed = ProcessBuffer(data, *bytes, context->contract);
-            RecordProcessing(wall_start, cpu_start, processed);
+            (void)ProcessBuffer(data, *bytes, context->contract);
             return result;
         }
 

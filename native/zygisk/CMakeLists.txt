@@ -34,12 +34,13 @@ add_library(echidna SHARED
     src/utils/plt_resolver.cpp
     src/utils/api_level_probe.cpp
     src/utils/config_shared_memory.cpp
-    src/utils/telemetry_shared_memory.cpp
+    src/utils/telemetry_accumulator.cpp
     src/utils/process_utils.cpp
     src/jni/audio_bridge.cpp
     src/jni/native_bridge_runtime_zygisk.cpp
     src/runtime/profile_sync_protocol.cpp
-    src/runtime/profile_sync_server.cpp)
+    src/runtime/profile_sync_server.cpp
+    src/runtime/telemetry_socket_exporter.cpp)
 
 set_target_properties(echidna PROPERTIES
     OUTPUT_NAME echidna
