@@ -43,6 +43,8 @@ namespace echidna::dsp::effects
                                uint32_t channels,
                                float ratio,
                                bool preserve_formants) = 0;
+        /** Update pitch ratio without rebuilding or allocating backend state. */
+        virtual void set_realtime_ratio(float ratio) = 0;
         virtual void reset() = 0;
         virtual void process(const float *input,
                              float *output,
@@ -69,6 +71,8 @@ namespace echidna::dsp::effects
         void reset() override;
         /** Reserve callback scratch outside the audio thread. */
         void prepare_realtime(size_t max_frames);
+        /** Update the active backend ratio without rebuilding it. */
+        void set_realtime_ratio(float ratio);
         /** Execute processing with the active backend. */
         void process(ProcessContext &ctx) override;
 

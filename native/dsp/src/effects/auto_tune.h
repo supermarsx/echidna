@@ -7,9 +7,11 @@
  */
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "effect_base.h"
+#include "pitch_shifter.h"
 
 namespace echidna::dsp::effects
 {
@@ -76,12 +78,26 @@ namespace echidna::dsp::effects
     private:
         /** Detect the dominant pitch (Hz) from samples for a given channel. */
         float detect_pitch(const float *samples, size_t frames, uint32_t channel);
+        /** Append an interleaved callback to the preallocated analysis ring. */
+        void append_analysis_history(const float *samples, size_t frames);
+        /** Copy one channel's available history into chronological order. */
+        size_t copy_analysis_channel(uint32_t channel);
         /** Map an input frequency to a target pitch based on selected key/scale. */
         float target_pitch(float input_hz) const;
 
         AutoTuneParameters params_{};
         std::vector<float> scratch_;
+        std::vector<float> analysis_history_;
+        std::vector<float> analysis_scratch_;
         std::vector<float> last_pitch_;
+        std::vector<float> detected_pitch_;
+        PitchShifter correction_shifter_;
+        size_t analysis_window_frames_{0};
+        size_t analysis_write_frame_{0};
+        size_t analysis_frames_{0};
+        size_t analysis_frames_since_detection_{0};
+        size_t analysis_hop_frames_{1};
+        size_t max_block_frames_{0};
     };
 
 } // namespace echidna::dsp::effects

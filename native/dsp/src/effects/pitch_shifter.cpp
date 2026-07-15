@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -19,6 +20,7 @@ namespace echidna::dsp::effects
 {
     namespace
     {
+        constexpr size_t kDefaultRealtimeFrames = 8192;
 
         class GranularBackend : public PitchBackend
         {
@@ -28,56 +30,167 @@ namespace echidna::dsp::effects
                            float ratio,
                            bool preserve_formants) override
             {
-                (void)sample_rate;
                 (void)preserve_formants;
                 channels_ = channels;
-                ratio_ = ratio;
+                ratio_ = std::isfinite(ratio) ? std::clamp(ratio, 0.5f, 2.0f) : 1.0f;
+                realtime_ratio_mode_ = false;
+                delay_span_frames_ = std::max<size_t>(64, sample_rate / 100);
+                delay_capacity_frames_ = delay_span_frames_ + 4;
+                delay_buffer_.assign(delay_capacity_frames_ * channels_, 0.0f);
                 phases_.assign(channels_, 0.0f);
+                wet_step_ = 1.0f /
+                            std::max(1.0f, static_cast<float>(sample_rate) * 0.005f);
+                reset();
             }
 
-            void reset() override { std::fill(phases_.begin(), phases_.end(), 0.0f); }
+            void set_realtime_ratio(float ratio) override
+            {
+                ratio_ = std::isfinite(ratio) ? std::clamp(ratio, 0.5f, 2.0f) : 1.0f;
+                realtime_ratio_mode_ = true;
+            }
+
+            void reset() override
+            {
+                std::fill(delay_buffer_.begin(), delay_buffer_.end(), 0.0f);
+                std::fill(phases_.begin(), phases_.end(), 0.0f);
+                write_frame_ = 0;
+                wet_mix_ = 0.0f;
+            }
 
             void process(const float *input,
                          float *output,
                          size_t frames) override
             {
-                if (std::abs(ratio_ - 1.0f) < 1e-4f)
+                if (frames == 0 || channels_ == 0 || delay_capacity_frames_ == 0)
+                {
+                    return;
+                }
+
+                if (!realtime_ratio_mode_)
+                {
+                    process_legacy(input, output, frames);
+                    return;
+                }
+
+                constexpr double kPi = 3.14159265358979323846;
+                const bool active = std::abs(ratio_ - 1.0f) >= 1.0e-4f;
+                const double phase_step =
+                    (1.0 - static_cast<double>(ratio_)) /
+                    static_cast<double>(delay_span_frames_);
+
+                for (size_t frame = 0; frame < frames; ++frame)
+                {
+                    const size_t write_index =
+                        static_cast<size_t>(write_frame_ % delay_capacity_frames_);
+                    for (uint32_t channel = 0; channel < channels_; ++channel)
+                    {
+                        delay_buffer_[write_index * channels_ + channel] =
+                            input[frame * channels_ + channel];
+                    }
+
+                    const bool history_ready = write_frame_ > delay_span_frames_ + 2;
+                    if (!active || !history_ready)
+                    {
+                        for (uint32_t channel = 0; channel < channels_; ++channel)
+                        {
+                            output[frame * channels_ + channel] =
+                                input[frame * channels_ + channel];
+                        }
+                        wet_mix_ = 0.0f;
+                    }
+                    else
+                    {
+                        wet_mix_ = std::min(1.0f, wet_mix_ + wet_step_);
+                        for (uint32_t channel = 0; channel < channels_; ++channel)
+                        {
+                            double phase_a = phases_[channel];
+                            double phase_b = phase_a + 0.5;
+                            if (phase_b >= 1.0)
+                            {
+                                phase_b -= 1.0;
+                            }
+
+                            const double delay_a = 2.0 +
+                                                   phase_a * delay_span_frames_;
+                            const double delay_b = 2.0 +
+                                                   phase_b * delay_span_frames_;
+                            const float sample_a = read_delayed(delay_a, channel);
+                            const float sample_b = read_delayed(delay_b, channel);
+                            const float weight_a = static_cast<float>(
+                                0.5 - 0.5 * std::cos(2.0 * kPi * phase_a));
+                            const float shifted = sample_a * weight_a +
+                                                  sample_b * (1.0f - weight_a);
+                            const float dry = input[frame * channels_ + channel];
+                            output[frame * channels_ + channel] =
+                                dry + (shifted - dry) * wet_mix_;
+
+                            phase_a += phase_step;
+                            phase_a -= std::floor(phase_a);
+                            phases_[channel] = static_cast<float>(phase_a);
+                        }
+                    }
+                    ++write_frame_;
+                }
+            }
+
+        private:
+            void process_legacy(const float *input, float *output, size_t frames)
+            {
+                if (frames == 1)
+                {
+                    std::memcpy(output, input, sizeof(float) * channels_);
+                    return;
+                }
+                if (std::abs(ratio_ - 1.0f) < 1.0e-4f)
                 {
                     std::memcpy(output, input, sizeof(float) * frames * channels_);
                     return;
                 }
-                // Read the input at `ratio_` samples per output sample: ratio_ =
-                // 2^(semitones/12), so a downward request (ratio_ < 1) advances
-                // the read phase slower and lowers the pitch. (Previously this
-                // used 1/ratio_, which inverted the shift direction.)
-                const float step = ratio_;
-                for (uint32_t ch = 0; ch < channels_; ++ch)
+                for (uint32_t channel = 0; channel < channels_; ++channel)
                 {
-                    float phase = phases_[ch];
+                    float phase = phases_[channel];
                     for (size_t frame = 0; frame < frames; ++frame)
                     {
-                        const float index = phase;
-                        const size_t base = static_cast<size_t>(index);
-                        const float frac = index - static_cast<float>(base);
-                        const size_t i0 = std::min(base, frames - 1);
-                        const size_t i1 = std::min(base + 1, frames - 1);
-                        const float sample0 = input[i0 * channels_ + ch];
-                        const float sample1 = input[i1 * channels_ + ch];
-                        const float value = sample0 + (sample1 - sample0) * frac;
-                        output[frame * channels_ + ch] = value;
-                        phase += step;
+                        const size_t frame0 =
+                            std::min(static_cast<size_t>(phase), frames - 1);
+                        const size_t frame1 = std::min(frame0 + 1, frames - 1);
+                        const float fraction = phase - static_cast<float>(frame0);
+                        const float sample0 = input[frame0 * channels_ + channel];
+                        const float sample1 = input[frame1 * channels_ + channel];
+                        output[frame * channels_ + channel] =
+                            sample0 + (sample1 - sample0) * fraction;
+                        phase += ratio_;
                         if (phase >= static_cast<float>(frames - 1))
                         {
                             phase -= static_cast<float>(frames - 1);
                         }
                     }
-                    phases_[ch] = phase;
+                    phases_[channel] = phase;
                 }
             }
 
-        private:
+            float read_delayed(double delay_frames, uint32_t channel) const
+            {
+                const double position = static_cast<double>(write_frame_) - delay_frames;
+                const auto frame0 = static_cast<uint64_t>(std::floor(position));
+                const auto frame1 = frame0 + 1;
+                const float fraction = static_cast<float>(position - std::floor(position));
+                const size_t index0 = static_cast<size_t>(frame0 % delay_capacity_frames_);
+                const size_t index1 = static_cast<size_t>(frame1 % delay_capacity_frames_);
+                const float sample0 = delay_buffer_[index0 * channels_ + channel];
+                const float sample1 = delay_buffer_[index1 * channels_ + channel];
+                return sample0 + (sample1 - sample0) * fraction;
+            }
+
             uint32_t channels_{1};
             float ratio_{1.0f};
+            size_t delay_span_frames_{0};
+            size_t delay_capacity_frames_{0};
+            uint64_t write_frame_{0};
+            float wet_mix_{0.0f};
+            float wet_step_{1.0f};
+            bool realtime_ratio_mode_{false};
+            std::vector<float> delay_buffer_;
             std::vector<float> phases_;
         };
 
@@ -99,6 +212,11 @@ namespace echidna::dsp::effects
             void reset() override
             {
                 std::fill(previous_.begin(), previous_.end(), 0.0f);
+            }
+
+            void set_realtime_ratio(float ratio) override
+            {
+                ratio_ = std::isfinite(ratio) ? std::clamp(ratio, 0.5f, 2.0f) : 1.0f;
             }
 
             void process(const float *input,
@@ -193,6 +311,15 @@ namespace echidna::dsp::effects
             bool available() const { return instance_ && set_rate_ && set_channels_ && set_pitch_semitones_ &&
                                             put_samples_ && receive_samples_; }
 
+            void set_realtime_ratio(float ratio) override
+            {
+                ratio_ = std::isfinite(ratio) ? std::clamp(ratio, 0.5f, 2.0f) : 1.0f;
+                if (available())
+                {
+                    set_pitch_semitones_(instance_, std::log2(ratio_) * 12.0f);
+                }
+            }
+
             void configure(uint32_t sample_rate,
                            uint32_t channels,
                            float ratio,
@@ -286,6 +413,7 @@ namespace echidna::dsp::effects
     void PitchShifter::prepare(uint32_t sample_rate, uint32_t channels)
     {
         EffectProcessor::prepare(sample_rate, channels);
+        scratch_.reserve(kDefaultRealtimeFrames * static_cast<size_t>(channels));
         rebuild_backend();
     }
 
@@ -303,6 +431,14 @@ namespace echidna::dsp::effects
         scratch_.reserve(max_frames * static_cast<size_t>(channels_));
     }
 
+    void PitchShifter::set_realtime_ratio(float ratio)
+    {
+        if (backend_)
+        {
+            backend_->set_realtime_ratio(ratio);
+        }
+    }
+
     /** Compute the current semitone ratio applied by the pitch shifter. */
     float PitchShifter::ratio() const
     {
@@ -313,11 +449,18 @@ namespace echidna::dsp::effects
     /** Run processing using the configured backend. */
     void PitchShifter::process(ProcessContext &ctx)
     {
-        if (!enabled_ || !backend_)
+        if (!enabled_ || !backend_ || ctx.buffer == nullptr || ctx.frames == 0 ||
+            ctx.channels != channels_)
         {
             return;
         }
-        scratch_.assign(ctx.buffer, ctx.buffer + ctx.frames * ctx.channels);
+        const size_t samples = ctx.frames * ctx.channels;
+        if (samples > scratch_.capacity())
+        {
+            return;
+        }
+        scratch_.resize(samples);
+        std::copy_n(ctx.buffer, samples, scratch_.data());
         backend_->process(scratch_.data(), ctx.buffer, ctx.frames);
     }
 

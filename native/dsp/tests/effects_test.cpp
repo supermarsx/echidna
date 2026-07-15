@@ -81,6 +81,54 @@ namespace
         return v;
     }
 
+    std::vector<float> make_sine_at_rate(double freq,
+                                         size_t frames,
+                                         double amp,
+                                         uint32_t sample_rate)
+    {
+        std::vector<float> samples(frames);
+        for (size_t frame = 0; frame < frames; ++frame)
+        {
+            samples[frame] = static_cast<float>(
+                amp * std::sin(2.0 * kPi * freq * static_cast<double>(frame) /
+                               static_cast<double>(sample_rate)));
+        }
+        return samples;
+    }
+
+    double estimate_crossing_frequency(const std::vector<float> &samples,
+                                       uint32_t sample_rate,
+                                       size_t begin_frame,
+                                       size_t end_frame = static_cast<size_t>(-1))
+    {
+        end_frame = std::min(end_frame, samples.size());
+        double first_crossing = 0.0;
+        double last_crossing = 0.0;
+        size_t crossings = 0;
+        for (size_t frame = std::max<size_t>(1, begin_frame); frame < end_frame; ++frame)
+        {
+            const double previous = samples[frame - 1];
+            const double current = samples[frame];
+            if (previous <= 0.0 && current > 0.0 && current != previous)
+            {
+                const double crossing = static_cast<double>(frame - 1) -
+                                        previous / (current - previous);
+                if (crossings == 0)
+                {
+                    first_crossing = crossing;
+                }
+                last_crossing = crossing;
+                ++crossings;
+            }
+        }
+        if (crossings < 2 || last_crossing <= first_crossing)
+        {
+            return 0.0;
+        }
+        return static_cast<double>(crossings - 1) * sample_rate /
+               (last_crossing - first_crossing);
+    }
+
     double autocorr(const std::vector<float> &x, int lag, size_t lo, size_t hi)
     {
         double c = 0.0;
@@ -162,10 +210,8 @@ namespace
     // --- Pitch shifter -----------------------------------------------------
     // The low-latency granular backend is a naive within-block resampler: it
     // maps a requested ratio 2^((semitones + cents/100)/12) onto the output
-    // fundamental *period*. The magnitude of the applied shift (in cents) tracks
-    // the requested magnitude precisely; the sign of the frequency change is
-    // inverted relative to the intuitive convention (a known backend quirk, see
-    // log). These tests assert the invariant magnitude + exact identity at unity.
+    // fundamental. These tests assert direction, magnitude and exact identity at
+    // unity while preserving the legacy static-ratio backend contract.
     void test_pitch_shifter()
     {
         const uint32_t sr = static_cast<uint32_t>(kSampleRate);
@@ -223,6 +269,9 @@ namespace
             const double applied = std::fabs(cents(f_out, 200.0));
             // +/- 12 cents tolerance around the requested magnitude.
             CHECK_BETWEEN(applied, c.expect_cents - 12.0, c.expect_cents + 12.0);
+            const double requested = c.semitones * 100.0 + c.cents;
+            CHECK(requested > 0.0 ? f_out > 200.0 : f_out < 200.0,
+                  "pitch shifter must move in the requested direction");
         }
     }
 
@@ -306,22 +355,58 @@ namespace
     // Snap accuracy is validated on in-tune material: a tone already on the
     // chromatic grid must remain within +/-10 cents of that note after tuning
     // (detection + note selection + correction round-trip is unity). The tracker
-    // must also converge to a stable output pitch. (Correction of far-detuned
-    // input has an inverted-direction quirk in the resampler; see log.)
-    void run_autotune(AutoTune &a, const std::vector<float> &in, std::vector<float> &buf, int blocks)
-    {
-        const uint32_t sr = static_cast<uint32_t>(kSampleRate);
-        for (int i = 0; i < blocks; ++i)
-        {
-            buf = in;
-            ProcessContext ctx{buf.data(), in.size(), 1, sr};
-            a.process(ctx);
-        }
-    }
-
+    // must also converge to a stable output pitch.
     void test_auto_tune()
     {
         const uint32_t sr = static_cast<uint32_t>(kSampleRate);
+
+        auto configure = [](AutoTune &tuner, uint32_t sample_rate, size_t block_frames)
+        {
+            tuner.prepare(sample_rate, 1);
+            tuner.prepare_realtime(block_frames);
+            tuner.set_enabled(true);
+            AutoTuneParameters parameters;
+            parameters.key = MusicalKey::kC;
+            parameters.scale = ScaleType::kChromatic;
+            parameters.retune_speed_ms = 1.0f;
+            parameters.humanize = 0.0f;
+            parameters.flex_tune = 0.0f;
+            parameters.snap_strength = 100.0f;
+            tuner.set_parameters(parameters);
+            tuner.reset();
+        };
+
+        auto process_stream = [](AutoTune &tuner,
+                                 std::vector<float> &samples,
+                                 size_t block_frames,
+                                 uint32_t sample_rate)
+        {
+            for (size_t offset = 0; offset < samples.size(); offset += block_frames)
+            {
+                const size_t frames = std::min(block_frames, samples.size() - offset);
+                ProcessContext ctx{samples.data() + offset, frames, 1, sample_rate};
+                tuner.process(ctx);
+            }
+        };
+
+        auto corrected_stream = [&](double input_hz,
+                                    uint32_t sample_rate,
+                                    size_t block_frames)
+        {
+            const size_t analysis_frames = sample_rate / 30;
+            const size_t warm_callbacks =
+                (analysis_frames + block_frames - 1) / block_frames + 32;
+            const size_t stream_callbacks =
+                (static_cast<size_t>(sample_rate) * 2 + block_frames - 1) /
+                block_frames;
+            const size_t callbacks = std::max(warm_callbacks, stream_callbacks);
+            auto samples = make_sine_at_rate(
+                input_hz, callbacks * block_frames, 0.35, sample_rate);
+            AutoTune tuner;
+            configure(tuner, sample_rate, block_frames);
+            process_stream(tuner, samples, block_frames, sample_rate);
+            return samples;
+        };
 
         // Disabled: identity.
         {
@@ -346,32 +431,125 @@ namespace
         const double notes[] = {440.0, 523.25}; // A4, C5
         for (double note : notes)
         {
-            const size_t n = 4096;
-            auto in = make_sine(note, n, 0.5);
-            std::vector<float> buf(n);
-            AutoTune a;
-            a.prepare(sr, 1);
-            a.set_enabled(true);
-            AutoTuneParameters ap;
-            ap.key = MusicalKey::kC;
-            ap.scale = ScaleType::kChromatic;
-            ap.retune_speed_ms = 1.0f;
-            ap.humanize = 0.0f;
-            ap.flex_tune = 0.0f;
-            ap.snap_strength = 100.0f;
-            a.set_parameters(ap);
-            run_autotune(a, in, buf, 600);
-            CHECK(all_finite(buf), "auto-tune output must be finite");
-            const int min_lag = static_cast<int>(kSampleRate / 1200.0);
-            const int max_lag = static_cast<int>(kSampleRate / 200.0);
-            const double f_out = estimate_freq(buf, min_lag, max_lag, 200, 3000);
+            constexpr size_t block_frames = 480;
+            const auto output = corrected_stream(note, sr, block_frames);
+            const size_t tail_frames = block_frames * 16;
+            const double f_out =
+                estimate_crossing_frequency(output, sr, output.size() - tail_frames);
+            CHECK(all_finite(output), "auto-tune output must be finite");
             CHECK_BETWEEN(std::fabs(cents(f_out, note)), 0.0, 10.0);
 
-            // Stability: one more block must not move the pitch materially.
-            std::vector<float> buf2(n);
-            run_autotune(a, in, buf2, 1);
-            const double f2 = estimate_freq(buf2, min_lag, max_lag, 200, 3000);
-            CHECK(std::fabs(cents(f2, f_out)) < 3.0, "auto-tune pitch must be stable once converged");
+            const double previous_hz = estimate_crossing_frequency(
+                output, sr, output.size() - tail_frames * 2, output.size() - tail_frames);
+            CHECK_BETWEEN(std::fabs(cents(previous_hz, note)), 0.0, 10.0);
+        }
+
+        // Stateful history and resampling must correct a continuous stream, not
+        // merely the interior of one callback. Cover the callback sizes used by
+        // Android low-latency and balanced paths in both correction directions.
+        for (size_t block_frames : {size_t{64},
+                                    size_t{128},
+                                    size_t{240},
+                                    size_t{256},
+                                    size_t{480},
+                                    size_t{960},
+                                    size_t{2048}})
+        {
+            for (double input_hz : {430.0, 450.0})
+            {
+                const auto output = corrected_stream(input_hz, sr, block_frames);
+                const size_t tail_frames = std::min(output.size(), block_frames * 16);
+                const double output_hz =
+                    estimate_crossing_frequency(output, sr, output.size() - tail_frames);
+                CHECK(all_finite(output), "continuous auto-tune output must be finite");
+                CHECK_BETWEEN(output_hz, 432.5, 447.5);
+
+                double max_boundary_jump = 0.0;
+                const size_t first_boundary = output.size() - tail_frames + block_frames;
+                for (size_t boundary = first_boundary;
+                     boundary < output.size();
+                     boundary += block_frames)
+                {
+                    max_boundary_jump = std::max(
+                        max_boundary_jump,
+                        static_cast<double>(std::fabs(output[boundary] - output[boundary - 1])));
+                }
+                CHECK(max_boundary_jump < 0.05,
+                      "callback continuity fade must prevent boundary clicks");
+            }
+        }
+
+        // Exercise common Android sample rates in both correction directions.
+        for (uint32_t sample_rate : {uint32_t{44100}, uint32_t{48000}, uint32_t{96000}})
+        {
+            for (double input_hz : {430.0, 450.0})
+            {
+                constexpr size_t block_frames = 480;
+                const auto output = corrected_stream(input_hz, sample_rate, block_frames);
+                const size_t tail_frames = block_frames * 16;
+                const double output_hz = estimate_crossing_frequency(
+                    output, sample_rate, output.size() - tail_frames);
+                CHECK_BETWEEN(output_hz, 432.5, 447.5);
+            }
+        }
+
+        // Silence and deterministic aperiodic input are unvoiced and must be
+        // exact bypasses. Reset must also restore history, smoothing and phase.
+        {
+            constexpr size_t block_frames = 480;
+            constexpr size_t callbacks = 40;
+            std::vector<float> silence(block_frames * callbacks, 0.0f);
+            auto silence_output = silence;
+            AutoTune tuner;
+            configure(tuner, sr, block_frames);
+            process_stream(tuner, silence_output, block_frames, sr);
+            CHECK(silence_output == silence, "silence must bypass auto-tune exactly");
+
+            std::vector<float> noise(block_frames * callbacks);
+            uint32_t state = 0x12345678U;
+            for (float &sample : noise)
+            {
+                state = state * 1664525U + 1013904223U;
+                sample = (static_cast<float>(state >> 8) / 8388607.5f - 1.0f) * 0.2f;
+            }
+            auto noise_output = noise;
+            tuner.reset();
+            process_stream(tuner, noise_output, block_frames, sr);
+            CHECK(noise_output == noise, "aperiodic input must bypass auto-tune exactly");
+
+            const auto input = make_sine_at_rate(450.0, block_frames * callbacks, 0.35, sr);
+            auto after_reset = input;
+            auto fresh_output = input;
+            tuner.reset();
+            process_stream(tuner, after_reset, block_frames, sr);
+            AutoTune fresh;
+            configure(fresh, sr, block_frames);
+            process_stream(fresh, fresh_output, block_frames, sr);
+            double reset_difference = 0.0;
+            for (size_t frame = 0; frame < input.size(); ++frame)
+            {
+                reset_difference = std::max(
+                    reset_difference,
+                    static_cast<double>(std::fabs(after_reset[frame] - fresh_output[frame])));
+            }
+            CHECK(reset_difference < 1e-7,
+                  "reset must restore deterministic analysis and resampling state");
+        }
+
+        // Canary samples around a prepared callback prove the effect respects
+        // the public frame boundary while using its preallocated scratch.
+        {
+            constexpr size_t block_frames = 480;
+            constexpr float guard = 1234.5f;
+            auto tone = make_sine_at_rate(450.0, block_frames, 0.35, sr);
+            std::vector<float> guarded(block_frames + 2, guard);
+            std::copy(tone.begin(), tone.end(), guarded.begin() + 1);
+            AutoTune tuner;
+            configure(tuner, sr, block_frames);
+            ProcessContext ctx{guarded.data() + 1, block_frames, 1, sr};
+            tuner.process(ctx);
+            CHECK(guarded.front() == guard && guarded.back() == guard,
+                  "auto-tune must not write outside the callback buffer");
         }
     }
 
