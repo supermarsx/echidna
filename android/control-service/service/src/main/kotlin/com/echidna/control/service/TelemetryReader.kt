@@ -9,6 +9,12 @@ import kotlin.collections.ArrayList
 private const val TELEMETRY_MAGIC = 0xEDC1DA10u
 private const val TELEMETRY_VERSION = 2
 private const val SHARED_MEMORY_PATH = "/dev/shm/echidna_telemetry"
+private const val MAX_TELEMETRY_SAMPLES = 96
+private const val MAX_TELEMETRY_HOOKS = 8
+private const val TELEMETRY_SAMPLE_BYTES = 24
+private const val TELEMETRY_HOOK_BYTES_V1 = 56
+private const val TELEMETRY_HOOK_BYTES_V2 = 184
+private const val TELEMETRY_HEADER_BYTES = 96
 
 internal class TelemetryReader {
     fun snapshot(): TelemetrySnapshot? {
@@ -29,7 +35,7 @@ internal class TelemetryReader {
     }
 
     private fun parse(buffer: ByteBuffer): TelemetrySnapshot? {
-        if (buffer.remaining() < 4 * 6 + 8 * 3 + 4 * 8) {
+        if (buffer.remaining() < TELEMETRY_HEADER_BYTES) {
             return null
         }
         val magic = buffer.int.toUInt()
@@ -45,12 +51,18 @@ internal class TelemetryReader {
             return null
         }
         val sampleCapacity = buffer.int
+        if (sampleCapacity < 0 || sampleCapacity > MAX_TELEMETRY_SAMPLES) {
+            return null
+        }
         val writeIndex = buffer.int
         val sampleCount = buffer.int
         val totalCallbacks = buffer.long
         val totalCallbackNs = buffer.long
         val totalCpuNs = buffer.long
         val hookCapacity = buffer.int
+        if (hookCapacity < 0 || hookCapacity > MAX_TELEMETRY_HOOKS) {
+            return null
+        }
         val hookCount = buffer.int
         val avgLatencyMs = buffer.float
         val avgCpuPercent = buffer.float
@@ -64,6 +76,14 @@ internal class TelemetryReader {
         val formantWidth = buffer.float
         val xruns = buffer.int
         val warningFlags = buffer.int
+
+        val hookRecordBytes = if (version >= 2) TELEMETRY_HOOK_BYTES_V2 else TELEMETRY_HOOK_BYTES_V1
+        val requiredLayoutBytes = buffer.position() +
+            sampleCapacity * TELEMETRY_SAMPLE_BYTES +
+            hookCapacity * hookRecordBytes
+        if (layoutSize < requiredLayoutBytes || buffer.limit() < requiredLayoutBytes) {
+            return null
+        }
 
         val rawSamples = ArrayList<TelemetrySample>(sampleCapacity)
         repeat(sampleCapacity) {

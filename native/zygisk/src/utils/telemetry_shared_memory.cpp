@@ -93,11 +93,13 @@ namespace echidna
                 return;
             }
 
-            fd_ = shm_open(kTelemetrySharedMemoryName, O_RDWR | O_CREAT, 0666);
+            fd_ = shm_open(kTelemetrySharedMemoryName, O_RDWR | O_CREAT, 0600);
             if (fd_ < 0)
             {
                 return;
             }
+
+            (void)fchmod(fd_, 0600);
 
             if (ftruncate(fd_, static_cast<off_t>(layout_size_)) != 0)
             {
@@ -151,11 +153,14 @@ namespace echidna
                 return;
             }
 
-            const uint32_t capacity = layout_->sample_capacity;
+            const uint32_t capacity = std::min(layout_->sample_capacity,
+                                               static_cast<uint32_t>(kTelemetryMaxSamples));
             if (capacity == 0)
             {
                 return;
             }
+            layout_->sample_capacity = capacity;
+            layout_->sample_count = std::min(layout_->sample_count, capacity);
 
             const uint32_t index = layout_->write_index % capacity;
             TelemetrySampleRecord &slot = layout_->samples[index].record;
@@ -250,6 +255,15 @@ namespace echidna
                 return;
             }
 
+            const uint32_t hook_capacity = std::min(layout_->hook_capacity,
+                                                   static_cast<uint32_t>(kTelemetryMaxHooks));
+            if (hook_capacity == 0)
+            {
+                return;
+            }
+            layout_->hook_capacity = hook_capacity;
+            layout_->hook_count = std::min(layout_->hook_count, hook_capacity);
+
             TelemetryHookRecord *record = nullptr;
             for (uint32_t i = 0; i < layout_->hook_count; ++i)
             {
@@ -263,10 +277,10 @@ namespace echidna
 
             if (!record)
             {
-                if (layout_->hook_count >= layout_->hook_capacity)
+                if (layout_->hook_count >= hook_capacity)
                 {
                     // Replace the oldest record when capacity exceeded.
-                    record = &layout_->hooks[layout_->hook_count % layout_->hook_capacity].record;
+                    record = &layout_->hooks[layout_->hook_count % hook_capacity].record;
                 }
                 else
                 {
@@ -339,17 +353,23 @@ namespace echidna
             snapshot.xruns = layout_->xruns;
             snapshot.warning_flags = layout_->warning_flags;
 
-            const uint32_t capacity = layout_->sample_capacity;
+            const uint32_t capacity = std::min(layout_->sample_capacity,
+                                               static_cast<uint32_t>(kTelemetryMaxSamples));
             const uint32_t count = std::min(layout_->sample_count, capacity);
             const uint32_t write_index = layout_->write_index % (capacity == 0 ? 1u : capacity);
             snapshot.samples.reserve(count);
-            for (uint32_t i = 0; i < count; ++i)
+            if (capacity > 0)
             {
-                uint32_t index = (write_index + capacity - count + i) % capacity;
-                snapshot.samples.push_back(layout_->samples[index].record);
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    uint32_t index = (write_index + capacity - count + i) % capacity;
+                    snapshot.samples.push_back(layout_->samples[index].record);
+                }
             }
 
-            const uint32_t hook_count = std::min(layout_->hook_count, layout_->hook_capacity);
+            const uint32_t hook_capacity = std::min(layout_->hook_capacity,
+                                                   static_cast<uint32_t>(kTelemetryMaxHooks));
+            const uint32_t hook_count = std::min(layout_->hook_count, hook_capacity);
             snapshot.hooks.reserve(hook_count);
             for (uint32_t i = 0; i < hook_count; ++i)
             {
