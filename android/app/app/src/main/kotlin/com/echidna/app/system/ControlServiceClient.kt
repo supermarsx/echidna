@@ -107,6 +107,15 @@ class ControlServiceClient(private val context: Context) {
         }
     }
 
+    fun exportDiagnostics(includeTrends: Boolean): String? {
+        return try {
+            service?.exportDiagnostics(includeTrends)
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to export diagnostics", ex)
+            null
+        }
+    }
+
     fun pushProfile(id: String, json: String) {
         try {
             service?.pushProfile(id, json)

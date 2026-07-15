@@ -159,6 +159,17 @@ class EchidnaControlService : Service() {
             }
         }
 
+        override fun exportDiagnostics(includeTrends: Boolean): String {
+            return safeBinder("export diagnostics", "{}") {
+                telemetryExporter.exportDiagnostics(
+                    includeTrends = includeTrends,
+                    statusJson = buildStatusJson(privilegedController.lastKnownStatus()),
+                    whitelistBindingsJson = profileStore.buildWhitelistBindingsJson(),
+                    controlStateJson = profileStore.buildControlStateJson()
+                )
+            }
+        }
+
         override fun setProfile(profile: String?) {
             if (profile.isNullOrEmpty()) {
                 return

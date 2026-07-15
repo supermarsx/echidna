@@ -76,6 +76,12 @@ class DiagnosticsViewModel : ViewModel() {
         }
     }
 
+    fun exportDiagnostics(includeTrends: Boolean = true, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            onResult(repo.exportDiagnostics(includeTrends))
+        }
+    }
+
     fun setTelemetryOptIn(enabled: Boolean) {
         repo.setTelemetryOptIn(enabled)
     }

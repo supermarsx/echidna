@@ -18,6 +18,7 @@ class SettingsViewModel : ViewModel() {
     val moduleStatus = repo.moduleStatus
     val compatibility = repo.compatibilityState
     val telemetry = repo.telemetry
+    val whitelistBindings = repo.whitelistBindings
     val persistentNotification: StateFlow<Boolean> = repo.notificationEnabled
 
     fun setStartWithSystem(enabled: Boolean) = repo.setStartWithSystem(enabled)

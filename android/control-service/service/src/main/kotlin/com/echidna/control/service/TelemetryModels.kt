@@ -134,4 +134,89 @@ internal data class TelemetrySnapshot(
         root.put("xruns", xruns)
         return root.toString()
     }
+
+    fun diagnosticsJson(includeTrends: Boolean): JSONObject {
+        val root = JSONObject()
+        root.put("totalCallbacks", totalCallbacks)
+        root.put("averageLatencyMs", averageLatencyMs)
+        root.put("averageCpuPercent", averageCpuPercent)
+        root.put("inputRms", inputRms)
+        root.put("outputRms", outputRms)
+        root.put("inputPeak", inputPeak)
+        root.put("outputPeak", outputPeak)
+        root.put("detectedPitchHz", detectedPitchHz)
+        root.put("targetPitchHz", targetPitchHz)
+        root.put("formantShiftCents", formantShiftCents)
+        root.put("formantWidth", formantWidth)
+        root.put("xruns", xruns)
+        root.put("warningFlags", warningFlags)
+        root.put("warnings", JSONArray(warnings))
+
+        val hooksArray = JSONArray()
+        hooks.forEach { hook ->
+            val obj = JSONObject()
+            obj.put("name", hook.name)
+            if (hook.library.isNotEmpty()) {
+                obj.put("library", hook.library)
+            }
+            if (hook.symbol.isNotEmpty()) {
+                obj.put("symbol", hook.symbol)
+            }
+            if (hook.reason.isNotEmpty()) {
+                obj.put("reason", hook.reason)
+            }
+            obj.put("attempts", hook.attempts)
+            obj.put("successes", hook.successes)
+            obj.put("failures", hook.failures)
+            obj.put("successRate", hook.successRate())
+            hooksArray.put(obj)
+        }
+        root.put("hooks", hooksArray)
+        if (includeTrends) {
+            root.put("sampleSummary", sampleSummaryJson())
+        }
+        return root
+    }
+
+    private fun sampleSummaryJson(): JSONObject {
+        val root = JSONObject()
+        root.put("sampleCount", samples.size)
+        root.put("durationUs", intStatsJson(samples.map { it.durationUs }))
+        root.put("cpuUs", intStatsJson(samples.map { it.cpuUs }))
+        root.put("xruns", intStatsJson(samples.map { it.xruns }))
+        val flagCounts = JSONObject()
+        samples.forEach { sample ->
+            val key = sample.flags.toString()
+            flagCounts.put(key, flagCounts.optInt(key, 0) + 1)
+        }
+        root.put("flagCounts", flagCounts)
+        return root
+    }
+
+    private fun intStatsJson(values: List<Int>): JSONObject {
+        val root = JSONObject()
+        if (values.isEmpty()) {
+            root.put("min", 0)
+            root.put("max", 0)
+            root.put("avg", 0.0)
+            root.put("total", 0L)
+            return root
+        }
+        var min = Int.MAX_VALUE
+        var max = Int.MIN_VALUE
+        var total = 0L
+        values.forEach { value ->
+            if (value < min) min = value
+            if (value > max) max = value
+            total += value.toLong()
+        }
+        root.put("min", min)
+        root.put("max", max)
+        root.put("avg", total.toDouble() / values.size)
+        root.put("total", total)
+        return root
+    }
+
+    private fun HookTelemetry.successRate(): Double =
+        if (attempts == 0) 0.0 else successes.toDouble() / attempts
 }

@@ -177,6 +177,13 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                                         "Exported telemetry (${it.length} bytes)"
                                     }
                                 }
+                            },
+                            onExportDiagnostics = {
+                                viewModel.exportDiagnostics { result ->
+                                    exportSummary = result?.let {
+                                        "Exported diagnostics (${it.length} bytes)"
+                                    }
+                                }
                             }
                         )
                     }
@@ -367,7 +374,8 @@ private fun TelemetryExportCard(
     telemetryOptIn: Boolean,
     exportSummary: String?,
     onTelemetryOptIn: (Boolean) -> Unit,
-    onExport: () -> Unit
+    onExport: () -> Unit,
+    onExportDiagnostics: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -382,7 +390,8 @@ private fun TelemetryExportCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Telemetry export", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = "Exports latency and CPU statistics without preset names or IDs.",
+                        text = "Exports runtime and diagnostic internals without raw package names, " +
+                            "preset IDs, device names, or timestamps.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -398,6 +407,13 @@ private fun TelemetryExportCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Export anonymized telemetry")
+            }
+            Button(
+                onClick = onExportDiagnostics,
+                enabled = telemetryOptIn,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Export diagnostic internals")
             }
             exportSummary?.let {
                 Text(

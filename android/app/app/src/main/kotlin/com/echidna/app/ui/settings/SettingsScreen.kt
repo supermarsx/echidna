@@ -61,6 +61,7 @@ import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
 import com.echidna.app.model.TelemetrySnapshot
+import com.echidna.app.model.WhitelistBindings
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -79,6 +80,7 @@ fun SettingsScreen(
     val moduleStatus by viewModel.moduleStatus.collectAsStateWithLifecycle()
     val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
+    val whitelistBindings by viewModel.whitelistBindings.collectAsStateWithLifecycle()
 
     var newProfileName by remember { mutableStateOf("") }
     var selectedProfileId by remember { mutableStateOf<String?>(null) }
@@ -100,7 +102,8 @@ fun SettingsScreen(
         engineStatus = engineStatus,
         moduleStatus = moduleStatus,
         compatibility = compatibility,
-        telemetry = telemetry
+        telemetry = telemetry,
+        whitelistBindings = whitelistBindings
     )
 
     Column(
@@ -122,7 +125,8 @@ fun SettingsScreen(
             SettingsTab.ALERTS -> {
                 AdvisoryAlertsSection(
                     alerts = alerts,
-                    onLaunchCompatibility = onLaunchCompatibility
+                    onLaunchCompatibility = onLaunchCompatibility,
+                    onLaunchWhitelist = onLaunchWhitelist
                 )
                 AlertPreferencesSection(
                     settings = settings,
@@ -293,7 +297,8 @@ private fun HeaderSection(
 @Composable
 private fun AdvisoryAlertsSection(
     alerts: List<AdvisoryAlert>,
-    onLaunchCompatibility: () -> Unit
+    onLaunchCompatibility: () -> Unit,
+    onLaunchWhitelist: () -> Unit
 ) {
     SettingsSection(title = "Advisory Alerts") {
         Text(
@@ -310,8 +315,13 @@ private fun AdvisoryAlertsSection(
                 AlertRow(alert)
             }
         }
-        OutlinedButton(onClick = onLaunchCompatibility, modifier = Modifier.fillMaxWidth()) {
-            Text("Open Compatibility Wizard")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = onLaunchCompatibility, modifier = Modifier.weight(1f)) {
+                Text("Compatibility", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            OutlinedButton(onClick = onLaunchWhitelist, modifier = Modifier.weight(1f)) {
+                Text("Whitelist", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
@@ -867,7 +877,8 @@ private fun buildAdvisoryAlerts(
     engineStatus: EngineStatus,
     moduleStatus: ModuleStatus?,
     compatibility: CompatibilityResult?,
-    telemetry: TelemetrySnapshot
+    telemetry: TelemetrySnapshot,
+    whitelistBindings: WhitelistBindings
 ): List<AdvisoryAlert> = buildList {
     if (settings.showInstallAlerts) {
         if (moduleStatus == null) {
@@ -902,6 +913,17 @@ private fun buildAdvisoryAlerts(
     }
 
     if (settings.showBridgeAlerts) {
+        if (settings.masterEnabled && !settings.bypass && whitelistBindings.enabledCount() == 0) {
+            add(
+                AdvisoryAlert(
+                    title = "No target apps are whitelisted",
+                    detail = "Echidna fails closed until at least one app is enabled in the " +
+                        "Per-App Whitelist. Open the whitelist and enable each app you expect " +
+                        "to intercept.",
+                    category = "Hook scope"
+                )
+            )
+        }
         engineStatus.lastError?.let { error ->
             add(
                 AdvisoryAlert(
@@ -1223,6 +1245,8 @@ private fun String.containsAdvisoryWord(): Boolean {
         "warning"
     ).any(lower::contains)
 }
+
+private fun WhitelistBindings.enabledCount(): Int = whitelist.count { it.value }
 
 private fun String.compactForAlert(maxLength: Int = 220): String =
     if (length <= maxLength) this else take(maxLength - 3).trimEnd() + "..."

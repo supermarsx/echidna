@@ -94,6 +94,10 @@ object ControlStateRepository {
     private val _telemetry = MutableStateFlow(defaultTelemetry())
     val telemetry: StateFlow<TelemetrySnapshot> = _telemetry.asStateFlow()
 
+    private val _whitelistBindings =
+        MutableStateFlow(WhitelistBindings(emptyMap(), emptyMap()))
+    val whitelistBindings: StateFlow<WhitelistBindings> = _whitelistBindings.asStateFlow()
+
     private val _latencyHistogram = MutableStateFlow<List<LatencyBucket>>(emptyList())
     val latencyHistogram: StateFlow<List<LatencyBucket>> = _latencyHistogram.asStateFlow()
 
@@ -231,6 +235,7 @@ object ControlStateRepository {
                         }
                         // Module/SELinux/HAL probes change slowly — refresh every ~10s.
                         if (tick % 5L == 0L) {
+                            fetchWhitelistBindings()
                             serviceClient.getModuleStatus()?.let { json ->
                                 TelemetryParser.parseModuleStatus(json)?.let { applyModuleStatus(it) }
                             }
@@ -618,6 +623,7 @@ object ControlStateRepository {
         scope.launch {
             try {
                 serviceClient.updateWhitelist(packageName, enabled)
+                fetchWhitelistBindings()
             } catch (_: Exception) {
             }
         }
@@ -628,6 +634,7 @@ object ControlStateRepository {
         scope.launch {
             try {
                 serviceClient.setAppPresetBinding(packageName, presetId)
+                fetchWhitelistBindings()
             } catch (_: Exception) {
             }
         }
@@ -960,7 +967,12 @@ object ControlStateRepository {
         if (!::serviceClient.isInitialized) return@withContext WhitelistBindings(emptyMap(), emptyMap())
         val json = serviceClient.getWhitelistBindings()
             ?: return@withContext WhitelistBindings(emptyMap(), emptyMap())
-        TelemetryParser.parseWhitelistBindings(json) ?: WhitelistBindings(emptyMap(), emptyMap())
+        val bindings = TelemetryParser.parseWhitelistBindings(json) ?: WhitelistBindings(
+            emptyMap(),
+            emptyMap()
+        )
+        _whitelistBindings.value = bindings
+        bindings
     }
 
     /** Enumerates user-launchable packages so the whitelist editor need not hand-type them. */
@@ -987,6 +999,14 @@ object ControlStateRepository {
 
     fun exportTelemetry(includeTrends: Boolean = true): String? {
         return if (::serviceClient.isInitialized) serviceClient.exportTelemetry(includeTrends) else null
+    }
+
+    fun exportDiagnostics(includeTrends: Boolean = true): String? {
+        return if (::serviceClient.isInitialized) {
+            serviceClient.exportDiagnostics(includeTrends)
+        } else {
+            null
+        }
     }
 
     private fun applyTelemetry(snapshot: TelemetrySnapshot) {

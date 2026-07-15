@@ -23,6 +23,7 @@ interface IEchidnaControlService {
     void unregisterTelemetryListener(IEchidnaTelemetryListener listener);
     void setTelemetryOptIn(boolean enabled);
     String exportTelemetry(boolean includeTrends);
+    String exportDiagnostics(boolean includeTrends);
     void setProfile(String profile);
     void pushProfileSnapshot(String profileId, String profileJson);
     void setLatencyModeOverride(String profileId, String latencyMode);
