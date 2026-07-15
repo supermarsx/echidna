@@ -56,6 +56,7 @@ class PolicySnapshotService : Service() {
     private lateinit var capabilityIssuer: LegacyCapabilityIssuer
     private lateinit var issuanceLedger: LegacyCapabilityIssuanceLedger
     private lateinit var telemetryRelay: LegacyPreprocessorTelemetryRelay
+    private lateinit var telemetryProofVerifier: LegacyPreprocessorTelemetryProofVerifier
     private val callbacks = object : RemoteCallbackList<IEchidnaPolicyListener>() {
         override fun onCallbackDied(
             callback: IEchidnaPolicyListener?,
@@ -72,11 +73,18 @@ class PolicySnapshotService : Service() {
         registryObservation = PublishedPolicyRegistry.observe(::scheduleInvalidation)
         val flagStore = LegacyPreprocessorFlagStore(applicationContext)
         issuanceLedger = LegacyCapabilityIssuanceLedger()
+        telemetryProofVerifier = LegacyPreprocessorTelemetryProofVerifier(
+            AppPrivateTelemetryProofKeySource(
+                File(File(filesDir, "echidna"), "preprocessor_telemetry_hmac.key"),
+            ),
+        )
         telemetryRelay = LegacyPreprocessorTelemetryRelay(
             issuanceLedger,
             AuthenticatedTelemetryRegistry.store,
             PublishedPolicyRegistry::generation,
+            telemetryProofVerifier,
         )
+        telemetryExecutor.execute { telemetryProofVerifier.prepare() }
         val signingExecutor = BoundedCapabilityExecutor()
         capabilityIssuer = LegacyCapabilityIssuer(
             enabled = flagStore::isEnabled,
@@ -101,6 +109,7 @@ class PolicySnapshotService : Service() {
         synchronized(registrationLock) { registrations.clear() }
         executor.shutdownNow()
         telemetryExecutor.shutdownNow()
+        if (::telemetryProofVerifier.isInitialized) telemetryProofVerifier.close()
         if (::issuanceLedger.isInitialized) issuanceLedger.clear()
         if (::capabilityIssuer.isInitialized) capabilityIssuer.close()
         super.onDestroy()
@@ -244,6 +253,42 @@ class PolicySnapshotService : Service() {
                 }
             } catch (_: RejectedExecutionException) {
                 // One-way diagnostics are best effort; saturation must not block Binder threads.
+            }
+        }
+
+        override fun reportLegacyPreprocessorTelemetryProofV5(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            proof: ByteArray?,
+        ) {
+            val callingUid = Binder.getCallingUid()
+            val callingPid = Binder.getCallingPid()
+            val receivedAtMs = SystemClock.elapsedRealtime()
+            val packageName = authorizeCapabilityCaller(callingUid, callingPid, processName)
+                ?: return
+            if (
+                packageName != processName?.substringBefore(':') ||
+                proof == null || proof.size != PREPROCESSOR_TELEMETRY_PROOF_VALUE_BYTES
+            ) {
+                return
+            }
+            val ownedProof = proof.clone()
+            val ownedProcess = processName
+            try {
+                telemetryExecutor.execute {
+                    telemetryRelay.reportProof(
+                        callingUid,
+                        callingPid,
+                        ownedProcess,
+                        audioSessionId,
+                        generation,
+                        ownedProof,
+                        receivedAtMs,
+                    )
+                }
+            } catch (_: RejectedExecutionException) {
+                // One-way proof ingestion is best effort and must not block Binder threads.
             }
         }
     }

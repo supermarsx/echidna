@@ -17,4 +17,7 @@ interface IEchidnaPolicyProvider {
     // Append-only v4 surface. Nonce is the exact 16-byte value in the active signed capability.
     oneway void reportLegacyPreprocessorTelemetryV4(int audioSessionId, String processName,
             long generation, in byte[] capabilityNonce, in byte[] snapshot);
+    // Append-only v5 surface. Proof is the exact fixed 112-byte ECHT v2 value.
+    oneway void reportLegacyPreprocessorTelemetryProofV5(int audioSessionId, String processName,
+            long generation, in byte[] proof);
 }

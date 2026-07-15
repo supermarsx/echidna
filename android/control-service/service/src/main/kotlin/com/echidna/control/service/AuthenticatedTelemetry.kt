@@ -64,6 +64,7 @@ internal enum class AuthenticatedTelemetryVerification(
     val processingProofEligible: Boolean,
 ) {
     AUTHENTICATED_SOCKET_V2("authenticated_socket_v2", true),
+    EFFECT_HMAC_V1("effect_hmac_v1", true),
     CALLER_ATTESTED_BINDER_V1("caller_attested_binder_v1", false),
 }
 
@@ -412,8 +413,10 @@ internal data class AuthenticatedTelemetrySnapshot(
     val processing: Boolean
         get() = entries.any {
             it.generation == policyGeneration &&
-                it.verification ==
-                AuthenticatedTelemetryVerification.AUTHENTICATED_SOCKET_V2.wireName &&
+                AuthenticatedTelemetryVerification.entries.any { verification ->
+                    verification.wireName == it.verification &&
+                        verification.processingProofEligible
+                } &&
                 it.state == AuthenticatedTelemetryState.PROCESSING.wireName &&
                 it.recentMutation &&
                 it.mutations > 0L

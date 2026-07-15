@@ -53,6 +53,23 @@ class AuthenticatedTelemetryParsingTest {
     }
 
     @Test
+    fun `effect hmac mutation proof is trusted end to end`() {
+        val snapshot = TelemetryParser.parse(
+            snapshotJson(
+                currentGeneration = 11L,
+                routeGeneration = 11L,
+                state = "processing",
+                recentMutation = true,
+                mutations = 1L,
+            ).replace("authenticated_socket_v2", "effect_hmac_v1")
+                .replace("\"route\":\"aaudio\"", "\"route\":\"preprocessor\""),
+        )!!
+
+        assertTrue(snapshot.hasVerifiedRuntimeTelemetry)
+        assertTrue(snapshot.isVerifiedProcessing)
+    }
+
+    @Test
     fun `old generation and legacy shared memory snapshots never assert processing`() {
         val oldGeneration = TelemetryParser.parse(
             snapshotJson(

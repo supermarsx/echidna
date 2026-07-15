@@ -11,6 +11,7 @@ import com.echidna.app.model.TelemetrySample
 import com.echidna.app.model.TelemetrySnapshot
 import com.echidna.app.model.TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2
 import com.echidna.app.model.TELEMETRY_VERIFICATION_CALLER_ATTESTED_BINDER_V1
+import com.echidna.app.model.TELEMETRY_VERIFICATION_EFFECT_HMAC_V1
 import com.echidna.app.model.TELEMETRY_VERIFICATION_MIXED
 import com.echidna.app.model.TELEMETRY_VERIFICATION_UNVERIFIED
 import com.echidna.app.model.WhitelistBindings
@@ -248,6 +249,7 @@ internal object TelemetryParser {
 
     private val SUPPORTED_ROUTE_VERIFICATIONS = setOf(
         TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2,
+        TELEMETRY_VERIFICATION_EFFECT_HMAC_V1,
         TELEMETRY_VERIFICATION_CALLER_ATTESTED_BINDER_V1,
     )
     private val SUPPORTED_SNAPSHOT_VERIFICATIONS = SUPPORTED_ROUTE_VERIFICATIONS +

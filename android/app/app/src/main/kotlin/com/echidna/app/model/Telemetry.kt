@@ -58,13 +58,13 @@ data class TelemetrySnapshot(
     val hasVerifiedRuntimeTelemetry: Boolean
         get() = currentPolicyGeneration > 0L && routes.any {
             it.generation == currentPolicyGeneration &&
-                it.verification == TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2
+                it.verification in TELEMETRY_PROCESSING_PROOF_VERIFICATIONS
         }
 
     val isVerifiedProcessing: Boolean
         get() = hasVerifiedRuntimeTelemetry && routes.any { route ->
             route.generation == currentPolicyGeneration &&
-                route.verification == TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2 &&
+                route.verification in TELEMETRY_PROCESSING_PROOF_VERIFICATIONS &&
                 route.state == "processing" &&
                 route.recentMutation &&
                 route.mutations > 0L
@@ -72,9 +72,14 @@ data class TelemetrySnapshot(
 }
 
 const val TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2 = "authenticated_socket_v2"
+const val TELEMETRY_VERIFICATION_EFFECT_HMAC_V1 = "effect_hmac_v1"
 const val TELEMETRY_VERIFICATION_CALLER_ATTESTED_BINDER_V1 = "caller_attested_binder_v1"
 const val TELEMETRY_VERIFICATION_MIXED = "mixed_route_verification_v1"
 const val TELEMETRY_VERIFICATION_UNVERIFIED = "unverified"
+private val TELEMETRY_PROCESSING_PROOF_VERIFICATIONS = setOf(
+    TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2,
+    TELEMETRY_VERIFICATION_EFFECT_HMAC_V1,
+)
 
 data class LatencyBucket(val label: String, val count: Int)
 

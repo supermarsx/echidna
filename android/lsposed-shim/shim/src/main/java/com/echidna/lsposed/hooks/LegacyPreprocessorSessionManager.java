@@ -32,6 +32,8 @@ final class LegacyPreprocessorSessionManager {
             0x45, 0x43, 0x48, 0x50, 0x00, 0x02, 0x00, 0x02};
     static final byte[] TELEMETRY_PARAMETER = {
             0x45, 0x43, 0x48, 0x54, 0x00, 0x01, 0x00, 0x01};
+    static final byte[] TELEMETRY_PROOF_PARAMETER = {
+            0x45, 0x43, 0x48, 0x54, 0x00, 0x02, 0x00, 0x02};
     static final byte[] REVOKE_VALUE = {0};
 
     private static final long HEALTH_CHECK_MS = 250L;
@@ -41,6 +43,7 @@ final class LegacyPreprocessorSessionManager {
     private static final int MAX_PROCESS_BYTES = 255;
     private static final long MAX_PRESET_BYTES = 60L * 1024L;
     private static final int TELEMETRY_VALUE_BYTES = 48;
+    private static final int TELEMETRY_PROOF_VALUE_BYTES = 112;
     private static final long UINT32_MASK = 0xffff_ffffL;
 
     interface PolicyAccess {
@@ -704,6 +707,47 @@ final class LegacyPreprocessorSessionManager {
     }
 
     private void pollTelemetry(Session session) {
+        byte[] capabilityNonce = session.capabilityNonce;
+        if (capabilityNonce == null || capabilityNonce.length != 16) {
+            diagnostics.report("telemetry_capability_missing", null);
+            return;
+        }
+        if (pollTelemetryProof(session, capabilityNonce)) {
+            return;
+        }
+        pollDiagnosticTelemetry(session, capabilityNonce);
+    }
+
+    private boolean pollTelemetryProof(Session session, byte[] capabilityNonce) {
+        byte[] parameter = Arrays.copyOf(
+                TELEMETRY_PROOF_PARAMETER,
+                TELEMETRY_PROOF_PARAMETER.length + capabilityNonce.length);
+        System.arraycopy(
+                capabilityNonce,
+                0,
+                parameter,
+                TELEMETRY_PROOF_PARAMETER.length,
+                capabilityNonce.length);
+        byte[] raw = new byte[TELEMETRY_PROOF_VALUE_BYTES];
+        try {
+            int status = session.effect.getParameter(parameter, raw);
+            if (status != TELEMETRY_PROOF_VALUE_BYTES) {
+                diagnostics.report("telemetry_proof_parameter_" + status, null);
+                return false;
+            }
+        } catch (Throwable error) {
+            diagnostics.report("telemetry_proof_read_failed", error);
+            return false;
+        }
+        if (!telemetryClient.report(
+                session.sessionId, session.generation, capabilityNonce, raw)) {
+            diagnostics.report("telemetry_proof_provider_unavailable", null);
+            return false;
+        }
+        return true;
+    }
+
+    private void pollDiagnosticTelemetry(Session session, byte[] capabilityNonce) {
         byte[] raw = new byte[TELEMETRY_VALUE_BYTES];
         try {
             int status = session.effect.getParameter(TELEMETRY_PARAMETER, raw);
@@ -741,11 +785,6 @@ final class LegacyPreprocessorSessionManager {
                 diagnostics.report("telemetry_counter_rollback", null);
                 return;
             }
-        }
-        byte[] capabilityNonce = session.capabilityNonce;
-        if (capabilityNonce == null || capabilityNonce.length != 16) {
-            diagnostics.report("telemetry_capability_missing", null);
-            return;
         }
         if (!telemetryClient.report(
                 session.sessionId, session.generation, capabilityNonce, raw)) {

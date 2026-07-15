@@ -548,6 +548,59 @@ public final class LegacyPreprocessorSessionManagerTest {
     }
 
     @Test
+    public void telemetryQueriesNonceBoundV2FirstAndForwardsTheRawProof() {
+        Harness harness = new Harness();
+        harness.start(69);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+        byte[] proof = new byte[112];
+        for (int index = 0; index < proof.length; index++) {
+            proof[index] = (byte) (index + 1);
+        }
+        effect.proofStatus = 112;
+        effect.proofValues.add(proof);
+
+        harness.scheduler.advance(250L);
+
+        assertEquals(1, effect.proofReadCount);
+        assertEquals(0, effect.telemetryReadCount);
+        assertEquals(Arrays.asList("proof"), effect.parameterQueries);
+        assertArrayEquals(
+                LegacyPreprocessorSessionManager.TELEMETRY_PROOF_PARAMETER,
+                Arrays.copyOf(effect.lastProofParameter, 8));
+        assertArrayEquals(
+                harness.capabilities.requests.get(0).nonce,
+                Arrays.copyOfRange(effect.lastProofParameter, 8, 24));
+        assertEquals(1, harness.telemetry.snapshots.size());
+        assertArrayEquals(proof, harness.telemetry.snapshots.get(0));
+    }
+
+    @Test
+    public void unavailableV2FallsBackOnlyToCallerAttestedDiagnostics() {
+        Harness harness = new Harness();
+        harness.start(70);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        FakeEffect effect = harness.factory.created.get(0);
+        effect.proofStatus = -126;
+        effect.telemetryOverride = telemetry(70, 1L, 1L, 3, 1L, 4L, 0L, 1L);
+
+        harness.scheduler.advance(250L);
+
+        assertEquals(Arrays.asList("proof", "diagnostic"), effect.parameterQueries);
+        assertEquals(1, effect.proofReadCount);
+        assertEquals(1, effect.telemetryReadCount);
+        assertEquals(48, harness.telemetry.snapshots.get(0).length);
+        assertTrue(harness.diagnostics.codes.contains("telemetry_proof_parameter_-126"));
+
+        effect.proofError = new Exception("proof read failed");
+        harness.scheduler.advance(250L);
+        assertTrue(harness.diagnostics.codes.contains("telemetry_proof_read_failed"));
+        assertEquals(2, effect.telemetryReadCount);
+    }
+
+    @Test
     public void sameSessionEffectRecreationReportsTheNewAcceptedCapabilityNonce() {
         Harness harness = new Harness();
         harness.start(68);
@@ -945,12 +998,18 @@ public final class LegacyPreprocessorSessionManagerTest {
         byte[] lastAuthorizeParameter;
         Exception releaseError;
         Exception telemetryError;
+        Exception proofError;
         int telemetryStatus = 48;
+        int proofStatus = -22;
         byte[] telemetryOverride;
         final Deque<byte[]> telemetryValues = new ArrayDeque<>();
+        final Deque<byte[]> proofValues = new ArrayDeque<>();
+        final List<String> parameterQueries = new ArrayList<>();
+        byte[] lastProofParameter;
         long generation;
         long telemetrySequence;
         int telemetryReadCount;
+        int proofReadCount;
         Runnable beforeAuthorize;
         Runnable beforeRevoke;
         Runnable beforeEnable;
@@ -987,7 +1046,24 @@ public final class LegacyPreprocessorSessionManagerTest {
 
         @Override
         public int getParameter(byte[] parameter, byte[] value) throws Exception {
+            if (parameter.length == 24
+                    && Arrays.equals(
+                            LegacyPreprocessorSessionManager.TELEMETRY_PROOF_PARAMETER,
+                            Arrays.copyOf(parameter, 8))) {
+                parameterQueries.add("proof");
+                proofReadCount++;
+                lastProofParameter = parameter.clone();
+                if (proofError != null) throw proofError;
+                if (proofStatus == 112) {
+                    byte[] proof = !proofValues.isEmpty()
+                            ? proofValues.removeFirst()
+                            : new byte[112];
+                    System.arraycopy(proof, 0, value, 0, Math.min(proof.length, value.length));
+                }
+                return proofStatus;
+            }
             assertArrayEquals(LegacyPreprocessorSessionManager.TELEMETRY_PARAMETER, parameter);
+            parameterQueries.add("diagnostic");
             telemetryReadCount++;
             if (telemetryError != null) throw telemetryError;
             if (telemetryStatus == 48) {

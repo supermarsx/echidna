@@ -4,6 +4,7 @@ import android.content.Context
 import android.system.Os
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.io.File
 import java.security.KeyFactory
 import java.security.KeyStore
 import java.security.Signature
@@ -57,5 +58,39 @@ class LegacyPreprocessorKeyStoreInstrumentedTest {
         assertTrue(migrated.setEnabled(true))
         assertTrue(LegacyPreprocessorFlagStore(context).isEnabled())
         assertTrue(migrated.setEnabled(false))
+    }
+
+    @Test
+    fun telemetryProofKeyLoaderRejectsModeSizeZeroAndSymlinkDrift() {
+        val directory = File(context.cacheDir, "telemetry-proof-loader").apply {
+            deleteRecursively()
+            assertTrue(mkdirs())
+        }
+        val keyFile = File(directory, "proof.key")
+        val link = File(directory, "proof.link")
+        try {
+            val key = ByteArray(PREPROCESSOR_TELEMETRY_PROOF_KEY_BYTES) { (it + 1).toByte() }
+            keyFile.writeBytes(key)
+            Os.chmod(keyFile.absolutePath, 384) // 0600
+            assertArrayEquals(key, AppPrivateTelemetryProofKeySource(keyFile).load())
+
+            Os.chmod(keyFile.absolutePath, 420) // 0644
+            assertNull(AppPrivateTelemetryProofKeySource(keyFile).load())
+
+            keyFile.writeBytes(ByteArray(PREPROCESSOR_TELEMETRY_PROOF_KEY_BYTES - 1) { 1 })
+            Os.chmod(keyFile.absolutePath, 384)
+            assertNull(AppPrivateTelemetryProofKeySource(keyFile).load())
+
+            keyFile.writeBytes(ByteArray(PREPROCESSOR_TELEMETRY_PROOF_KEY_BYTES))
+            Os.chmod(keyFile.absolutePath, 384)
+            assertNull(AppPrivateTelemetryProofKeySource(keyFile).load())
+
+            keyFile.writeBytes(key)
+            Os.chmod(keyFile.absolutePath, 384)
+            Os.symlink(keyFile.absolutePath, link.absolutePath)
+            assertNull(AppPrivateTelemetryProofKeySource(link).load())
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 }

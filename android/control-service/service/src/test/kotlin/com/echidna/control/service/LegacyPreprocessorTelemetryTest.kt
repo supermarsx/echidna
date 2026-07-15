@@ -2,6 +2,10 @@ package com.echidna.control.service
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -10,6 +14,167 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LegacyPreprocessorTelemetryTest {
+    @Test
+    fun `v2 codec accepts the native golden proof and rejects tamper wrong key and framing`() {
+        val key = ByteArray(32) { it.toByte() }
+        val golden = hex(
+            "4543485400020002007000070000002901020304050607080102030405060708" +
+                "090a0b0c0d0e0f10fffffffffffffffe00000005ffffffff80000000630dcd29" +
+                "66c4336691125448bbb25b4f00000000416d73deaf6412d3bd08f9f905d69f07" +
+                "aace87ae5f58ab1a73935083f8581a0d",
+        )
+        val decoded = LegacyPreprocessorTelemetryProofCodec.verify(golden, key)
+        assertNotNull(decoded)
+        assertEquals(41, decoded!!.sessionId)
+        assertEquals(0x0102_0304_0506_0708L, decoded.generation)
+        assertEquals(0xffff_ffffL, decoded.sequence)
+        assertEquals(0x8000_0000L, decoded.mutations)
+
+        listOf(0, 4, 6, 8, 11, 24, 60, 76, 80, 111).forEach { offset ->
+            assertNull(
+                LegacyPreprocessorTelemetryProofCodec.verify(
+                    golden.clone().also { it[offset] = (it[offset].toInt() xor 1).toByte() },
+                    key,
+                ),
+            )
+        }
+        assertNull(LegacyPreprocessorTelemetryProofCodec.verify(golden, ByteArray(32) { 7 }))
+        assertNull(LegacyPreprocessorTelemetryProofCodec.verify(golden.copyOf(111), key))
+        assertNull(LegacyPreprocessorTelemetryProofCodec.verify(golden, ByteArray(31)))
+    }
+
+    @Test
+    fun `missing key rotation and key id mismatch fail closed`() {
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val rotated = ByteArray(32) { (it + 33).toByte() }
+        val proof = proof(key, 41, 7L, nonce(1), 1L, 3, 0L, 0L, 0L, 0L)
+        val missing = LegacyPreprocessorTelemetryProofVerifier { null }
+        assertFalse(missing.prepare())
+        assertFalse(missing.available())
+        assertNull(missing.verify(proof))
+
+        var selected = key
+        val verifier = LegacyPreprocessorTelemetryProofVerifier { selected.clone() }
+        assertTrue(verifier.prepare())
+        assertNotNull(verifier.verify(proof))
+        selected = rotated
+        assertTrue(verifier.prepare())
+        assertNull(verifier.verify(proof))
+        assertNotNull(
+            verifier.verify(proof(rotated, 41, 7L, nonce(1), 1L, 3, 0, 0, 0, 0)),
+        )
+
+        val wrongId = proof.clone().also {
+            MessageDigest.getInstance("SHA-256").digest(key).copyOf(16).forEachIndexed { index, byte ->
+                it[60 + index] = (byte.toInt() xor 0x55).toByte()
+            }
+            signProof(it, key)
+        }
+        assertNull(LegacyPreprocessorTelemetryProofCodec.verify(wrongId, key))
+        verifier.close()
+        assertFalse(verifier.available())
+    }
+
+    @Test
+    fun `hmac proof requires a live incarnation and a positive current delta to process`() {
+        val fixture = Fixture()
+        val firstNonce = fixture.nonce(1)
+        assertTrue(fixture.issue(firstNonce))
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.reportProof(proof(fixture.proofKey, 41, 7L, firstNonce, 100L, 3, 50, 200, 0, 9)),
+        )
+        var telemetry = fixture.store.snapshot(7L)
+        assertFalse(telemetry.processing)
+        assertEquals("effect_hmac_v1", telemetry.entries.single().verification)
+        assertEquals(0L, telemetry.totalMutations)
+
+        fixture.advance(250L)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.reportProof(proof(fixture.proofKey, 41, 7L, firstNonce, 101L, 3, 52, 208, 0, 10)),
+        )
+        telemetry = fixture.store.snapshot(7L)
+        assertTrue(telemetry.processing)
+        assertEquals(2L, telemetry.totalBlocks)
+        assertEquals(8L, telemetry.totalFrames)
+        assertEquals(1L, telemetry.totalMutations)
+
+        fixture.advance(250L)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.STALE_SEQUENCE,
+            fixture.reportProof(proof(fixture.proofKey, 41, 7L, firstNonce, 101L, 3, 52, 208, 0, 10)),
+        )
+
+        val secondNonce = fixture.nonce(2)
+        assertTrue(fixture.issue(secondNonce))
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY,
+            fixture.reportProof(proof(fixture.proofKey, 41, 7L, firstNonce, 102L, 3, 53, 212, 0, 11)),
+        )
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.reportProof(proof(fixture.proofKey, 41, 7L, secondNonce, 1L, 3, 53, 212, 0, 11)),
+        )
+        telemetry = fixture.store.snapshot(7L)
+        assertFalse(telemetry.processing)
+        assertEquals(0L, telemetry.totalMutations)
+
+        fixture.advance(250L)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.reportProof(proof(fixture.proofKey, 41, 7L, secondNonce, 2L, 3, 54, 216, 0, 12)),
+        )
+        assertTrue(fixture.store.snapshot(7L).processing)
+        assertEquals(1L, fixture.store.snapshot(7L).totalMutations)
+    }
+
+    @Test
+    fun `proof relay rejects tamper stale policy and v1 downgrade while retaining diagnostics`() {
+        val fixture = Fixture()
+        assertTrue(fixture.issue())
+        val valid = proof(fixture.proofKey, 41, 7L, fixture.activeNonce, 1L, 3, 0, 0, 0, 0)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.AUTHENTICATION_FAILED,
+            fixture.reportProof(valid.clone().also { it[111] = (it[111].toInt() xor 1).toByte() }),
+        )
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.AUTHENTICATION_FAILED,
+            fixture.reportProof(snapshot(41, 7L, 1L, 3, 0, 0, 0, 0)),
+        )
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.SESSION_MISMATCH,
+            fixture.reportProof(
+                proof(fixture.proofKey, 42, 7L, fixture.activeNonce, 1L, 3, 0, 0, 0, 0),
+            ),
+        )
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.GENERATION_MISMATCH,
+            fixture.reportProof(
+                proof(fixture.proofKey, 41, 8L, fixture.activeNonce, 1L, 3, 0, 0, 0, 0),
+            ),
+        )
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY,
+            fixture.reportProof(
+                proof(fixture.proofKey, 41, 7L, fixture.nonce(9), 1L, 3, 0, 0, 0, 0),
+            ),
+        )
+        fixture.policyGeneration = 8L
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.STALE_POLICY,
+            fixture.reportProof(valid),
+        )
+
+        fixture.policyGeneration = 7L
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.report(snapshot(41, 7L, 1L, 3, 1, 4, 0, 1)),
+        )
+        assertFalse(fixture.store.snapshot(7L).processing)
+        assertEquals("caller_attested_binder_v1", fixture.store.snapshot(7L).entries.single().verification)
+    }
+
     @Test
     fun `codec accepts only the exact committed ECHT value schema`() {
         val encoded = snapshot(
@@ -315,9 +480,20 @@ class LegacyPreprocessorTelemetryTest {
         val session = 41
         val generation = 7L
         var activeNonce = nonce(1)
+        val proofKey = ByteArray(32) { (it + 1).toByte() }
         val ledger = LegacyCapabilityIssuanceLedger(clockMs = { now })
         val store = AuthenticatedTelemetryStore(clockMs = { now })
-        val relay = LegacyPreprocessorTelemetryRelay(ledger, store, { policyGeneration })
+        val verifier = LegacyPreprocessorTelemetryProofVerifier { proofKey.clone() }
+        val relay = LegacyPreprocessorTelemetryRelay(
+            ledger,
+            store,
+            { policyGeneration },
+            verifier,
+        )
+
+        init {
+            assertTrue(verifier.prepare())
+        }
 
         fun request(
             session: Int = this.session,
@@ -400,12 +576,82 @@ class LegacyPreprocessorTelemetryTest {
             now,
         )
 
+        fun reportProof(
+            proof: ByteArray,
+            uid: Int = this.uid,
+            pid: Int = this.pid,
+            process: String = this.process,
+            session: Int = this.session,
+            generation: Long = this.generation,
+        ): LegacyPreprocessorTelemetryResult = relay.reportProof(
+            uid,
+            pid,
+            process,
+            session,
+            generation,
+            proof,
+            now,
+        )
+
         fun advance(milliseconds: Long) {
             now += milliseconds
         }
     }
 
     companion object {
+        private val PROOF_DOMAIN =
+            "ECHIDNA_PREPROCESSOR_TELEMETRY_PROOF_V2".toByteArray(StandardCharsets.US_ASCII)
+
+        private fun nonce(seed: Int): ByteArray = ByteArray(16) { (seed + it).toByte() }
+
+        private fun proof(
+            key: ByteArray,
+            sessionId: Int,
+            generation: Long,
+            capabilityNonce: ByteArray,
+            sequence: Long,
+            flags: Int,
+            blocks: Long,
+            frames: Long,
+            failures: Long,
+            mutations: Long,
+        ): ByteArray {
+            val value = ByteBuffer.allocate(PREPROCESSOR_TELEMETRY_PROOF_VALUE_BYTES)
+                .order(ByteOrder.BIG_ENDIAN)
+                .putInt(0x45434854)
+                .putShort(2.toShort())
+                .putShort(2.toShort())
+                .putShort(PREPROCESSOR_TELEMETRY_PROOF_VALUE_BYTES.toShort())
+                .putShort(flags.toShort())
+                .putInt(sessionId)
+                .putLong(generation)
+                .put(capabilityNonce)
+                .putInt(sequence.toInt())
+                .putInt(blocks.toInt())
+                .putInt(frames.toInt())
+                .putInt(failures.toInt())
+                .putInt(mutations.toInt())
+                .put(MessageDigest.getInstance("SHA-256").digest(key).copyOf(16))
+                .putInt(0)
+                .array()
+            signProof(value, key)
+            return value
+        }
+
+        private fun signProof(value: ByteArray, key: ByteArray) {
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(key, "HmacSHA256"))
+            mac.update(PROOF_DOMAIN)
+            mac.update(value, 0, 80)
+            val tag = mac.doFinal()
+            tag.copyInto(value, 80)
+            tag.fill(0)
+        }
+
+        private fun hex(value: String): ByteArray = ByteArray(value.length / 2) { index ->
+            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+
         private fun snapshot(
             sessionId: Int,
             generation: Long,

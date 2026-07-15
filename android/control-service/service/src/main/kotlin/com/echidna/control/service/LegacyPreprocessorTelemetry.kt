@@ -5,7 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 
-internal const val PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION = 4L
+internal const val PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION = 5L
 internal const val PREPROCESSOR_TELEMETRY_VALUE_BYTES = 48
 internal const val PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES = 16
 internal const val PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS = 250L
@@ -182,6 +182,8 @@ internal class LegacyCapabilityIssuanceLedger(
 internal enum class LegacyPreprocessorTelemetryResult {
     ACCEPTED,
     INVALID_PAYLOAD,
+    KEY_UNAVAILABLE,
+    AUTHENTICATION_FAILED,
     CALLER_UNAUTHORIZED,
     NO_LIVE_CAPABILITY,
     SESSION_MISMATCH,
@@ -196,6 +198,7 @@ internal class LegacyPreprocessorTelemetryRelay(
     private val ledger: LegacyCapabilityIssuanceLedger,
     private val telemetryStore: AuthenticatedTelemetryStore,
     private val currentPolicyGeneration: () -> Long,
+    private val proofVerifier: LegacyPreprocessorTelemetryProofVerifier? = null,
 ) {
     private data class Key(
         val uid: Int,
@@ -211,7 +214,129 @@ internal class LegacyPreprocessorTelemetryRelay(
         val capabilityNonce: ByteArray,
     )
 
+    private data class ProofPrevious(
+        val snapshot: LegacyPreprocessorTelemetryProof,
+        val receivedAtMs: Long,
+        val capabilityNonce: ByteArray,
+    )
+
     private val previous = linkedMapOf<Key, Previous>()
+    private val proofPrevious = linkedMapOf<Key, ProofPrevious>()
+
+    @Synchronized
+    fun reportProof(
+        uid: Int,
+        pid: Int,
+        processName: String,
+        sessionId: Int,
+        generation: Long,
+        rawProof: ByteArray?,
+        receivedAtMs: Long,
+    ): LegacyPreprocessorTelemetryResult {
+        val verifier = proofVerifier
+            ?: return LegacyPreprocessorTelemetryResult.KEY_UNAVAILABLE
+        if (!verifier.available()) return LegacyPreprocessorTelemetryResult.KEY_UNAVAILABLE
+        val snapshot = verifier.verify(rawProof)
+            ?: return LegacyPreprocessorTelemetryResult.AUTHENTICATION_FAILED
+        if (sessionId <= 0 || snapshot.sessionId != sessionId) {
+            return LegacyPreprocessorTelemetryResult.SESSION_MISMATCH
+        }
+        if (generation <= 0L || snapshot.generation != generation) {
+            return LegacyPreprocessorTelemetryResult.GENERATION_MISMATCH
+        }
+        val reportNonce = snapshot.capabilityNonce
+        if (
+            !ledger.hasLive(
+                uid,
+                pid,
+                processName,
+                sessionId,
+                generation,
+                reportNonce,
+                receivedAtMs,
+            )
+        ) {
+            return LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY
+        }
+        if (currentPolicyGeneration() != generation) {
+            return LegacyPreprocessorTelemetryResult.STALE_POLICY
+        }
+        val key = Key(uid, pid, processName, sessionId, generation)
+        val last = proofPrevious[key]
+        val newIncarnation = last == null ||
+            !MessageDigest.isEqual(last.capabilityNonce, reportNonce)
+        val deltas = if (newIncarnation) {
+            AuthenticatedTelemetryDeltas(0L, 0L, 0L, 0L)
+        } else {
+            val prior = requireNotNull(last)
+            val sequenceDelta = modularDelta(snapshot.sequence, prior.snapshot.sequence)
+            if (sequenceDelta !in 1L..MAX_SEQUENCE_ADVANCE) {
+                return LegacyPreprocessorTelemetryResult.STALE_SEQUENCE
+            }
+            val elapsedMs = receivedAtMs - prior.receivedAtMs
+            if (elapsedMs < PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS) {
+                return LegacyPreprocessorTelemetryResult.RATE_LIMITED
+            }
+            val blocks = modularDelta(snapshot.blocks, prior.snapshot.blocks)
+            val frames = modularDelta(snapshot.frames, prior.snapshot.frames)
+            val failures = modularDelta(snapshot.failures, prior.snapshot.failures)
+            val mutations = modularDelta(snapshot.mutations, prior.snapshot.mutations)
+            val intervals = ((elapsedMs + PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS - 1L) /
+                PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS).coerceAtMost(20L)
+            val maxBlocks = MAX_BLOCKS_PER_INTERVAL * intervals
+            val callbackAllowance = blocks + 1L
+            if (
+                blocks > maxBlocks || frames > callbackAllowance * 4_096L ||
+                failures > callbackAllowance || mutations > callbackAllowance
+            ) {
+                return LegacyPreprocessorTelemetryResult.COUNTER_BOUNDS
+            }
+            AuthenticatedTelemetryDeltas(blocks, frames, failures, mutations)
+        }
+
+        val active = snapshot.flags and LegacyPreprocessorTelemetryFlag.ENABLED != 0 &&
+            snapshot.flags and LegacyPreprocessorTelemetryFlag.AUTHORIZED != 0 &&
+            snapshot.flags and LegacyPreprocessorTelemetryFlag.EXPIRED == 0
+        val state = when {
+            active && deltas.mutations > 0L -> AuthenticatedTelemetryState.PROCESSING
+            active && deltas.failures > 0L -> AuthenticatedTelemetryState.ERROR
+            active -> AuthenticatedTelemetryState.INSTALLED
+            else -> AuthenticatedTelemetryState.BYPASSED
+        }
+        val frame = AuthenticatedTelemetryFrame(
+            sequence = snapshot.sequence,
+            senderMonotonicMs = receivedAtMs,
+            process = processName,
+            route = AuthenticatedTelemetryRoute.PREPROCESSOR,
+            generation = generation,
+            state = state,
+            deltas = deltas,
+            audioSessionId = sessionId,
+            verification = AuthenticatedTelemetryVerification.EFFECT_HMAC_V1,
+        )
+        val recorded = telemetryStore.recordAt(
+            frame,
+            AuthenticatedPeer(uid, pid),
+            generation,
+            receivedAtMs,
+            replaceExisting = newIncarnation,
+        )
+        if (recorded != TelemetryRecordResult.ACCEPTED) {
+            return if (recorded == TelemetryRecordResult.STALE_GENERATION) {
+                LegacyPreprocessorTelemetryResult.STALE_POLICY
+            } else {
+                LegacyPreprocessorTelemetryResult.STALE_SEQUENCE
+            }
+        }
+        proofPrevious[key] = ProofPrevious(snapshot, receivedAtMs, reportNonce.clone())
+        if (proofPrevious.size > MAX_ENTRIES) proofPrevious.entries.iterator().run {
+            if (hasNext()) {
+                next()
+                remove()
+            }
+        }
+        return LegacyPreprocessorTelemetryResult.ACCEPTED
+    }
 
     @Synchronized
     fun report(
