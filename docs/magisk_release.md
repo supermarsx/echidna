@@ -145,11 +145,20 @@ for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib
   preprocessor unregistered or identity-bypassed; it never blocks boot, widens SELinux, replaces a
   live key, or restarts audioserver.
 
-The helper supports API 26–33 only. It verifies the current PackageManager signer, user-0
+The helper supports API 26–34 only. It verifies the current PackageManager signer, user-0
 UID/dataDir, and app-owned P-256 SPKI before staging a root-owned read-only copy under
 `trust/next-boot/`. After effect eligibility and the registry merge succeed, the registration helper
 copies the same verified key to the module overlay for
 `/system/etc/echidna/preprocessor_controller_p256.spki`; both registry and key are next-boot inputs.
+
+After those package and SPKI checks, the same helper generates one per-install 32-byte telemetry
+HMAC key when and only when no prior root/app/effect copy exists. The authoritative root:root `0400`
+pin and SHA-256/key-ID-only metadata live under `trust/state/`. Atomic derived copies are app-owned
+`0600` at `${dataDir}/files/echidna/preprocessor_telemetry_hmac.key` and root:audio `0440` at the
+module backing for `/system/etc/echidna/preprocessor_telemetry_hmac.key`. Regular-file drift is
+restored only from the root pin; symlinks, root metadata drift, or a missing root pin with surviving
+derived copies fail closed. Effect backing is replaced by atomic rename after the mount phase, so
+it is a next-boot update and does not hot-replace a currently mounted/loaded inode.
 
 ## Default-off legacy effect registration
 
@@ -196,7 +205,8 @@ whole module, and early activation remains off until an explicit reinstall/resta
 also requires restaging.
 
 The release ZIP itself contains no generated active or inert `audio_effects.xml`/
-`audio_effects.conf`, or controller SPKI. `tools/verify_magisk_module.py` checks all three
+`audio_effects.conf`, controller SPKI, telemetry HMAC key, or telemetry key metadata.
+`tools/verify_magisk_module.py` checks all three
 preprocessor ELFs for ABI, SONAME, AELI export, exact DT_NEEDED set, archive modes/layout, early
 activation ordering, exact registration constants, and the absence of command-line host discovery,
 auto-apply, or hot audioserver restart tokens.
@@ -206,6 +216,8 @@ config, post-fs/mount ordering, magic-mount file labels/linker namespace, factor
 process maps, or AVC-free load. Host fixtures cover activation rollback and first-OTA refusal.
 Registration alone never attaches or enables the effect; only the separate default-off LSPosed
 session manager can request authorized attachment, and no device audio transformation is proved.
+Telemetry-key provisioning likewise does not prove native-origin authentication: native consumption
+and enforced-SELinux effect-host reads remain device-only future gates.
 
 Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
 `echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem

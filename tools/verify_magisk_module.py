@@ -26,6 +26,7 @@ ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 PREPROCESSOR_SONAME = "libechidna_preproc.so"
 TYPE_UUID = "c83e3db3-d4f5-5f2c-a095-8775c1edfc6d"
 IMPLEMENTATION_UUID = "3e66a36e-dee9-5d81-a0d6-49fc3b863530"
+TELEMETRY_KEY_FILE = "preprocessor_telemetry_hmac.key"
 ALLOWED_PREPROCESSOR_NEEDED = frozenset({"libc.so", "libdl.so", "libm.so"})
 KNOWN_DEBUG_CERT = "b545a99be69d7a147d2ebbcd3614d11ce6fcb550660f181f2a20ce0dd835544b"
 
@@ -123,6 +124,16 @@ def verify_magisk_zip(
             )
         if "system/etc/echidna/preprocessor_controller_p256.spki" in names:
             raise VerificationError("release ZIP must not ship an active controller SPKI")
+        telemetry_secrets = sorted(
+            name
+            for name in names
+            if Path(name).name in {TELEMETRY_KEY_FILE, TELEMETRY_KEY_FILE + ".meta"}
+        )
+        if telemetry_secrets:
+            raise VerificationError(
+                "release ZIP must not ship generated telemetry proof-key material: "
+                + ", ".join(telemetry_secrets)
+            )
 
         for script in (
             "customize.sh",
@@ -141,7 +152,8 @@ def verify_magisk_zip(
         post_fs = read_required(archive, "post-fs-data.sh").decode("utf-8")
         service = read_required(archive, "service.sh").decode("utf-8")
         customize = read_required(archive, "customize.sh").decode("utf-8")
-        combined = "\n".join((registration, activation, post_fs, service, customize))
+        trust = read_required(archive, "common/trust-bootstrap.sh").decode("utf-8")
+        combined = "\n".join((registration, activation, post_fs, service, customize, trust))
         for token in (
             TYPE_UUID,
             IMPLEMENTATION_UUID,
@@ -168,6 +180,21 @@ def verify_magisk_zip(
         ):
             if forbidden in combined:
                 raise VerificationError(f"Magisk registration contains forbidden hot/auto-apply token {forbidden!r}")
+
+        for token in (
+            TELEMETRY_KEY_FILE,
+            "trust/state",
+            "--telemetry-root",
+            "--telemetry-metadata",
+            "--telemetry-effect",
+            "telemetry_key_sha256",
+            "telemetry_key_id",
+            "silent rotation is refused",
+        ):
+            if token not in trust:
+                raise VerificationError(
+                    f"telemetry proof-key provisioning contract is missing {token!r}"
+                )
 
         cleanup = activation.find("cleanup_transient_configs")
         fingerprint = activation.find("current_fingerprint=")

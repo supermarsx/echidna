@@ -38,6 +38,20 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             with self.assertRaisesRegex(verifier.VerificationError, "pre-generated"):
                 verifier.verify_magisk_zip(path, self.dynamic_reader)
 
+    def test_rejects_any_generated_telemetry_proof_key_material(self) -> None:
+        for name in (
+            "trust/state/preprocessor_telemetry_hmac.key",
+            "trust/state/preprocessor_telemetry_hmac.key.meta",
+            "system/etc/echidna/preprocessor_telemetry_hmac.key",
+        ):
+            with self.subTest(name=name), self.archive({name: b"fixture-secret"}) as path:
+                with self.assertRaisesRegex(verifier.VerificationError, "proof-key material"):
+                    verifier.verify_magisk_zip(path, self.dynamic_reader)
+
+    def test_accepts_explicit_development_package_without_generated_secret(self) -> None:
+        with self.archive({"common/trust-mode": b"development\n"}) as path:
+            verifier.verify_magisk_zip(path, self.dynamic_reader)
+
     def test_rejects_auto_apply_content(self) -> None:
         with self.archive(
             {"common/effect-registration.sh": self.registration() + b"\n<preprocess>"}
@@ -84,7 +98,7 @@ class VerifyMagiskModuleTest(unittest.TestCase):
                 0o755,
             ),
             "sepolicy.rule": (b"", 0o644),
-            "common/trust-bootstrap.sh": (b"#!/system/bin/sh\n", 0o755),
+            "common/trust-bootstrap.sh": (self.trust_bootstrap(), 0o755),
             "common/effect-registration.sh": (self.registration(), 0o755),
             "common/effect-activation.sh": (self.activation(), 0o755),
             "common/echidna-trust-helper.jar": (self.helper_jar(), 0o444),
@@ -124,6 +138,20 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             "fingerprint/source/config/library/key\n"
             "cp \"$inert_config\" \"$config_temporary\"\n"
             "approved-for-magisk-mount\n"
+        ).encode("utf-8")
+
+    @staticmethod
+    def trust_bootstrap() -> bytes:
+        return (
+            "#!/system/bin/sh\n"
+            "TELEMETRY_KEY=preprocessor_telemetry_hmac.key\n"
+            "TRUST_STATE=trust/state\n"
+            "--telemetry-root\n"
+            "--telemetry-metadata\n"
+            "--telemetry-effect\n"
+            "telemetry_key_sha256\n"
+            "telemetry_key_id\n"
+            "silent rotation is refused\n"
         ).encode("utf-8")
 
     @staticmethod

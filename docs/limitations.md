@@ -114,6 +114,7 @@ of claiming that every manager is operational:
 | tinyalsa | Operational candidate; `pcm_open` config provides metadata. |
 | LSPosed Java `AudioRecord` | Operational candidate through Java getters and dedicated JNI. |
 | Legacy input preprocessor | Packaged and conditionally registered for next boot; default-off authorized LSPosed attachment candidate with no device audio proof. |
+| Telemetry HMAC key | Per-install provisioning is implemented, but no native producer/consumer uses it yet; SELinux reads and origin proof remain device-gated. |
 | Native `AudioRecord` | Developer contract only (`ECHIDNA_AR_SR/CH/FORMAT`). |
 | libc raw-device read | Developer contract only (`ECHIDNA_LIBC_SR/CH/FORMAT`). |
 | Audio HAL | Unsupported (`unsupported_injection_boundary`). |

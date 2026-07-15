@@ -90,6 +90,23 @@ metadata, and no symlink. It atomically writes the exact bytes root-owned and re
 module's inert `trust/next-boot/` directory. Existing pending or active bytes must match; silent key
 rotation is refused.
 
+Only after the same PackageManager signer, user-0 UID/dataDir, and app SPKI checks pass, the helper
+also provisions a per-install telemetry-origin proof key. A fresh install receives 32 bytes from
+Android's `SecureRandom`, pinned as root:root `0400` under the module's `trust/state/` directory.
+The helper records only its SHA-256 and 16-hex key ID. It atomically derives two identical copies
+from that root pin: an app-UID-owned `0600` file at
+`${applicationInfo.dataDir}/files/echidna/preprocessor_telemetry_hmac.key`, and a root:audio
+(`AID_AUDIO=1005`) `0440` next-boot backing file for
+`/system/etc/echidna/preprocessor_telemetry_hmac.key`.
+
+The app and effect copies are never authorities. Missing, tampered, or metadata-mismatched regular
+copies are restored only from the validated root pin; symlinks are refused. The root pin and its
+root-owned hash metadata must agree, and neither an app nor effect copy may silently replace a
+missing or changed root pin. App data clear therefore remains fail-closed until the signed companion
+recreates its SPKI enrolment, after which the app copy can be restored. A module reinstall that
+loses root state while leaving a derived copy also requires explicit reprovisioning. Key bytes are
+never packaged, logged, or written to status metadata.
+
 The packaging concern ships the effect inertly and, only after an eligible legacy-HIDL registry is
 proved, copies the verified pending key into the module overlay at
 `/system/etc/echidna/preprocessor_controller_p256.spki` for the next boot. The generated registry
@@ -99,6 +116,9 @@ The late service never restarts audioserver or silently rotates an active key. A
 registration error leaves the preprocessor unregistered or identity-bypassed and records recovery
 details under `/data/adb/echidna/trust/status.txt` and
 `/data/adb/echidna/effect-registration/`.
+
+Provisioning alone is not native-origin proof. No native telemetry protocol consumes this HMAC key
+yet, and physical-device SELinux access for the effect host remains an explicit later gate.
 
 ## Signing-certificate migration
 
