@@ -8,22 +8,30 @@ import kotlin.concurrent.thread
 private const val ROOT_TAG = "EchidnaRoot"
 
 /**
+ * Command surface used by privileged control paths.
+ */
+interface PrivilegedCommandRunner {
+    fun runCommand(command: String): CommandResult
+    fun runCommand(arguments: List<String>): CommandResult
+}
+
+/**
  * Thin wrapper for executing commands through `su`.
  */
 class RootCommandExecutor(
     private val suBinary: String = "su",
     private val timeoutSeconds: Long = 60,
-) {
+) : PrivilegedCommandRunner {
     private val sequence = AtomicLong(0)
 
-    fun runCommand(command: String): CommandResult {
+    override fun runCommand(command: String): CommandResult {
         if (command.isBlank()) {
             return CommandResult(false, "", "command cannot be blank")
         }
         return runCommandInternal(arrayOf(suBinary, "-c", command))
     }
 
-    fun runCommand(arguments: List<String>): CommandResult {
+    override fun runCommand(arguments: List<String>): CommandResult {
         if (arguments.isEmpty()) {
             return CommandResult(false, "", "command arguments cannot be empty")
         }

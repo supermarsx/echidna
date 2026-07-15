@@ -1,4 +1,5 @@
 #include "utils/config_shared_memory.h"
+#include "state/shared_state.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -60,6 +61,27 @@ namespace
                           { return value == 'x'; }),
               "truncated profile must preserve prefix bytes");
     }
+
+    void TestPackageWhitelistCoversColonProcess()
+    {
+        echidna::utils::ConfigSharedMemory memory;
+
+        echidna::utils::ConfigurationSnapshot snapshot;
+        snapshot.hooks_enabled = true;
+        snapshot.process_whitelist = {"com.example.recorder"};
+        snapshot.profile = "SmokeProfile";
+        memory.updateSnapshot(snapshot);
+
+        auto &state = echidna::state::SharedState::instance();
+        state.refreshFromSharedMemory();
+
+        CHECK(state.isProcessWhitelisted("com.example.recorder"),
+              "exact process whitelist must still match");
+        CHECK(state.isProcessWhitelisted("com.example.recorder:capture"),
+              "package whitelist must include colon-suffixed app processes");
+        CHECK(!state.isProcessWhitelisted("com.example.other:capture"),
+              "unlisted packages must remain blocked");
+    }
 } // namespace
 
 int main()
@@ -67,6 +89,7 @@ int main()
     TestSnapshotAndProfileRoundTrip();
     TestProfileUpdateOverwritesWithoutDeadlock();
     TestLongProfileIsNulTerminated();
+    TestPackageWhitelistCoversColonProcess();
 
     if (g_failures != 0)
     {

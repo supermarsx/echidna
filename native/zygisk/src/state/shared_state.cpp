@@ -59,9 +59,22 @@ namespace echidna
         bool SharedState::isProcessWhitelisted(const std::string &process) const
         {
             std::scoped_lock lock(mutex_);
-            return std::find(cached_snapshot_.process_whitelist.begin(),
-                             cached_snapshot_.process_whitelist.end(),
-                             process) != cached_snapshot_.process_whitelist.end();
+            const auto is_allowed = [this](std::string_view candidate)
+            {
+                return std::any_of(cached_snapshot_.process_whitelist.begin(),
+                                   cached_snapshot_.process_whitelist.end(),
+                                   [candidate](const std::string &entry)
+                                   {
+                                       return std::string_view(entry) == candidate;
+                                   });
+            };
+            if (is_allowed(process))
+            {
+                return true;
+            }
+            const size_t suffix = process.find(':');
+            return suffix != std::string::npos &&
+                   is_allowed(std::string_view(process).substr(0, suffix));
         }
 
         bool SharedState::hooksEnabled() const

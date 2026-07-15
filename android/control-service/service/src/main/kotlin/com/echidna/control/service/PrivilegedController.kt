@@ -4,12 +4,32 @@ import android.util.Log
 
 private const val PRIV_TAG = "EchidnaPriv"
 private const val MODULE_ID = "echidna"
+private const val ZYGISK_NEXT_MODULE_ID = "zygisksu"
+private const val REZYGISK_MODULE_ID = "rezygisk"
+
+private val STANDALONE_ZYGISK_PROBE = """
+    for prop in /data/adb/modules/*/module.prop; do
+      [ -f "${'$'}prop" ] || continue
+      dir="${'$'}{prop%/module.prop}"
+      [ -e "${'$'}dir/disable" ] && continue
+      if grep -Eiq '^id=(${ZYGISK_NEXT_MODULE_ID}|${REZYGISK_MODULE_ID})' "${'$'}prop"; then
+        exit 0
+      fi
+      if grep -Eiq '^name=.*(Zygisk Next|ReZygisk)' "${'$'}prop"; then
+        exit 0
+      fi
+      if grep -Eiq '^description=.*Standalone implementation of Zygisk' "${'$'}prop"; then
+        exit 0
+      fi
+    done
+    exit 1
+""".trimIndent()
 
 /**
  * Bridges Binder requests with privileged Magisk/root operations.
  */
 class PrivilegedController(
-    private val rootExecutor: RootCommandExecutor,
+    private val rootExecutor: PrivilegedCommandRunner,
     private val selinuxChecker: SelinuxCompatChecker,
 ) {
     @Volatile
@@ -94,6 +114,13 @@ class PrivilegedController(
     }
 
     private fun queryZygisk(): Boolean {
+        if (queryMagiskBuiltinZygisk()) {
+            return true
+        }
+        return queryStandaloneZygiskModule()
+    }
+
+    private fun queryMagiskBuiltinZygisk(): Boolean {
         // `magisk --zygisk` is not a valid applet on any Magisk release, so it
         // always failed. The authoritative Zygisk state lives in Magisk's
         // settings table (key `zygisk`, value 1 = enabled). Read it via the
@@ -120,6 +147,22 @@ class PrivilegedController(
             .firstOrNull()
             ?.trim()
         return value == "1"
+    }
+
+    private fun queryStandaloneZygiskModule(): Boolean {
+        val result = rootExecutor.runCommand(STANDALONE_ZYGISK_PROBE)
+        if (result.success) {
+            Log.i(PRIV_TAG, "Standalone Zygisk module detected")
+            return true
+        }
+        if (result.exitCode != 1 || result.stderr.isNotEmpty()) {
+            val detail = result.stderr.ifEmpty { "exit ${result.exitCode}" }
+            Log.d(
+                PRIV_TAG,
+                "Standalone Zygisk probe unavailable: $detail",
+            )
+        }
+        return false
     }
 
     private fun queryModuleInstallationState(): Pair<Boolean, String?> {

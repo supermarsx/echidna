@@ -14,7 +14,7 @@ private const val SELINUX_ENFORCE = "$SELINUX_FS/enforce"
 /**
  * Evaluates whether SELinux tweaks are possible on the current device.
  */
-class SelinuxCompatChecker(private val rootExecutor: RootCommandExecutor) {
+class SelinuxCompatChecker(private val rootExecutor: PrivilegedCommandRunner) {
     fun evaluate(): SelinuxState {
         if (!isSelinuxEnabled()) {
             Log.w(TAG, "SELinux appears to be disabled; falling back to permissive flow")

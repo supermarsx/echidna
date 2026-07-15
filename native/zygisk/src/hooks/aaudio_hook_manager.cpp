@@ -38,9 +38,11 @@ namespace echidna
         namespace
         {
             using Callback = int (*)(void *, void *, void *, int32_t);
+            using SetDataCallbackFn = void (*)(void *, Callback, void *);
             using ReadFn = int32_t (*)(void *, void *, int32_t, int64_t);
             using WriteFn = int32_t (*)(void *, const void *, int32_t, int64_t);
             Callback gOriginalCallback = nullptr;
+            SetDataCallbackFn gOriginalSetDataCallback = nullptr;
             ReadFn gOriginalRead = nullptr;
             WriteFn gOriginalWrite = nullptr;
 
@@ -425,6 +427,17 @@ namespace echidna
                 return result;
             }
 
+            void ForwardSetDataCallback(void *builder, Callback callback, void *user_data)
+            {
+                gOriginalCallback = callback;
+                if (gOriginalSetDataCallback)
+                {
+                    gOriginalSetDataCallback(builder,
+                                             callback ? &ForwardCallback : nullptr,
+                                             user_data);
+                }
+            }
+
         } // namespace
 
         AAudioHookManager::AAudioHookManager(utils::PltResolver &resolver) : resolver_(resolver) {}
@@ -434,18 +447,20 @@ namespace echidna
             last_info_ = {};
             bool installed = false;
             const char *library = "libaaudio.so";
-            if (void *symbol = resolver_.findSymbol(library, "AAudioStream_dataCallback"))
+            if (void *symbol =
+                    resolver_.findSymbol(library, "AAudioStreamBuilder_setDataCallback"))
             {
-                if (hook_.install(symbol,
-                                  reinterpret_cast<void *>(&ForwardCallback),
-                                  reinterpret_cast<void **>(&gOriginalCallback)))
+                if (hook_set_data_callback_.install(
+                        symbol,
+                        reinterpret_cast<void *>(&ForwardSetDataCallback),
+                        reinterpret_cast<void **>(&gOriginalSetDataCallback)))
                 {
                     __android_log_print(ANDROID_LOG_INFO,
                                         "echidna",
-                                        "AAudio data callback hook installed");
+                                        "AAudio data callback setter hook installed");
                     last_info_.success = true;
                     last_info_.library = library;
-                    last_info_.symbol = "AAudioStream_dataCallback";
+                    last_info_.symbol = "AAudioStreamBuilder_setDataCallback";
                     last_info_.reason.clear();
                     installed = true;
                 }
@@ -525,6 +540,15 @@ namespace echidna
                                                     int64_t timeout_ns)
         {
             return ForwardWrite(stream, buffer, frames, timeout_ns);
+        }
+
+        void AAudioHookManager::ReplacementSetDataCallback(void *builder,
+                                                           void *callback,
+                                                           void *user_data)
+        {
+            ForwardSetDataCallback(builder,
+                                   reinterpret_cast<Callback>(callback),
+                                   user_data);
         }
 
     } // namespace hooks

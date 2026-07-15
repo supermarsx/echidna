@@ -54,8 +54,11 @@ device-specific.
 Echidna hooks the capture path **inside** the target app's process. Android gives normal
 apps no way to do this. That means:
 
-- **Magisk + Zygisk are mandatory** to load the native `libechidna.so` module into audio
-  processes. Optionally, LSPosed drives the Java-side shim / control plane.
+- **A working Zygisk implementation is mandatory** to load the native `libechidna.so`
+  module into audio processes. The documented install path remains Magisk + built-in
+  Zygisk; standalone Zygisk providers can be detected by the compatibility probe, but
+  APatch/KernelSU/Zygisk Next combinations remain device-gated until validated on the
+  target hardware. Optionally, LSPosed drives the Java-side shim / control plane.
 - On an **unrooted** device the companion app still runs — you can browse presets,
   configure the effect chain, and run the Compatibility Wizard — but the **engine stays
   "Not Installed"** and no audio is transformed. This is exactly what the app reports on
@@ -105,7 +108,9 @@ Samsung/Exynos, and Google's own silicon all differ.
   through a vendor-specific HAL variation, in which case that app's capture is **not**
   transformed (and, being fail-closed, is left untouched rather than corrupted).
 - Hook offsets and symbol/pattern matches can require **per-device tuning**. A layout that
-  works on one HAL build is not guaranteed on another.
+  works on one HAL build is not guaranteed on another. Echidna should not ship offsets
+  copied from unrelated public firmware posts unless they are tied to a model, build
+  fingerprint, library build ID/hash, and live telemetry from the same build.
 - The Compatibility Wizard reports CPU family, primary ABI, Zygisk ABI, vendor family, and
   whether common native audio libraries (`libOpenSLES.so`, `libaudioclient.so`,
   `libtinyalsa.so`) are present. These checks help identify obvious install and hardware

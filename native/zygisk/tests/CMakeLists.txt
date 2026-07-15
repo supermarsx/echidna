@@ -50,7 +50,9 @@ target_compile_features(capture_buffer_router_test PRIVATE cxx_std_20)
 if(NOT WIN32)
   add_executable(config_shared_memory_test
       config_shared_memory_test.cpp
-      ../src/utils/config_shared_memory.cpp)
+      ../src/state/shared_state.cpp
+      ../src/utils/config_shared_memory.cpp
+      ../src/utils/telemetry_shared_memory.cpp)
   target_include_directories(config_shared_memory_test
       PRIVATE
           ${CMAKE_CURRENT_SOURCE_DIR}/../src)

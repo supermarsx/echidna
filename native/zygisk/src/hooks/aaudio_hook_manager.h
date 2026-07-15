@@ -2,8 +2,8 @@
 
 /**
  * @file aaudio_hook_manager.h
- * @brief Hook manager for AAudio data callback entry point. Uses inline
- * hooking to intercept stream callbacks and route audio through Echidna.
+ * @brief Hook manager for AAudio stream read/write and data callback
+ * registration. Uses inline hooks to route capture buffers through Echidna.
  */
 
 #include <cstdint>
@@ -30,6 +30,9 @@ namespace echidna
         private:
             /** Replacement callback invoked instead of the original AAudio dataCallback. */
             static int Replacement(void *stream, void *user, void *audio_data, int32_t num_frames);
+            static void ReplacementSetDataCallback(void *builder,
+                                                   void *callback,
+                                                   void *user_data);
             static int32_t ReplacementRead(void *stream,
                                            void *buffer,
                                            int32_t frames,
@@ -40,7 +43,7 @@ namespace echidna
                                             int64_t timeout_ns);
 
             utils::PltResolver &resolver_;
-            runtime::InlineHook hook_;
+            runtime::InlineHook hook_set_data_callback_;
             runtime::InlineHook hook_read_;
             runtime::InlineHook hook_write_;
             HookInstallInfo last_info_;

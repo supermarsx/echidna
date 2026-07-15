@@ -65,7 +65,12 @@ We will implement layered hooks so we cover both Java and native audio consumers
 
 ### 4.2 Primary hook targets (priority order)
 
-1. **AAudio callbacks** — apps using AAudio (native low‑latency API) register `AAudioStream_dataCallback` or supply Java‑to‑native bridges. Hook the AAudio data callback function to intercept capture buffers. Symbol patterns to look for: `AAudioStream_read`, `AAudioStream_write`, `AAudioStream_dataCallback`.\* (vendor names may be mangled)
+1. **AAudio callbacks** — apps using AAudio (native low‑latency API) register
+   `AAudioStream_dataCallback` through `AAudioStreamBuilder_setDataCallback` or
+   use blocking reads/writes. Hook the callback registration path or synchronous
+   read/write exports to intercept capture buffers. Symbol patterns to look for:
+   `AAudioStreamBuilder_setDataCallback`, `AAudioStream_read`, and
+   `AAudioStream_write` (vendor names may be mangled).
 2. **OpenSL ES** — Hook `SLRecord::Process` or `(*SLRecordItf)->Enqueue` / `(*SLRecordItf)->GetBufferQueueState`. Intercept `(*SLRecordItf)->RegisterCallback` and buffer callbacks.
 3. **AudioRecord native bridge** — Hook `AudioRecord::read` native implementations, and JNI bindings like `android_media_AudioRecord_native_read()` or similarly named methods in libc. Android codebase has `android_media_AudioRecord_*` native bridges; vendor names vary.
 4. **libc read on /dev/snd or ALSA wrapper** — as fallback, intercept `read()` calls from processes that directly access device nodes (rare on stock Android but possible on rooted/custom ROMs).

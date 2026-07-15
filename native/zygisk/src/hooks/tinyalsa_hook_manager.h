@@ -18,7 +18,7 @@ namespace echidna
     {
 
         /**
-         * @brief Fallback hook for tinyalsa pcm_read/pcm_readi on devices using tinyalsa.
+         * @brief Fallback hook for tinyalsa PCM read paths on devices using tinyalsa.
          */
         class TinyAlsaHookManager : public HookManager
         {
@@ -32,10 +32,12 @@ namespace echidna
         private:
             static int ReplacementRead(void *pcm, void *data, unsigned int count);
             static int ReplacementReadi(void *pcm, void *data, unsigned int frames);
+            static int ReplacementMmapRead(void *pcm, void *data, unsigned int count);
 
             utils::PltResolver &resolver_;
             runtime::InlineHook hook_read_;
             runtime::InlineHook hook_readi_;
+            runtime::InlineHook hook_mmap_read_;
             HookInstallInfo last_info_;
         };
 

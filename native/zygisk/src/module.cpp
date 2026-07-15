@@ -9,9 +9,11 @@
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include <zygisk.hpp>
 
@@ -30,6 +32,8 @@ namespace
 {
 
     constexpr const char *kLogTag = "echidna_zygisk";
+    constexpr int kAttachRetryAttempts = 4;
+    constexpr int kAttachRetryDelayMs = 250;
 
     enum class LifecyclePhase : int
     {
@@ -219,6 +223,24 @@ namespace
         return AttachResult::kHooked;
     }
 
+    AttachResult AttachEchidnaRuntimeWithRetry()
+    {
+        AttachResult result = AttachResult::kDisabled;
+        for (int attempt = 0; attempt < kAttachRetryAttempts; ++attempt)
+        {
+            result = AttachEchidnaRuntime();
+            if (result != AttachResult::kDisabled)
+            {
+                return result;
+            }
+            if (attempt + 1 < kAttachRetryAttempts)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kAttachRetryDelayMs));
+            }
+        }
+        return result;
+    }
+
     void MarkSpecializationDisabled(const char *reason)
     {
         auto &state = echidna::state::SharedState::instance();
@@ -302,7 +324,7 @@ namespace
             // Start the hook lifecycle now that the process has been specialized
             // into the target app. Whitelist/enable gating is enforced inside
             // echidna_module_attach() -> installHooks().
-            const AttachResult result = AttachEchidnaRuntime();
+            const AttachResult result = AttachEchidnaRuntimeWithRetry();
             switch (result)
             {
             case AttachResult::kHooked:
