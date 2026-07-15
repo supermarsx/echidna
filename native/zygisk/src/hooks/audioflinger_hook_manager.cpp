@@ -22,7 +22,7 @@ namespace echidna::hooks
         (void)resolver_;
         last_info_ = {};
         last_info_.library = "libaudioflinger.so";
-        last_info_.reason = "unsupported_injection_boundary";
+        last_info_.reason = kAudioFlingerRoute.unavailable_reason;
 
         // The Zygisk module intentionally does not stay loaded in
         // system_server and is not injected into audioserver. AOSP exposes a

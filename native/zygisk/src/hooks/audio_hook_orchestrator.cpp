@@ -46,6 +46,7 @@ namespace echidna
 
             const bool success = manager.install();
             const auto &info = manager.lastInstallInfo();
+            const auto &route = manager.routeDescriptor();
             state::SharedState::instance().telemetry().registerHookResult(
                 manager.name(),
                 success,
@@ -56,12 +57,14 @@ namespace echidna
             __android_log_print(success ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
                                 "echidna",
                                 "hook install result name='%s' success=%d library='%s' "
-                                "symbol='%s' reason='%s'",
+                                "symbol='%s' reason='%s' support='%s' metadata='%s'",
                                 manager.name(),
                                 success ? 1 : 0,
                                 info.library.c_str(),
                                 info.symbol.c_str(),
-                                info.reason.c_str());
+                                info.reason.c_str(),
+                                CaptureRouteSupportName(route.support),
+                                route.metadata_source);
             return success;
         }
 

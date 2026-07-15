@@ -23,11 +23,13 @@ namespace echidna
         class TinyAlsaHookManager : public HookManager
         {
         public:
+            static constexpr const CaptureRouteDescriptor &kReachability = kTinyAlsaRoute;
             explicit TinyAlsaHookManager(utils::PltResolver &resolver);
 
             bool install() override;
             const char *name() const override { return "tinyalsa_pcm_read"; }
             const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
+            const CaptureRouteDescriptor &routeDescriptor() const override { return kReachability; }
 
         private:
             static int ReplacementRead(void *pcm, void *data, unsigned int count);

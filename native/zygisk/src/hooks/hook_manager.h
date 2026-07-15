@@ -8,6 +8,8 @@
 
 #include <string>
 
+#include "hooks/capture_route_reachability.h"
+
 namespace echidna
 {
     namespace hooks
@@ -38,6 +40,8 @@ namespace echidna
              * @brief Returns details from the most recent install attempt.
              */
             virtual const HookInstallInfo &lastInstallInfo() const = 0;
+            /** Describes whether the route is normally reachable and its metadata source. */
+            virtual const CaptureRouteDescriptor &routeDescriptor() const = 0;
         };
 
     } // namespace hooks

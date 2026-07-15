@@ -24,11 +24,13 @@ namespace echidna
         class LibcReadHookManager : public HookManager
         {
         public:
+            static constexpr const CaptureRouteDescriptor &kReachability = kLibcReadRoute;
             explicit LibcReadHookManager(utils::PltResolver &resolver);
 
             bool install() override;
             const char *name() const override { return "libc_read"; }
             const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
+            const CaptureRouteDescriptor &routeDescriptor() const override { return kReachability; }
 
         private:
             static ssize_t Replacement(int fd, void *buffer, size_t bytes);

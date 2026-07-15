@@ -14,11 +14,13 @@ namespace echidna::hooks
     class OpenSLHookManager : public HookManager
     {
     public:
+        static constexpr const CaptureRouteDescriptor &kReachability = kOpenSlRoute;
         explicit OpenSLHookManager(utils::PltResolver &resolver);
 
         bool install() override;
         const char *name() const override { return "OpenSL"; }
         const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
+        const CaptureRouteDescriptor &routeDescriptor() const override { return kReachability; }
 
     private:
         utils::PltResolver &resolver_;

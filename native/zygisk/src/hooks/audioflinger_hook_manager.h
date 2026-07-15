@@ -13,11 +13,16 @@ namespace echidna::hooks
     class AudioFlingerHookManager : public HookManager
     {
     public:
+        static constexpr const CaptureRouteDescriptor &kReachability = kAudioFlingerRoute;
         explicit AudioFlingerHookManager(utils::PltResolver &resolver);
 
         bool install() override;
         const char *name() const override { return "AudioFlinger_RecordThread"; }
         const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
+        const CaptureRouteDescriptor &routeDescriptor() const override
+        {
+            return kReachability;
+        }
 
     private:
         utils::PltResolver &resolver_;

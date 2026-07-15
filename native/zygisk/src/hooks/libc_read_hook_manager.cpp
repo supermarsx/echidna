@@ -131,13 +131,13 @@ namespace echidna::hooks
         gPcmContract = ReadExplicitContract();
         if (!gPcmContract)
         {
-            last_info_.reason = "explicit_pcm_contract_required";
+            last_info_.reason = kLibcReadRoute.unavailable_reason;
             return false;
         }
         if (echidna_prepare_stream(gPcmContract->sample_rate, gPcmContract->channels) !=
             ECHIDNA_RESULT_OK)
         {
-            last_info_.reason = "dsp_prepare_failed";
+            last_info_.reason = "developer_contract_dsp_prepare_failed";
             return false;
         }
         constexpr const char *kLibrary = "libc.so";
@@ -145,7 +145,7 @@ namespace echidna::hooks
         void *target = resolver_.findSymbol(kLibrary, kSymbol);
         if (!target)
         {
-            last_info_.reason = "symbol_not_found";
+            last_info_.reason = "developer_contract_symbol_not_found";
             return false;
         }
         if (!hook_.install(target,
@@ -154,12 +154,13 @@ namespace echidna::hooks
         {
             last_info_.library = kLibrary;
             last_info_.symbol = kSymbol;
-            last_info_.reason = "hook_failed";
+            last_info_.reason = "developer_contract_hook_failed";
             return false;
         }
         last_info_.success = true;
         last_info_.library = kLibrary;
         last_info_.symbol = kSymbol;
+        last_info_.reason = "developer_contract_active";
         __android_log_print(ANDROID_LOG_INFO,
                             "echidna",
                             "raw audio-device read hook installed with explicit PCM contract");

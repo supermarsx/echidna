@@ -102,13 +102,13 @@ namespace echidna::hooks
         gPcmContract = ReadExplicitContract();
         if (!gPcmContract)
         {
-            last_info_.reason = "explicit_pcm_contract_required";
+            last_info_.reason = kNativeAudioRecordRoute.unavailable_reason;
             return false;
         }
         if (echidna_prepare_stream(gPcmContract->sample_rate, gPcmContract->channels) !=
             ECHIDNA_RESULT_OK)
         {
-            last_info_.reason = "dsp_prepare_failed";
+            last_info_.reason = "developer_contract_dsp_prepare_failed";
             return false;
         }
 
@@ -134,6 +134,7 @@ namespace echidna::hooks
                 last_info_.success = true;
                 last_info_.library = library;
                 last_info_.symbol = kSymbol;
+                last_info_.reason = "developer_contract_active";
                 __android_log_print(ANDROID_LOG_INFO,
                                     "echidna",
                                     "AudioRecord exact-ABI capture hook installed at %s",
@@ -142,11 +143,11 @@ namespace echidna::hooks
             }
             last_info_.library = library;
             last_info_.symbol = kSymbol;
-            last_info_.reason = "hook_failed";
+            last_info_.reason = "developer_contract_hook_failed";
         }
         if (last_info_.reason.empty())
         {
-            last_info_.reason = "exact_symbol_not_found";
+            last_info_.reason = "developer_contract_exact_symbol_not_found";
         }
         return false;
     }

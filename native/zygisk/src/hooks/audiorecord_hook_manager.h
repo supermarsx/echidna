@@ -14,11 +14,17 @@ namespace echidna::hooks
     class AudioRecordHookManager : public HookManager
     {
     public:
+        static constexpr const CaptureRouteDescriptor &kReachability =
+            kNativeAudioRecordRoute;
         explicit AudioRecordHookManager(utils::PltResolver &resolver);
 
         bool install() override;
         const char *name() const override { return "AudioRecord"; }
         const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
+        const CaptureRouteDescriptor &routeDescriptor() const override
+        {
+            return kReachability;
+        }
 
     private:
         utils::PltResolver &resolver_;
