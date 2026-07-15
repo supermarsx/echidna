@@ -526,9 +526,9 @@ namespace echidna::dsp::config
                 return result;
             }
 
-            if (const JsonValue *engine = FindMember(root, "engine"))
+            if (const JsonValue *engine_config = FindMember(root, "engine"))
             {
-                if (auto latency = GetString(*engine, "latencyMode"))
+                if (auto latency = GetString(*engine_config, "latencyMode"))
                 {
                     if (*latency == "LL")
                     {
@@ -546,7 +546,7 @@ namespace echidna::dsp::config
                         result.preset.quality = QualityPreference::kHighQuality;
                     }
                 }
-                if (auto block = GetNumber(*engine, "blockMs"))
+                if (auto block = GetNumber(*engine_config, "blockMs"))
                 {
                     if (EnsureRange("engine.blockMs", *block, 5.0, 60.0, &result))
                     {
@@ -555,21 +555,21 @@ namespace echidna::dsp::config
                 }
             }
 
-            if (const JsonValue *modules = FindMember(root, "modules"))
+            if (const JsonValue *module_list = FindMember(root, "modules"))
             {
-                if (modules->type != JsonType::kArray)
+                if (module_list->type != JsonType::kArray)
                 {
                     result.ok = false;
                     result.error = "modules must be an array";
                     return result;
                 }
-                if (modules->array_value.size() > 64)
+                if (module_list->array_value.size() > 64)
                 {
                     result.ok = false;
                     result.error = "too many modules in preset";
                     return result;
                 }
-                for (const JsonValue &module : modules->array_value)
+                for (const JsonValue &module : module_list->array_value)
                 {
                     if (module.type != JsonType::kObject)
                     {

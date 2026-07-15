@@ -477,6 +477,8 @@ namespace
               "successful engine object must be wrapped");
 
         flow.engine_object.realize_result = kMockFailure;
+        Check(flow.engine_object.realize_result == kMockFailure,
+              "Realize failure mock must be configured before invocation");
         Check((*output)->Realize(output, 0) == kMockFailure,
               "Realize failure must be forwarded exactly");
         flow.engine_object.realize_result = SL_RESULT_SUCCESS;
@@ -679,6 +681,8 @@ namespace
               "rollback test callback must register");
         GuardedPcm failed;
         flow.queue.enqueue_result = kMockFailure;
+        Check(flow.queue.enqueue_result == kMockFailure,
+              "Enqueue failure mock must be configured before invocation");
         Check((*queue)->Enqueue(queue, failed.data(), failed.bytes()) == kMockFailure,
               "Enqueue failure must be returned exactly");
         flow.queue.enqueue_result = SL_RESULT_SUCCESS;
