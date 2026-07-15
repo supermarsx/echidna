@@ -104,11 +104,11 @@ public final class ProfileSnapshotStore {
     }
 
     boolean reportLegacyPreprocessorTelemetry(
-            int audioSessionId, long generation, byte[] snapshot) {
+            int audioSessionId, long generation, byte[] capabilityNonce, byte[] snapshot) {
         ProfileSyncReceiver current = receiver;
         return current != null
                 && current.reportLegacyPreprocessorTelemetry(
-                        audioSessionId, generation, snapshot);
+                        audioSessionId, generation, capabilityNonce, snapshot);
     }
 
     synchronized void resetForTests() {

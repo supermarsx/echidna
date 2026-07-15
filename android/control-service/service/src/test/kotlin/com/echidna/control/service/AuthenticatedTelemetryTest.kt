@@ -190,6 +190,45 @@ class AuthenticatedTelemetryStoreTest {
         now += 2_001L
         assertTrue(store.snapshot(7L).entries.isEmpty())
     }
+
+    @Test
+    fun `caller attested routes remain diagnostic while mixed trusted routes retain proof`() {
+        var now = 5_000L
+        val peer = AuthenticatedPeer(uid = 10_001, pid = 99)
+        val callerStore = AuthenticatedTelemetryStore(clockMs = { now })
+        val caller = frame(sequence = 1L).copy(
+            route = AuthenticatedTelemetryRoute.PREPROCESSOR,
+            audioSessionId = 41,
+            verification = AuthenticatedTelemetryVerification.CALLER_ATTESTED_BINDER_V1,
+        )
+
+        assertEquals(TelemetryRecordResult.ACCEPTED, callerStore.record(caller, peer, 7L))
+        val callerSnapshot = callerStore.snapshot(7L)
+        assertFalse(callerSnapshot.processing)
+        assertEquals("processing", callerSnapshot.entries.single().state)
+        assertEquals(
+            "caller_attested_binder_v1",
+            callerSnapshot.entries.single().verification,
+        )
+        assertTrue(
+            callerSnapshot.toLiveJson(null)
+                .contains("\"verification\":\"caller_attested_binder_v1\""),
+        )
+
+        val mixedStore = AuthenticatedTelemetryStore(clockMs = { now })
+        assertEquals(
+            TelemetryRecordResult.ACCEPTED,
+            mixedStore.record(frame(sequence = 1L), peer, 7L),
+        )
+        now += 1L
+        assertEquals(TelemetryRecordResult.ACCEPTED, mixedStore.record(caller, peer, 7L))
+        val mixed = mixedStore.snapshot(7L)
+        assertTrue(mixed.processing)
+        val json = mixed.toLiveJson(null)
+        assertTrue(json.contains("\"verification\":\"mixed_route_verification_v1\""))
+        assertTrue(json.contains("\"verification\":\"authenticated_socket_v2\""))
+        assertTrue(json.contains("\"verification\":\"caller_attested_binder_v1\""))
+    }
 }
 
 private fun validJson(

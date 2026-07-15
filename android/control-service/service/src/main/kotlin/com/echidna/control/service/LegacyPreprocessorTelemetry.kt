@@ -3,9 +3,11 @@ package com.echidna.control.service
 import android.os.SystemClock
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 
-internal const val PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION = 3L
+internal const val PREPROCESSOR_TELEMETRY_PROVIDER_API_VERSION = 4L
 internal const val PREPROCESSOR_TELEMETRY_VALUE_BYTES = 48
+internal const val PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES = 16
 internal const val PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS = 250L
 private const val UINT32_MASK = 0xffff_ffffL
 private const val MAX_SEQUENCE_ADVANCE = 1_024L
@@ -77,7 +79,12 @@ internal class LegacyCapabilityIssuanceLedger(
         val generation: Long,
     )
 
-    private val leases = linkedMapOf<Key, Long>()
+    private data class Lease(
+        val expiryMs: Long,
+        val capabilityNonce: ByteArray,
+    )
+
+    private val leases = linkedMapOf<Key, Lease>()
 
     @Synchronized
     fun record(
@@ -97,9 +104,9 @@ internal class LegacyCapabilityIssuanceLedger(
         )
         if (key.pid <= 0) return false
         if (key !in leases && leases.size >= maxEntries) {
-            leases.minByOrNull { it.value }?.key?.let(leases::remove)
+            leases.minByOrNull { it.value.expiryMs }?.key?.let(leases::remove)
         }
-        leases[key] = expiry
+        leases[key] = Lease(expiry, request.nonce.clone())
         return true
     }
 
@@ -110,18 +117,26 @@ internal class LegacyCapabilityIssuanceLedger(
         processName: String,
         sessionId: Int,
         generation: Long,
+        capabilityNonce: ByteArray?,
         receivedAtMs: Long,
     ): Boolean {
         prune(receivedAtMs)
-        val expiry = leases[Key(uid, pid, processName, sessionId, generation)] ?: return false
-        return receivedAtMs < expiry
+        if (
+            capabilityNonce == null ||
+            capabilityNonce.size != PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES
+        ) {
+            return false
+        }
+        val lease = leases[Key(uid, pid, processName, sessionId, generation)] ?: return false
+        return receivedAtMs < lease.expiryMs &&
+            MessageDigest.isEqual(lease.capabilityNonce, capabilityNonce)
     }
 
     @Synchronized
     fun clear() = leases.clear()
 
     private fun prune(now: Long) {
-        leases.entries.removeAll { it.value <= now }
+        leases.entries.removeAll { it.value.expiryMs <= now }
     }
 
     private fun validateIssuedEnvelope(
@@ -143,12 +158,15 @@ internal class LegacyCapabilityIssuanceLedger(
         }
         val issued = buffer.getLong(40)
         val expiry = buffer.getLong(48)
+        val capabilityNonce = envelope.copyOfRange(56, 72)
         val processBytes = buffer.getShort(104).toInt() and 0xffff
         val processStart = LEGACY_CAPABILITY_FIXED_BODY_BYTES
         if (
             issued < 0L || expiry <= now || expiry <= issued ||
             expiry - issued > LEGACY_CAPABILITY_LIFETIME_MS ||
-            processBytes <= 0 || processStart + processBytes > envelope.size
+            processBytes <= 0 || processStart + processBytes > envelope.size ||
+            request.nonce.size != PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES ||
+            !MessageDigest.isEqual(capabilityNonce, request.nonce)
         ) {
             return null
         }
@@ -190,6 +208,7 @@ internal class LegacyPreprocessorTelemetryRelay(
     private data class Previous(
         val snapshot: LegacyPreprocessorTelemetrySnapshot,
         val receivedAtMs: Long,
+        val capabilityNonce: ByteArray,
     )
 
     private val previous = linkedMapOf<Key, Previous>()
@@ -201,6 +220,7 @@ internal class LegacyPreprocessorTelemetryRelay(
         processName: String,
         sessionId: Int,
         generation: Long,
+        capabilityNonce: ByteArray?,
         rawSnapshot: ByteArray?,
         receivedAtMs: Long,
     ): LegacyPreprocessorTelemetryResult {
@@ -212,8 +232,19 @@ internal class LegacyPreprocessorTelemetryRelay(
         if (generation <= 0L || snapshot.generation != generation) {
             return LegacyPreprocessorTelemetryResult.GENERATION_MISMATCH
         }
+        val reportNonce = capabilityNonce?.takeIf {
+            it.size == PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES
+        } ?: return LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY
         if (
-            !ledger.hasLive(uid, pid, processName, sessionId, generation, receivedAtMs)
+            !ledger.hasLive(
+                uid,
+                pid,
+                processName,
+                sessionId,
+                generation,
+                reportNonce,
+                receivedAtMs,
+            )
         ) {
             return LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY
         }
@@ -222,21 +253,24 @@ internal class LegacyPreprocessorTelemetryRelay(
         }
         val key = Key(uid, pid, processName, sessionId, generation)
         val last = previous[key]
-        val deltas = if (last == null) {
+        val newIncarnation = last == null ||
+            !MessageDigest.isEqual(last.capabilityNonce, reportNonce)
+        val deltas = if (newIncarnation) {
             AuthenticatedTelemetryDeltas(0L, 0L, 0L, 0L)
         } else {
-            val sequenceDelta = modularDelta(snapshot.sequence, last.snapshot.sequence)
+            val prior = requireNotNull(last)
+            val sequenceDelta = modularDelta(snapshot.sequence, prior.snapshot.sequence)
             if (sequenceDelta !in 1L..MAX_SEQUENCE_ADVANCE) {
                 return LegacyPreprocessorTelemetryResult.STALE_SEQUENCE
             }
-            val elapsedMs = receivedAtMs - last.receivedAtMs
+            val elapsedMs = receivedAtMs - prior.receivedAtMs
             if (elapsedMs < PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS) {
                 return LegacyPreprocessorTelemetryResult.RATE_LIMITED
             }
-            val blocks = modularDelta(snapshot.blocks, last.snapshot.blocks)
-            val frames = modularDelta(snapshot.frames, last.snapshot.frames)
-            val failures = modularDelta(snapshot.failures, last.snapshot.failures)
-            val mutations = modularDelta(snapshot.mutations, last.snapshot.mutations)
+            val blocks = modularDelta(snapshot.blocks, prior.snapshot.blocks)
+            val frames = modularDelta(snapshot.frames, prior.snapshot.frames)
+            val failures = modularDelta(snapshot.failures, prior.snapshot.failures)
+            val mutations = modularDelta(snapshot.mutations, prior.snapshot.mutations)
             val intervals = ((elapsedMs + PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS - 1L) /
                 PREPROCESSOR_TELEMETRY_MIN_INTERVAL_MS).coerceAtMost(20L)
             val maxBlocks = MAX_BLOCKS_PER_INTERVAL * intervals
@@ -268,12 +302,14 @@ internal class LegacyPreprocessorTelemetryRelay(
             state = state,
             deltas = deltas,
             audioSessionId = sessionId,
+            verification = AuthenticatedTelemetryVerification.CALLER_ATTESTED_BINDER_V1,
         )
         val recorded = telemetryStore.recordAt(
             frame,
             AuthenticatedPeer(uid, pid),
             generation,
             receivedAtMs,
+            replaceExisting = newIncarnation,
         )
         if (recorded != TelemetryRecordResult.ACCEPTED) {
             return if (recorded == TelemetryRecordResult.STALE_GENERATION) {
@@ -282,7 +318,7 @@ internal class LegacyPreprocessorTelemetryRelay(
                 LegacyPreprocessorTelemetryResult.STALE_SEQUENCE
             }
         }
-        previous[key] = Previous(snapshot, receivedAtMs)
+        previous[key] = Previous(snapshot, receivedAtMs, reportNonce.clone())
         if (previous.size > MAX_ENTRIES) previous.entries.iterator().run {
             if (hasNext()) {
                 next()

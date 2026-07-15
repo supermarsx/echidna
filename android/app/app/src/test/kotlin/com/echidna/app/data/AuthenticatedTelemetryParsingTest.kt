@@ -1,5 +1,6 @@
 package com.echidna.app.data
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,6 +70,112 @@ class AuthenticatedTelemetryParsingTest {
         assertFalse(oldGeneration.isVerifiedProcessing)
         assertFalse(legacy.hasVerifiedRuntimeTelemetry)
         assertFalse(legacy.isVerifiedProcessing)
+    }
+
+    @Test
+    fun `caller attested preprocessor counters stay visible without verified processing`() {
+        val snapshot = TelemetryParser.parse(
+            """
+                {
+                  "schemaVersion":2,
+                  "type":"telemetrySnapshot",
+                  "verification":"caller_attested_binder_v1",
+                  "currentPolicyGeneration":11,
+                  "processing":false,
+                  "totalCallbacks":4,
+                  "routes":[{
+                    "process":"com.example.voice",
+                    "route":"preprocessor",
+                    "generation":11,
+                    "state":"processing",
+                    "sequence":2,
+                    "ageMs":10,
+                    "recentMutation":true,
+                    "blocks":4,
+                    "frames":768,
+                    "failures":0,
+                    "mutations":1,
+                    "verification":"caller_attested_binder_v1"
+                  }]
+                }
+            """.trimIndent(),
+        )!!
+
+        assertEquals(1, snapshot.routes.size)
+        assertEquals(1L, snapshot.routes.single().mutations)
+        assertFalse(snapshot.hasVerifiedRuntimeTelemetry)
+        assertFalse(snapshot.isVerifiedProcessing)
+    }
+
+    @Test
+    fun `mixed snapshots retain trusted socket proof and caller diagnostics separately`() {
+        val snapshot = TelemetryParser.parse(
+            """
+                {
+                  "schemaVersion":2,
+                  "type":"telemetrySnapshot",
+                  "verification":"mixed_route_verification_v1",
+                  "currentPolicyGeneration":11,
+                  "processing":true,
+                  "totalCallbacks":8,
+                  "routes":[
+                    {
+                      "process":"com.example.voice",
+                      "route":"preprocessor",
+                      "generation":11,
+                      "state":"processing",
+                      "sequence":2,
+                      "ageMs":10,
+                      "recentMutation":true,
+                      "blocks":4,
+                      "frames":768,
+                      "failures":0,
+                      "mutations":1,
+                      "verification":"caller_attested_binder_v1"
+                    },
+                    {
+                      "process":"com.example.voice",
+                      "route":"aaudio",
+                      "generation":11,
+                      "state":"processing",
+                      "sequence":8,
+                      "ageMs":10,
+                      "recentMutation":true,
+                      "blocks":4,
+                      "frames":768,
+                      "failures":0,
+                      "mutations":2,
+                      "verification":"authenticated_socket_v2"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+        )!!
+
+        assertEquals(2, snapshot.routes.size)
+        assertTrue(snapshot.hasVerifiedRuntimeTelemetry)
+        assertTrue(snapshot.isVerifiedProcessing)
+    }
+
+    @Test
+    fun `explicit unknown route verification never inherits trusted root verification`() {
+        val snapshot = TelemetryParser.parse(
+            snapshotJson(
+                currentGeneration = 11L,
+                routeGeneration = 11L,
+                state = "processing",
+                recentMutation = true,
+                mutations = 3L,
+            ).replace(
+                "\"mutations\":3",
+                "\"mutations\":3,\"verification\":\"forged\"",
+            ),
+        )!!
+
+        assertEquals(1, snapshot.routes.size)
+        assertEquals("unverified", snapshot.routes.single().verification)
+        assertFalse(snapshot.hasVerifiedRuntimeTelemetry)
+        assertFalse(snapshot.isVerifiedProcessing)
     }
 
     private fun snapshotJson(

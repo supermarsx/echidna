@@ -202,6 +202,17 @@ class PolicySnapshotService : Service() {
             generation: Long,
             snapshot: ByteArray?,
         ) {
+            // Retain the append-only v3 transaction for APK/shim skew, but never ingest an
+            // incarnation-unbound payload as processing evidence or diagnostic counters.
+        }
+
+        override fun reportLegacyPreprocessorTelemetryV4(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            capabilityNonce: ByteArray?,
+            snapshot: ByteArray?,
+        ) {
             val callingUid = Binder.getCallingUid()
             val callingPid = Binder.getCallingPid()
             val receivedAtMs = SystemClock.elapsedRealtime()
@@ -209,10 +220,13 @@ class PolicySnapshotService : Service() {
                 ?: return
             if (
                 packageName != processName?.substringBefore(':') ||
+                capabilityNonce == null ||
+                capabilityNonce.size != PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES ||
                 snapshot == null || snapshot.size != PREPROCESSOR_TELEMETRY_VALUE_BYTES
             ) {
                 return
             }
+            val ownedNonce = capabilityNonce.clone()
             val ownedSnapshot = snapshot.clone()
             val ownedProcess = processName
             try {
@@ -223,6 +237,7 @@ class PolicySnapshotService : Service() {
                         ownedProcess,
                         audioSessionId,
                         generation,
+                        ownedNonce,
                         ownedSnapshot,
                         receivedAtMs,
                     )

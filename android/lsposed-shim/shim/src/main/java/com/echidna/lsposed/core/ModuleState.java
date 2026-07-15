@@ -206,9 +206,9 @@ public final class ModuleState {
     }
 
     public boolean reportLegacyPreprocessorTelemetry(
-            int audioSessionId, long generation, byte[] snapshot) {
+            int audioSessionId, long generation, byte[] capabilityNonce, byte[] snapshot) {
         return snapshotStore.reportLegacyPreprocessorTelemetry(
-                audioSessionId, generation, snapshot);
+                audioSessionId, generation, capabilityNonce, snapshot);
     }
 
     public void invalidateAudioProcessingPermits() {

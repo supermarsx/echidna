@@ -68,7 +68,8 @@ final class LegacyPreprocessorSessionManager {
     }
 
     interface TelemetryClient {
-        boolean report(int sessionId, long generation, byte[] snapshot);
+        boolean report(
+                int sessionId, long generation, byte[] capabilityNonce, byte[] snapshot);
     }
 
     interface EffectFactory {
@@ -191,6 +192,7 @@ final class LegacyPreprocessorSessionManager {
         long pendingGeneration;
         long requestDeadlineMs;
         TelemetrySnapshot telemetry;
+        byte[] capabilityNonce;
 
         Session(Object record, int sessionId) {
             this.record = record;
@@ -460,6 +462,7 @@ final class LegacyPreprocessorSessionManager {
             policyAccess.invalidateDirectPermits();
             session.generation = requestedGeneration;
             session.expiryMs = expiry;
+            session.capabilityNonce = nonce.clone();
             session.pendingGeneration = 0L;
             session.requestDeadlineMs = 0L;
             scheduleHealth(session);
@@ -583,6 +586,7 @@ final class LegacyPreprocessorSessionManager {
         session.pendingGeneration = 0L;
         session.requestDeadlineMs = 0L;
         session.telemetry = null;
+        session.capabilityNonce = null;
         session.effect = null;
         if (effect == null) {
             return;
@@ -670,7 +674,13 @@ final class LegacyPreprocessorSessionManager {
                 return;
             }
         }
-        if (!telemetryClient.report(session.sessionId, session.generation, raw)) {
+        byte[] capabilityNonce = session.capabilityNonce;
+        if (capabilityNonce == null || capabilityNonce.length != 16) {
+            diagnostics.report("telemetry_capability_missing", null);
+            return;
+        }
+        if (!telemetryClient.report(
+                session.sessionId, session.generation, capabilityNonce, raw)) {
             diagnostics.report("telemetry_provider_unavailable", null);
             return;
         }

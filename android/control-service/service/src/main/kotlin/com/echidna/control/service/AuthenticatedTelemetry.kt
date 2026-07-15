@@ -15,6 +15,7 @@ private const val TELEMETRY_MUTATION_FRESHNESS_MS = 1_500L
 private const val MAX_TELEMETRY_ENTRIES = 128
 private const val MAX_PROCESS_BYTES = 255
 private const val UINT32_MAX = 0xffff_ffffL
+internal const val MIXED_TELEMETRY_VERIFICATION = "mixed_route_verification_v1"
 
 private val TELEMETRY_ROOT_KEYS = setOf(
     "schemaVersion",
@@ -58,6 +59,14 @@ internal enum class AuthenticatedTelemetryState(val wireName: String) {
     }
 }
 
+internal enum class AuthenticatedTelemetryVerification(
+    val wireName: String,
+    val processingProofEligible: Boolean,
+) {
+    AUTHENTICATED_SOCKET_V2("authenticated_socket_v2", true),
+    CALLER_ATTESTED_BINDER_V1("caller_attested_binder_v1", false),
+}
+
 internal data class AuthenticatedTelemetryDeltas(
     val blocks: Long,
     val frames: Long,
@@ -74,6 +83,8 @@ internal data class AuthenticatedTelemetryFrame(
     val state: AuthenticatedTelemetryState,
     val deltas: AuthenticatedTelemetryDeltas,
     val audioSessionId: Int = 0,
+    val verification: AuthenticatedTelemetryVerification =
+        AuthenticatedTelemetryVerification.AUTHENTICATED_SOCKET_V2,
 )
 
 internal data class AuthenticatedPeer(
@@ -359,6 +370,7 @@ private data class TelemetryEntryKey(
     val route: AuthenticatedTelemetryRoute,
     val generation: Long,
     val audioSessionId: Int,
+    val verification: AuthenticatedTelemetryVerification,
 )
 
 private data class MutableTelemetryEntry(
@@ -389,6 +401,7 @@ internal data class AuthenticatedTelemetryEntry(
     val failures: Long,
     val mutations: Long,
     val audioSessionId: Int,
+    val verification: String,
 )
 
 internal data class AuthenticatedTelemetrySnapshot(
@@ -399,6 +412,8 @@ internal data class AuthenticatedTelemetrySnapshot(
     val processing: Boolean
         get() = entries.any {
             it.generation == policyGeneration &&
+                it.verification ==
+                AuthenticatedTelemetryVerification.AUTHENTICATED_SOCKET_V2.wireName &&
                 it.state == AuthenticatedTelemetryState.PROCESSING.wireName &&
                 it.recentMutation &&
                 it.mutations > 0L
@@ -463,7 +478,7 @@ internal data class AuthenticatedTelemetrySnapshot(
         val root = JSONObject()
             .put("schemaVersion", 2)
             .put("type", "telemetrySnapshot")
-            .put("verification", "authenticated_socket_v2")
+            .put("verification", snapshotVerification())
             .put("currentPolicyGeneration", policyGeneration)
             .put("snapshotMonotonicMs", snapshotMonotonicMs)
             .put("processing", processing)
@@ -485,6 +500,7 @@ internal data class AuthenticatedTelemetrySnapshot(
                 .put("frames", entry.frames)
                 .put("failures", entry.failures)
                 .put("mutations", entry.mutations)
+                .put("verification", entry.verification)
             if (includeIdentities) {
                 item.put("uid", entry.uid)
                 item.put("pid", entry.pid)
@@ -495,6 +511,15 @@ internal data class AuthenticatedTelemetrySnapshot(
         }
         root.put("routes", routes)
         return root
+    }
+
+    private fun snapshotVerification(): String {
+        val sources = entries.mapTo(linkedSetOf()) { it.verification }
+        return when (sources.size) {
+            0 -> AuthenticatedTelemetryVerification.AUTHENTICATED_SOCKET_V2.wireName
+            1 -> sources.first()
+            else -> MIXED_TELEMETRY_VERIFICATION
+        }
     }
 
     private fun hooksJson(): JSONArray = JSONArray().also { hooks ->
@@ -543,6 +568,7 @@ internal class AuthenticatedTelemetryStore(
         peer: AuthenticatedPeer,
         currentPolicyGeneration: Long,
         receivedAtMs: Long,
+        replaceExisting: Boolean = false,
     ): TelemetryRecordResult = synchronized(lock) {
         val now = clockMs()
         pruneLocked(currentPolicyGeneration, now)
@@ -559,7 +585,9 @@ internal class AuthenticatedTelemetryStore(
             route = frame.route,
             generation = frame.generation,
             audioSessionId = frame.audioSessionId,
+            verification = frame.verification,
         )
+        if (replaceExisting) entries.remove(key)
         val current = entries[key]
         if (current != null && !isNewerSequence(frame.sequence, current.sequence)) {
             return@synchronized TelemetryRecordResult.STALE_SEQUENCE
@@ -614,6 +642,7 @@ internal class AuthenticatedTelemetryStore(
                 failures = value.failures,
                 mutations = value.mutations,
                 audioSessionId = key.audioSessionId,
+                verification = key.verification.wireName,
             )
         }
         AuthenticatedTelemetrySnapshot(currentPolicyGeneration, now, immutable)

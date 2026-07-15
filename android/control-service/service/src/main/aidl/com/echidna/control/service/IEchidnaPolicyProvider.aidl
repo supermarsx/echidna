@@ -15,4 +15,7 @@ interface IEchidnaPolicyProvider {
     // Append-only v3 surface. Payload is the fixed 48-byte ECHT v1 value, not effect_param_t.
     oneway void reportLegacyPreprocessorTelemetry(int audioSessionId, String processName,
             long generation, in byte[] snapshot);
+    // Append-only v4 surface. Nonce is the exact 16-byte value in the active signed capability.
+    oneway void reportLegacyPreprocessorTelemetryV4(int audioSessionId, String processName,
+            long generation, in byte[] capabilityNonce, in byte[] snapshot);
 }

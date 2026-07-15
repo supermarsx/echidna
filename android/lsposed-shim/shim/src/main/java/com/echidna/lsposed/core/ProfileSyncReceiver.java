@@ -34,7 +34,7 @@ final class ProfileSyncReceiver {
     private static final String TAG = "EchidnaPolicySync";
     private static final long RECONNECT_DELAY_MS = 1000L;
     private static final long CAPABILITY_PROVIDER_API_VERSION = 2L;
-    private static final long TELEMETRY_PROVIDER_API_VERSION = 3L;
+    private static final long TELEMETRY_PROVIDER_API_VERSION = 4L;
     private static final ComponentName POLICY_COMPONENT = new ComponentName(
             "com.echidna.app",
             "com.echidna.control.service.PolicySnapshotService");
@@ -137,15 +137,17 @@ final class ProfileSyncReceiver {
     }
 
     boolean reportLegacyPreprocessorTelemetry(
-            int audioSessionId, long generation, byte[] snapshot) {
+            int audioSessionId, long generation, byte[] capabilityNonce, byte[] snapshot) {
         if (!started.get() || audioSessionId <= 0 || generation <= 0L
+                || capabilityNonce == null || capabilityNonce.length != 16
                 || snapshot == null || snapshot.length != 48) {
             return false;
         }
+        byte[] ownedNonce = capabilityNonce.clone();
         byte[] ownedSnapshot = snapshot.clone();
         try {
             executor.execute(() -> reportLegacyPreprocessorTelemetryOnExecutor(
-                    audioSessionId, generation, ownedSnapshot));
+                    audioSessionId, generation, ownedNonce, ownedSnapshot));
             return true;
         } catch (RejectedExecutionException error) {
             logFailure("telemetry report executor rejected work", error);
@@ -154,7 +156,7 @@ final class ProfileSyncReceiver {
     }
 
     private void reportLegacyPreprocessorTelemetryOnExecutor(
-            int audioSessionId, long generation, byte[] snapshot) {
+            int audioSessionId, long generation, byte[] capabilityNonce, byte[] snapshot) {
         IEchidnaPolicyProvider connected = provider;
         if (connected == null) {
             return;
@@ -163,8 +165,8 @@ final class ProfileSyncReceiver {
             if (connected.getApiVersion() < TELEMETRY_PROVIDER_API_VERSION) {
                 return;
             }
-            connected.reportLegacyPreprocessorTelemetry(
-                    audioSessionId, processName, generation, snapshot);
+            connected.reportLegacyPreprocessorTelemetryV4(
+                    audioSessionId, processName, generation, capabilityNonce, snapshot);
         } catch (RemoteException error) {
             if (!connected.asBinder().isBinderAlive()) {
                 logFailure("telemetry provider disconnected", error);

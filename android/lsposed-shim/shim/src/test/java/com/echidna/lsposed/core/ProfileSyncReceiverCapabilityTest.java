@@ -75,14 +75,18 @@ public final class ProfileSyncReceiverCapabilityTest {
     }
 
     @Test
-    public void versionThreeProviderReceivesOwnedTelemetryOffCallerThread() throws Exception {
-        RecordingProvider provider = new RecordingProvider(3L);
+    public void versionFourProviderReceivesOwnedNonceBoundTelemetryOffCallerThread()
+            throws Exception {
+        RecordingProvider provider = new RecordingProvider(4L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             long callerThread = Thread.currentThread().getId();
+            byte[] capabilityNonce = nonce(3);
             byte[] snapshot = new byte[48];
             snapshot[0] = 0x45;
-            assertTrue(receiver.reportLegacyPreprocessorTelemetry(79, 11L, snapshot));
+            assertTrue(receiver.reportLegacyPreprocessorTelemetry(
+                    79, 11L, capabilityNonce, snapshot));
+            capabilityNonce[0] = 0;
             snapshot[0] = 0;
             assertTrue(provider.telemetryReported.await(3, TimeUnit.SECONDS));
 
@@ -90,6 +94,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertEquals(79, provider.sessionId);
             assertEquals(11L, provider.generation);
             assertEquals("com.example.recorder", provider.processName);
+            assertEquals(3, provider.telemetryNonce[0] & 0xff);
             assertEquals(0x45, provider.telemetrySnapshot[0]);
             assertNotEquals(callerThread, provider.telemetryThread.get());
         } finally {
@@ -98,14 +103,16 @@ public final class ProfileSyncReceiverCapabilityTest {
     }
 
     @Test
-    public void versionTwoProviderKeepsCapabilityFallbackWithoutTelemetryTransaction()
+    public void versionThreeProviderKeepsCapabilityFallbackWithoutV4TelemetryTransaction()
             throws Exception {
-        RecordingProvider provider = new RecordingProvider(2L);
+        RecordingProvider provider = new RecordingProvider(3L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
-            assertTrue(receiver.reportLegacyPreprocessorTelemetry(80, 12L, new byte[48]));
+            assertTrue(receiver.reportLegacyPreprocessorTelemetry(
+                    80, 12L, nonce(4), new byte[48]));
             assertFalse(provider.telemetryReported.await(200, TimeUnit.MILLISECONDS));
             assertEquals(0, provider.telemetryCount.get());
+            assertEquals(0, provider.legacyTelemetryCount.get());
         } finally {
             shutdown(receiver);
         }
@@ -147,8 +154,10 @@ public final class ProfileSyncReceiverCapabilityTest {
         volatile String processName;
         volatile byte[] nonce;
         final AtomicInteger telemetryCount = new AtomicInteger();
+        final AtomicInteger legacyTelemetryCount = new AtomicInteger();
         final AtomicLong telemetryThread = new AtomicLong(-1L);
         volatile byte[] telemetrySnapshot;
+        volatile byte[] telemetryNonce;
         final CountDownLatch telemetryReported = new CountDownLatch(1);
 
         RecordingProvider(long apiVersion) {
@@ -196,11 +205,22 @@ public final class ProfileSyncReceiverCapabilityTest {
                 String requestedProcess,
                 long requestedGeneration,
                 byte[] snapshot) {
+            legacyTelemetryCount.incrementAndGet();
+        }
+
+        @Override
+        public void reportLegacyPreprocessorTelemetryV4(
+                int audioSessionId,
+                String requestedProcess,
+                long requestedGeneration,
+                byte[] capabilityNonce,
+                byte[] snapshot) {
             telemetryThread.set(Thread.currentThread().getId());
             telemetryCount.incrementAndGet();
             sessionId = audioSessionId;
             processName = requestedProcess;
             generation = requestedGeneration;
+            telemetryNonce = capabilityNonce.clone();
             telemetrySnapshot = snapshot.clone();
             telemetryReported.countDown();
         }

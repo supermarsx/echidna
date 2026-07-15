@@ -434,6 +434,9 @@ public final class LegacyPreprocessorSessionManagerTest {
         harness.scheduler.advance(1L);
         assertEquals(1, effect.telemetryReadCount);
         assertEquals(1, harness.telemetry.snapshots.size());
+        assertArrayEquals(
+                harness.capabilities.requests.get(0).nonce,
+                harness.telemetry.capabilityNonces.get(0));
         LegacyPreprocessorSessionManager.TelemetrySnapshot reported =
                 LegacyPreprocessorSessionManager.decodeTelemetry(
                         harness.telemetry.snapshots.get(0));
@@ -466,6 +469,30 @@ public final class LegacyPreprocessorSessionManagerTest {
         assertEquals(0, expiredEffect.telemetryReadCount);
         assertTrue(expired.diagnostics.codes.contains("capability_expired"));
         assertEquals(1, expiredEffect.releaseCount);
+    }
+
+    @Test
+    public void sameSessionEffectRecreationReportsTheNewAcceptedCapabilityNonce() {
+        Harness harness = new Harness();
+        harness.start(68);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        harness.scheduler.advance(250L);
+        byte[] firstNonce = harness.telemetry.capabilityNonces.get(0);
+
+        harness.manager.onStop(harness.record);
+        harness.scheduler.runReady();
+        harness.manager.onStart(harness.record, 68);
+        harness.scheduler.runReady();
+        assertEquals(2, harness.capabilities.requests.size());
+        harness.replySuccess(1);
+        harness.scheduler.runReady();
+        harness.scheduler.advance(250L);
+
+        assertEquals(2, harness.telemetry.capabilityNonces.size());
+        byte[] secondNonce = harness.telemetry.capabilityNonces.get(1);
+        assertFalse(Arrays.equals(firstNonce, secondNonce));
+        assertArrayEquals(harness.capabilities.requests.get(1).nonce, secondNonce);
     }
 
     @Test
@@ -736,10 +763,13 @@ public final class LegacyPreprocessorSessionManagerTest {
     private static final class RecordingTelemetry
             implements LegacyPreprocessorSessionManager.TelemetryClient {
         final List<byte[]> snapshots = new ArrayList<>();
+        final List<byte[]> capabilityNonces = new ArrayList<>();
         boolean accept = true;
 
         @Override
-        public boolean report(int sessionId, long generation, byte[] snapshot) {
+        public boolean report(
+                int sessionId, long generation, byte[] capabilityNonce, byte[] snapshot) {
+            capabilityNonces.add(capabilityNonce.clone());
             snapshots.add(snapshot.clone());
             return accept;
         }
@@ -935,11 +965,14 @@ public final class LegacyPreprocessorSessionManagerTest {
     }
 
     private static final class FixedRandom extends SecureRandom {
+        private int seed = 1;
+
         @Override
         public void nextBytes(byte[] bytes) {
             for (int i = 0; i < bytes.length; i++) {
-                bytes[i] = (byte) (i + 1);
+                bytes[i] = (byte) (seed + i);
             }
+            seed++;
         }
     }
 

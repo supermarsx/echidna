@@ -271,7 +271,7 @@ class LegacyPreprocessorCapabilityTest {
 
     @Test
     fun `provider capability API is append-only version two`() {
-        assertEquals(3L, CAPABILITY_PROVIDER_API_VERSION)
+        assertEquals(4L, CAPABILITY_PROVIDER_API_VERSION)
         assertEquals(-1, LegacyCapabilityStatus.DENIED)
         assertEquals(-116, LegacyCapabilityStatus.STALE)
         assertEquals(-126, LegacyCapabilityStatus.KEY_UNAVAILABLE)

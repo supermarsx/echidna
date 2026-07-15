@@ -9,6 +9,10 @@ import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.RuntimeRouteTelemetry
 import com.echidna.app.model.TelemetrySample
 import com.echidna.app.model.TelemetrySnapshot
+import com.echidna.app.model.TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2
+import com.echidna.app.model.TELEMETRY_VERIFICATION_CALLER_ATTESTED_BINDER_V1
+import com.echidna.app.model.TELEMETRY_VERIFICATION_MIXED
+import com.echidna.app.model.TELEMETRY_VERIFICATION_UNVERIFIED
 import com.echidna.app.model.WhitelistBindings
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,13 +43,18 @@ internal object TelemetryParser {
 
         val samples = parseSamples(root.optJSONArray("samples"))
         val hooks = parseHooks(root.optJSONArray("hooks"))
-        val verifiedV2 = root.optInt("schemaVersion", 0) == 2 &&
+        val rootVerification = root.optString("verification", "")
+        val scopedV2 = root.optInt("schemaVersion", 0) == 2 &&
             root.optString("type", "") == "telemetrySnapshot" &&
-            root.optString("verification", "") == "authenticated_socket_v2"
+            rootVerification in SUPPORTED_SNAPSHOT_VERIFICATIONS
         val currentPolicyGeneration = root.optLong("currentPolicyGeneration", 0L)
-            .takeIf { verifiedV2 && it > 0L }
+            .takeIf { scopedV2 && it > 0L }
             ?: 0L
-        val routes = if (verifiedV2) parseRuntimeRoutes(root.optJSONArray("routes")) else emptyList()
+        val routes = if (scopedV2) {
+            parseRuntimeRoutes(root.optJSONArray("routes"), rootVerification)
+        } else {
+            emptyList()
+        }
 
         return TelemetrySnapshot(
             totalCallbacks = totalCallbacks,
@@ -63,7 +72,7 @@ internal object TelemetryParser {
             warnings = warnings,
             samples = samples,
             hooks = hooks,
-            verification = if (verifiedV2) "authenticated_socket_v2" else "unverified",
+            verification = if (scopedV2) rootVerification else TELEMETRY_VERIFICATION_UNVERIFIED,
             currentPolicyGeneration = currentPolicyGeneration,
             routes = routes
         )
@@ -198,7 +207,10 @@ internal object TelemetryParser {
         return list
     }
 
-    private fun parseRuntimeRoutes(array: JSONArray?): List<RuntimeRouteTelemetry> {
+    private fun parseRuntimeRoutes(
+        array: JSONArray?,
+        rootVerification: String,
+    ): List<RuntimeRouteTelemetry> {
         if (array == null) return emptyList()
         val count = array.length().coerceAtMost(MAX_RUNTIME_ROUTES)
         val routes = ArrayList<RuntimeRouteTelemetry>(count)
@@ -207,6 +219,13 @@ internal object TelemetryParser {
             val generation = item.optLong("generation", 0L)
             val mutations = item.optLong("mutations", 0L)
             if (generation <= 0L || mutations < 0L) continue
+            val routeVerification = if (item.has("verification")) {
+                item.optString("verification", "")
+                    .takeIf { it in SUPPORTED_ROUTE_VERIFICATIONS }
+                    ?: TELEMETRY_VERIFICATION_UNVERIFIED
+            } else {
+                legacyRouteVerification(rootVerification)
+            }
             routes += RuntimeRouteTelemetry(
                 process = item.optString("process", ""),
                 route = item.optString("route", "unknown"),
@@ -219,10 +238,22 @@ internal object TelemetryParser {
                 frames = item.optLong("frames", 0L).coerceAtLeast(0L),
                 failures = item.optLong("failures", 0L).coerceAtLeast(0L),
                 mutations = mutations,
+                verification = routeVerification,
             )
         }
         return routes
     }
 
     private const val MAX_RUNTIME_ROUTES = 128
+
+    private val SUPPORTED_ROUTE_VERIFICATIONS = setOf(
+        TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2,
+        TELEMETRY_VERIFICATION_CALLER_ATTESTED_BINDER_V1,
+    )
+    private val SUPPORTED_SNAPSHOT_VERIFICATIONS = SUPPORTED_ROUTE_VERIFICATIONS +
+        TELEMETRY_VERIFICATION_MIXED
+
+    private fun legacyRouteVerification(rootVerification: String): String =
+        rootVerification.takeIf { it in SUPPORTED_ROUTE_VERIFICATIONS }
+            ?: TELEMETRY_VERIFICATION_UNVERIFIED
 }

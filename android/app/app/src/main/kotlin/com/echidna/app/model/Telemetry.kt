@@ -31,7 +31,8 @@ data class RuntimeRouteTelemetry(
     val blocks: Long,
     val frames: Long,
     val failures: Long,
-    val mutations: Long
+    val mutations: Long,
+    val verification: String = TELEMETRY_VERIFICATION_UNVERIFIED,
 )
 
 data class TelemetrySnapshot(
@@ -55,18 +56,25 @@ data class TelemetrySnapshot(
     val routes: List<RuntimeRouteTelemetry> = emptyList()
 ) {
     val hasVerifiedRuntimeTelemetry: Boolean
-        get() = verification == "authenticated_socket_v2" &&
-            currentPolicyGeneration > 0L &&
-            routes.any { it.generation == currentPolicyGeneration }
+        get() = currentPolicyGeneration > 0L && routes.any {
+            it.generation == currentPolicyGeneration &&
+                it.verification == TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2
+        }
 
     val isVerifiedProcessing: Boolean
         get() = hasVerifiedRuntimeTelemetry && routes.any { route ->
             route.generation == currentPolicyGeneration &&
+                route.verification == TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2 &&
                 route.state == "processing" &&
                 route.recentMutation &&
                 route.mutations > 0L
         }
 }
+
+const val TELEMETRY_VERIFICATION_AUTHENTICATED_SOCKET_V2 = "authenticated_socket_v2"
+const val TELEMETRY_VERIFICATION_CALLER_ATTESTED_BINDER_V1 = "caller_attested_binder_v1"
+const val TELEMETRY_VERIFICATION_MIXED = "mixed_route_verification_v1"
+const val TELEMETRY_VERIFICATION_UNVERIFIED = "unverified"
 
 data class LatencyBucket(val label: String, val count: Int)
 

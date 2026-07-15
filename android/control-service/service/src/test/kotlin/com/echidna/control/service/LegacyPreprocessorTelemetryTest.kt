@@ -46,7 +46,7 @@ class LegacyPreprocessorTelemetryTest {
     }
 
     @Test
-    fun `issuance ledger binds live lease to exact uid pid process session and generation`() {
+    fun `issuance ledger binds live lease to exact caller tuple and capability nonce`() {
         val fixture = Fixture()
         assertTrue(fixture.issue())
         assertTrue(fixture.hasLease())
@@ -55,16 +55,24 @@ class LegacyPreprocessorTelemetryTest {
         assertFalse(fixture.hasLease(process = "com.example.recorder:other"))
         assertFalse(fixture.hasLease(session = 42))
         assertFalse(fixture.hasLease(generation = 8L))
+        assertFalse(fixture.hasLease(capabilityNonce = fixture.nonce(2)))
 
         fixture.now += LEGACY_CAPABILITY_LIFETIME_MS
         assertFalse(fixture.hasLease())
 
         val wrongResult = fixture.result(session = 42)
         assertFalse(fixture.ledger.record(fixture.pid, fixture.request(), wrongResult))
+        assertFalse(
+            fixture.ledger.record(
+                fixture.pid,
+                fixture.request(capabilityNonce = fixture.nonce(3)),
+                fixture.result(capabilityNonce = fixture.nonce(4)),
+            ),
+        )
     }
 
     @Test
-    fun `first snapshot is baseline and fresh active mutation delta proves processing`() {
+    fun `fresh caller attested mutations remain diagnostics and never prove processing`() {
         val fixture = Fixture()
         assertTrue(fixture.issue())
         assertEquals(
@@ -83,13 +91,16 @@ class LegacyPreprocessorTelemetryTest {
             fixture.report(snapshot(41, 7L, 2L, 3, 102L, 1_008L, 4L, 10L)),
         )
         diagnostics = fixture.store.snapshot(7L)
-        assertTrue(diagnostics.processing)
+        assertFalse(diagnostics.processing)
         assertEquals(2L, diagnostics.totalBlocks)
         assertEquals(8L, diagnostics.totalFrames)
         assertEquals(1L, diagnostics.totalMutations)
+        assertEquals("caller_attested_binder_v1", diagnostics.entries.single().verification)
+        assertEquals("processing", diagnostics.entries.single().state)
         val json = diagnostics.toDiagnosticsJson(false, null).toString()
         assertTrue(json.contains("preprocessor"))
         assertTrue(json.contains("\"audioSessionId\":41"))
+        assertTrue(json.contains("\"verification\":\"caller_attested_binder_v1\""))
 
         fixture.advance(1_501L)
         assertFalse(fixture.store.snapshot(7L).processing)
@@ -165,12 +176,69 @@ class LegacyPreprocessorTelemetryTest {
             LegacyPreprocessorTelemetryResult.ACCEPTED,
             fixture.report(snapshot(41, 7L, 0L, 3, 0L, 0L, 0L, 0L)),
         )
-        assertTrue(fixture.store.snapshot(7L).processing)
+        assertFalse(fixture.store.snapshot(7L).processing)
 
         fixture.advance(250L)
         assertEquals(
             LegacyPreprocessorTelemetryResult.COUNTER_BOUNDS,
             fixture.report(snapshot(41, 7L, 1L, 3, 100_000L, 0L, 0L, 0L)),
+        )
+    }
+
+    @Test
+    fun `identical tuple restart rebases only after a newly issued exact nonce`() {
+        val fixture = Fixture()
+        val firstNonce = fixture.nonce(1)
+        val secondNonce = fixture.nonce(2)
+        assertTrue(fixture.issue(firstNonce))
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.report(snapshot(41, 7L, 100L, 3, 500L, 2_000L, 0L, 10L)),
+        )
+        fixture.advance(250L)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.report(snapshot(41, 7L, 101L, 3, 501L, 2_004L, 0L, 11L)),
+        )
+        assertEquals(101L, fixture.store.snapshot(7L).entries.single().sequence)
+        assertEquals(1L, fixture.store.snapshot(7L).totalMutations)
+
+        fixture.advance(250L)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.STALE_SEQUENCE,
+            fixture.report(snapshot(41, 7L, 1L, 3, 0L, 0L, 0L, 0L)),
+        )
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY,
+            fixture.report(
+                snapshot(41, 7L, 1L, 3, 0L, 0L, 0L, 0L),
+                capabilityNonce = secondNonce,
+            ),
+        )
+
+        assertTrue(fixture.issue(secondNonce))
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.report(snapshot(41, 7L, 1L, 3, 0L, 0L, 0L, 0L)),
+        )
+        val rebased = fixture.store.snapshot(7L)
+        assertEquals(1, rebased.entries.size)
+        assertEquals(1L, rebased.entries.single().sequence)
+        assertEquals(0L, rebased.totalBlocks)
+        assertEquals(0L, rebased.totalMutations)
+
+        fixture.advance(250L)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.ACCEPTED,
+            fixture.report(snapshot(41, 7L, 2L, 3, 1L, 4L, 0L, 1L)),
+        )
+        assertEquals(1L, fixture.store.snapshot(7L).totalMutations)
+        assertEquals(
+            LegacyPreprocessorTelemetryResult.NO_LIVE_CAPABILITY,
+            fixture.report(
+                snapshot(41, 7L, 3L, 3, 2L, 8L, 0L, 2L),
+                capabilityNonce = firstNonce,
+            ),
         )
     }
 
@@ -246,6 +314,7 @@ class LegacyPreprocessorTelemetryTest {
         val process = "com.example.recorder"
         val session = 41
         val generation = 7L
+        var activeNonce = nonce(1)
         val ledger = LegacyCapabilityIssuanceLedger(clockMs = { now })
         val store = AuthenticatedTelemetryStore(clockMs = { now })
         val relay = LegacyPreprocessorTelemetryRelay(ledger, store, { policyGeneration })
@@ -253,20 +322,22 @@ class LegacyPreprocessorTelemetryTest {
         fun request(
             session: Int = this.session,
             generation: Long = this.generation,
+            capabilityNonce: ByteArray = activeNonce,
         ) = LegacyCapabilityRequest(
             uid = uid,
             packageName = process,
             processName = process,
             audioSessionId = session,
             generation = generation,
-            nonce = ByteArray(16) { (it + 1).toByte() },
+            nonce = capabilityNonce.clone(),
         )
 
         fun result(
             session: Int = this.session,
             generation: Long = this.generation,
+            capabilityNonce: ByteArray = activeNonce,
         ): LegacyCapabilityResult {
-            val request = request(session, generation)
+            val request = request(session, generation, capabilityNonce)
             val body = LegacyCapabilityCodec.encodeBody(
                 session,
                 uid,
@@ -286,7 +357,12 @@ class LegacyPreprocessorTelemetryTest {
             )
         }
 
-        fun issue(): Boolean = ledger.record(pid, request(), result())
+        fun issue(capabilityNonce: ByteArray = activeNonce): Boolean {
+            activeNonce = capabilityNonce.clone()
+            return ledger.record(pid, request(), result())
+        }
+
+        fun nonce(seed: Int): ByteArray = ByteArray(16) { (seed + it).toByte() }
 
         fun hasLease(
             uid: Int = this.uid,
@@ -294,7 +370,16 @@ class LegacyPreprocessorTelemetryTest {
             process: String = this.process,
             session: Int = this.session,
             generation: Long = this.generation,
-        ): Boolean = ledger.hasLive(uid, pid, process, session, generation, now)
+            capabilityNonce: ByteArray = activeNonce,
+        ): Boolean = ledger.hasLive(
+            uid,
+            pid,
+            process,
+            session,
+            generation,
+            capabilityNonce,
+            now,
+        )
 
         fun report(
             snapshot: ByteArray,
@@ -303,12 +388,14 @@ class LegacyPreprocessorTelemetryTest {
             process: String = this.process,
             session: Int = this.session,
             generation: Long = this.generation,
+            capabilityNonce: ByteArray = activeNonce,
         ): LegacyPreprocessorTelemetryResult = relay.report(
             uid,
             pid,
             process,
             session,
             generation,
+            capabilityNonce,
             snapshot,
             now,
         )
