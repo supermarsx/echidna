@@ -10,5 +10,11 @@
             android:name=".service.EchidnaControlService"
             android:enabled="true"
             android:exported="false" />
+        <!-- Explicit read-only endpoint for target-UID-scoped LSPosed policy. The privileged
+             control service above remains private to the companion APK. -->
+        <service
+            android:name=".service.PolicySnapshotService"
+            android:enabled="true"
+            android:exported="true" />
     </application>
 </manifest>
