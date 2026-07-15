@@ -8,7 +8,10 @@ import static org.junit.Assert.assertTrue;
 import com.echidna.lsposed.core.ModuleState;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Test;
 
@@ -230,6 +233,97 @@ public final class AudioReadTransactionTest {
         assertEquals(7, oversized[0]);
         assertEquals(9, oversized[oversized.length - 1]);
         assertFalse(transformed.get());
+    }
+
+    @Test
+    public void delegatedReadOverloadsApplyNonlinearTransformExactlyOnce() {
+        int[] delegatedSample = {2};
+        AtomicInteger delegatedTransforms = new AtomicInteger();
+
+        AudioRecordHook.ReadNestingGuard.enter();
+        try {
+            AudioRecordHook.ReadNestingGuard.enter();
+            try {
+                applyNonlinearIfOutermost(delegatedSample, delegatedTransforms);
+            } finally {
+                AudioRecordHook.ReadNestingGuard.exit();
+            }
+            applyNonlinearIfOutermost(delegatedSample, delegatedTransforms);
+        } finally {
+            AudioRecordHook.ReadNestingGuard.exit();
+        }
+
+        assertEquals(4, delegatedSample[0]);
+        assertEquals(1, delegatedTransforms.get());
+        assertFalse(AudioRecordHook.ReadNestingGuard.isOutermost());
+
+        int[] directSample = {3};
+        AtomicInteger directTransforms = new AtomicInteger();
+        AudioRecordHook.ReadNestingGuard.enter();
+        try {
+            applyNonlinearIfOutermost(directSample, directTransforms);
+        } finally {
+            AudioRecordHook.ReadNestingGuard.exit();
+        }
+        assertEquals(9, directSample[0]);
+        assertEquals(1, directTransforms.get());
+    }
+
+    @Test
+    public void readNestingGuardIsIndependentAcrossConcurrentThreads() throws Exception {
+        CountDownLatch bothEntered = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger outermostReads = new AtomicInteger();
+        AtomicBoolean failed = new AtomicBoolean(false);
+        Runnable read = () -> {
+            AudioRecordHook.ReadNestingGuard.enter();
+            try {
+                if (AudioRecordHook.ReadNestingGuard.isOutermost()) {
+                    outermostReads.incrementAndGet();
+                } else {
+                    failed.set(true);
+                }
+                bothEntered.countDown();
+                if (!release.await(2, TimeUnit.SECONDS)) {
+                    failed.set(true);
+                }
+                AudioRecordHook.ReadNestingGuard.enter();
+                try {
+                    if (AudioRecordHook.ReadNestingGuard.isOutermost()) {
+                        failed.set(true);
+                    }
+                } finally {
+                    AudioRecordHook.ReadNestingGuard.exit();
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                failed.set(true);
+            } finally {
+                AudioRecordHook.ReadNestingGuard.exit();
+            }
+        };
+        Thread first = new Thread(read, "audio-read-1");
+        Thread second = new Thread(read, "audio-read-2");
+
+        first.start();
+        second.start();
+        assertTrue(bothEntered.await(2, TimeUnit.SECONDS));
+        release.countDown();
+        first.join(2_000L);
+        second.join(2_000L);
+
+        assertFalse(first.isAlive());
+        assertFalse(second.isAlive());
+        assertFalse(failed.get());
+        assertEquals(2, outermostReads.get());
+    }
+
+    private static void applyNonlinearIfOutermost(
+            int[] sample, AtomicInteger transforms) {
+        if (AudioRecordHook.ReadNestingGuard.isOutermost()) {
+            sample[0] *= sample[0];
+            transforms.incrementAndGet();
+        }
     }
 
     private static AudioReadTransaction.PermitGate deniedGate() {

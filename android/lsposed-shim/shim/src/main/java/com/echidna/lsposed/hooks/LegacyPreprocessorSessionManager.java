@@ -115,19 +115,44 @@ final class LegacyPreprocessorSessionManager {
         private final AtomicReferenceArray<Lease> entries =
                 new AtomicReferenceArray<>(MAX_SESSIONS);
 
-        boolean acquire(Object record, int sessionId) {
+        boolean acquire(Object record, int sessionId, long generation) {
+            if (record == null || sessionId <= 0 || generation <= 0L) {
+                return false;
+            }
             for (int i = 0; i < entries.length(); i++) {
                 Lease current = entries.get(i);
-                if (current != null && current.record == record
-                        && current.sessionId == sessionId) {
-                    return true;
+                if (current != null && current.record == record) {
+                    return current.sessionId == sessionId
+                            && current.generation == generation
+                            && !current.quarantined;
                 }
             }
-            release(record);
-            Lease lease = new Lease(record, sessionId);
+            Lease lease = new Lease(record, sessionId, generation);
             for (int i = 0; i < entries.length(); i++) {
                 if (entries.compareAndSet(i, null, lease)) {
                     return true;
+                }
+            }
+            return false;
+        }
+
+        void quarantine(Object record) {
+            if (record == null) {
+                return;
+            }
+            for (int i = 0; i < entries.length(); i++) {
+                Lease lease = entries.get(i);
+                if (lease != null && lease.record == record) {
+                    lease.quarantined = true;
+                }
+            }
+        }
+
+        boolean isQuarantined(Object record) {
+            for (int i = 0; i < entries.length(); i++) {
+                Lease lease = entries.get(i);
+                if (lease != null && lease.record == record) {
+                    return lease.quarantined;
                 }
             }
             return false;
@@ -168,10 +193,13 @@ final class LegacyPreprocessorSessionManager {
         private static final class Lease {
             final Object record;
             final int sessionId;
+            final long generation;
+            volatile boolean quarantined;
 
-            Lease(Object record, int sessionId) {
+            Lease(Object record, int sessionId, long generation) {
                 this.record = record;
                 this.sessionId = sessionId;
+                this.generation = generation;
             }
         }
     }
@@ -193,6 +221,7 @@ final class LegacyPreprocessorSessionManager {
         long requestDeadlineMs;
         TelemetrySnapshot telemetry;
         byte[] capabilityNonce;
+        boolean quarantined;
 
         Session(Object record, int sessionId) {
             this.record = record;
@@ -240,19 +269,15 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         desired.putIfAbsent(record, DesiredState.STOPPED);
-        submit(() -> observeSession(record, sessionId), "executor_saturated_init");
+        submit(record, () -> observeSession(record, sessionId), "executor_saturated_init");
     }
 
     void onStart(Object record, int sessionId) {
         if (closed || record == null || sessionId <= 0) {
             return;
         }
-        int leasedSession = leases.session(record);
-        if (leasedSession > 0 && leasedSession != sessionId) {
-            clearLease(record);
-        }
         desired.put(record, DesiredState.STARTED);
-        submit(() -> start(record, sessionId), "executor_saturated_start");
+        submit(record, () -> start(record, sessionId), "executor_saturated_start");
     }
 
     void onStop(Object record) {
@@ -260,8 +285,7 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         desired.put(record, DesiredState.STOPPED);
-        clearLease(record);
-        submit(() -> stop(record, false), "executor_saturated_stop");
+        submit(record, () -> stop(record, false), "executor_saturated_stop");
     }
 
     void onRelease(Object record) {
@@ -269,12 +293,11 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         desired.put(record, DesiredState.RELEASED);
-        clearLease(record);
-        submit(() -> stop(record, true), "executor_saturated_release");
+        submit(record, () -> stop(record, true), "executor_saturated_release");
     }
 
     boolean ownsRoute(Object record) {
-        return !closed && record != null && leases.contains(record);
+        return record != null && leases.contains(record);
     }
 
     void shutdown() {
@@ -282,26 +305,30 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         closed = true;
-        for (Object record : desired.keySet()) {
-            clearLease(record);
-        }
         if (!scheduler.execute(() -> {
-            for (Session session : sessions.values()) {
-                teardown(session);
+            java.util.Iterator<Session> iterator = sessions.values().iterator();
+            while (iterator.hasNext()) {
+                Session session = iterator.next();
+                if (teardownAndRelease(session)) {
+                    iterator.remove();
+                }
             }
-            sessions.clear();
             desired.clear();
         })) {
+            for (Object record : desired.keySet()) {
+                leases.quarantine(record);
+            }
             diagnostics.report("executor_saturated_shutdown", null);
         }
         scheduler.shutdown();
     }
 
-    private void observeSession(Object record, int sessionId) {
+    private boolean observeSession(Object record, int sessionId) {
         Session current = sessions.get(record);
         if (current != null && current.sessionId != sessionId) {
-            clearLease(record);
-            teardown(current);
+            if (!teardownAndRelease(current)) {
+                return false;
+            }
             sessions.remove(record);
         }
         if (sessions.size() < MAX_SESSIONS) {
@@ -309,16 +336,20 @@ final class LegacyPreprocessorSessionManager {
         } else if (!sessions.containsKey(record)) {
             desired.remove(record);
             diagnostics.report("session_registry_full", null);
+            return false;
         }
+        return true;
     }
 
     private void start(Object record, int sessionId) {
         if (desired.get(record) != DesiredState.STARTED) {
             return;
         }
-        observeSession(record, sessionId);
+        if (!observeSession(record, sessionId)) {
+            return;
+        }
         Session session = sessions.get(record);
-        if (session == null) {
+        if (session == null || session.quarantined || leases.isQuarantined(record)) {
             return;
         }
         Policy policy = policyAccess.current();
@@ -332,8 +363,9 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         if (session.enabled && session.generation != policy.generation) {
-            clearLease(record);
-            teardown(session);
+            if (!teardownAndRelease(session)) {
+                return;
+            }
         }
         try {
             if (session.effect == null) {
@@ -371,6 +403,7 @@ final class LegacyPreprocessorSessionManager {
                             byte[] envelope,
                             String diagnostic) {
                         submit(
+                                session.record,
                                 () -> applyCapability(
                                         session.record,
                                         requestId,
@@ -386,6 +419,7 @@ final class LegacyPreprocessorSessionManager {
                     @Override
                     public void onFailure(String diagnostic) {
                         submit(
+                                session.record,
                                 () -> callbackFailed(session.record, requestId, diagnostic),
                                 "executor_saturated_callback_failure");
                     }
@@ -419,8 +453,9 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         if (policy.generation != requestedGeneration) {
-            fallback(session, "capability_stale", null);
-            start(record, session.sessionId);
+            if (fallback(session, "capability_stale", null)) {
+                start(record, session.sessionId);
+            }
             return;
         }
         if (callbackGeneration != requestedGeneration) {
@@ -445,6 +480,18 @@ final class LegacyPreprocessorSessionManager {
             if (!session.effect.hasControl()) {
                 throw new EffectFailure("effect_control_lost");
             }
+            if (!leases.acquire(record, session.sessionId, requestedGeneration)) {
+                throw new EffectFailure(
+                        leases.isQuarantined(record)
+                                ? "route_lease_quarantined"
+                                : "route_lease_full");
+            }
+            try {
+                policyAccess.invalidateDirectPermits();
+            } catch (Throwable error) {
+                leases.release(record);
+                throw error;
+            }
             int parameterStatus = session.effect.setParameter(AUTHORIZE_PARAMETER, envelope);
             if (parameterStatus != 0) {
                 throw new EffectFailure("effect_parameter_" + parameterStatus);
@@ -456,10 +503,6 @@ final class LegacyPreprocessorSessionManager {
                 }
                 session.enabled = true;
             }
-            if (!leases.acquire(record, session.sessionId)) {
-                throw new EffectFailure("route_lease_full");
-            }
-            policyAccess.invalidateDirectPermits();
             session.generation = requestedGeneration;
             session.expiryMs = expiry;
             session.capabilityNonce = nonce.clone();
@@ -505,7 +548,6 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         if (desired.get(record) != DesiredState.STARTED) {
-            clearLease(record);
             stop(record, desired.get(record) == DesiredState.RELEASED);
             return;
         }
@@ -531,8 +573,9 @@ final class LegacyPreprocessorSessionManager {
             if (!policy.eligible) {
                 fallback(session, "capability_stale", null);
             } else if (policy.generation != session.pendingGeneration) {
-                fallback(session, "capability_stale", null);
-                start(record, session.sessionId);
+                if (fallback(session, "capability_stale", null)) {
+                    start(record, session.sessionId);
+                }
             } else if (clock.boottimeMs() >= session.requestDeadlineMs) {
                 fallback(session, "capability_timeout", null);
             } else {
@@ -541,9 +584,8 @@ final class LegacyPreprocessorSessionManager {
             return;
         }
         if (!policy.eligible || policy.generation != session.generation) {
-            clearLease(record);
-            teardown(session);
-            if (policy.eligible && policy.generation > 0L) {
+            boolean teardownConfirmed = teardownAndRelease(session);
+            if (teardownConfirmed && policy.eligible && policy.generation > 0L) {
                 start(record, session.sessionId);
             }
             return;
@@ -557,24 +599,43 @@ final class LegacyPreprocessorSessionManager {
 
     private void stop(Object record, boolean release) {
         Session session = sessions.get(record);
+        boolean teardownConfirmed = true;
         if (session != null) {
-            teardown(session);
-            if (release) {
+            teardownConfirmed = teardownAndRelease(session);
+            if (release && teardownConfirmed) {
                 sessions.remove(record);
             }
         }
-        if (release) {
+        if (release && teardownConfirmed) {
             desired.remove(record);
         }
     }
 
-    private void fallback(Session session, String code, Throwable error) {
-        clearLease(session.record);
-        teardown(session);
+    private boolean fallback(Session session, String code, Throwable error) {
+        boolean teardownConfirmed = teardownAndRelease(session);
         diagnostics.report(code, error);
+        return teardownConfirmed;
     }
 
-    private void teardown(Session session) {
+    private boolean teardownAndRelease(Session session) {
+        if (session.quarantined) {
+            return false;
+        }
+        boolean hadLease = leases.contains(session.record);
+        boolean teardownConfirmed = teardown(session);
+        if (teardownConfirmed || !hadLease) {
+            if (hadLease) {
+                clearLease(session.record);
+            }
+            return true;
+        }
+        session.quarantined = true;
+        leases.quarantine(session.record);
+        diagnostics.report("route_quarantined", null);
+        return false;
+    }
+
+    private boolean teardown(Session session) {
         EffectHandle effect = session.effect;
         session.requestId++;
         session.generation = 0L;
@@ -589,29 +650,36 @@ final class LegacyPreprocessorSessionManager {
         session.capabilityNonce = null;
         session.effect = null;
         if (effect == null) {
-            return;
+            return true;
         }
+        boolean confirmed = true;
         try {
             int status = effect.setParameter(REVOKE_PARAMETER, REVOKE_VALUE);
             if (status != 0) {
+                confirmed = false;
                 diagnostics.report("effect_revoke_" + status, null);
             }
         } catch (Throwable error) {
+            confirmed = false;
             diagnostics.report("effect_revoke_failed", error);
         }
         try {
             int status = effect.setEnabled(false);
             if (status != 0) {
+                confirmed = false;
                 diagnostics.report("effect_disable_" + status, null);
             }
         } catch (Throwable error) {
+            confirmed = false;
             diagnostics.report("effect_disable_failed", error);
         }
         try {
             effect.release();
         } catch (Throwable error) {
+            confirmed = false;
             diagnostics.report("effect_release_failed", error);
         }
+        return confirmed;
     }
 
     private void clearLease(Object record) {
@@ -750,10 +818,11 @@ final class LegacyPreprocessorSessionManager {
         }
     }
 
-    private boolean submit(Runnable task, String failureCode) {
+    private boolean submit(Object record, Runnable task, String failureCode) {
         if (closed || !scheduler.execute(task)) {
             // A live lease must remain authoritative until the serial worker revokes/disables the
             // effect. Clearing it here would let the Java fallback overlap an enabled effect.
+            leases.quarantine(record);
             diagnostics.report(failureCode, null);
             return false;
         }

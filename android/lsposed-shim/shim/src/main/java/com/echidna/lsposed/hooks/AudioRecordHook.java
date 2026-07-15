@@ -295,6 +295,31 @@ public final class AudioRecordHook {
         }
     }
 
+    static final class ReadNestingGuard {
+        private static final ThreadLocal<Integer> DEPTH = new ThreadLocal<>();
+
+        private ReadNestingGuard() {}
+
+        static void enter() {
+            Integer depth = DEPTH.get();
+            DEPTH.set(depth == null ? 1 : depth + 1);
+        }
+
+        static boolean isOutermost() {
+            Integer depth = DEPTH.get();
+            return depth != null && depth == 1;
+        }
+
+        static void exit() {
+            Integer depth = DEPTH.get();
+            if (depth == null || depth <= 1) {
+                DEPTH.remove();
+            } else {
+                DEPTH.set(depth - 1);
+            }
+        }
+    }
+
     private abstract static class AudioRecordReadHook extends XC_MethodHook implements
             AudioReadTransaction.PermitGate,
             AudioReadTransaction.Transform,
@@ -308,12 +333,21 @@ public final class AudioRecordHook {
         }
 
         @Override
+        protected void beforeHookedMethod(MethodHookParam param) {
+            ReadNestingGuard.enter();
+        }
+
+        @Override
         protected void afterHookedMethod(MethodHookParam param) throws Throwable {
             try {
-                afterHookedMethodSafely(param);
+                if (ReadNestingGuard.isOutermost()) {
+                    afterHookedMethodSafely(param);
+                }
             } catch (Throwable throwable) {
                 state.setBypassOverride(true);
                 logHookFailure("AudioRecord callback failed; native processing disabled", throwable);
+            } finally {
+                ReadNestingGuard.exit();
             }
         }
 

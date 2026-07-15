@@ -61,15 +61,62 @@ public final class LegacyPreprocessorSessionManagerTest {
         assertEquals(2, harness.directTransforms);
 
         harness.manager.onStop(harness.record);
-        assertFalse(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.manager.ownsRoute(harness.record));
         assertEquals(0, effect.releaseCount);
         harness.runDirectRead();
-        assertEquals(3, harness.directTransforms);
+        assertEquals(2, harness.directTransforms);
 
         harness.scheduler.runReady();
         assertEquals(1, effect.revokeCount);
         assertEquals(1, effect.disableCount);
         assertEquals(1, effect.releaseCount);
+        assertFalse(harness.manager.ownsRoute(harness.record));
+        harness.runDirectRead();
+        assertEquals(3, harness.directTransforms);
+    }
+
+    @Test
+    public void routeSuppressionPrecedesEnableAndOutlivesEveryTeardownStep() {
+        Harness harness = new Harness();
+        harness.start(40);
+        FakeEffect effect = harness.factory.created.get(0);
+        List<String> teardownOrder = new ArrayList<>();
+        effect.beforeAuthorize = () -> {
+            assertTrue(harness.manager.ownsRoute(harness.record));
+            assertTrue(harness.policy.invalidations > 0);
+            harness.runDirectRead();
+        };
+        effect.beforeEnable = () -> {
+            assertTrue(harness.manager.ownsRoute(harness.record));
+            harness.runDirectRead();
+        };
+
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+
+        assertEquals(0, harness.directTransforms);
+        effect.beforeRevoke = () -> {
+            assertTrue(harness.manager.ownsRoute(harness.record));
+            teardownOrder.add("revoke");
+        };
+        effect.beforeDisable = () -> {
+            assertTrue(harness.manager.ownsRoute(harness.record));
+            teardownOrder.add("disable");
+        };
+        effect.beforeRelease = () -> {
+            assertTrue(harness.manager.ownsRoute(harness.record));
+            teardownOrder.add("release");
+        };
+
+        harness.manager.onStop(harness.record);
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertEquals(0, effect.revokeCount);
+        assertEquals(0, effect.disableCount);
+        assertEquals(0, effect.releaseCount);
+        harness.scheduler.runReady();
+
+        assertEquals(Arrays.asList("revoke", "disable", "release"), teardownOrder);
+        assertFalse(harness.manager.ownsRoute(harness.record));
     }
 
     @Test
@@ -242,12 +289,14 @@ public final class LegacyPreprocessorSessionManagerTest {
 
         Harness full = new Harness();
         for (int i = 0; i < 64; i++) {
-            assertTrue(full.leases.acquire(new Object(), 100 + i));
+            assertTrue(full.leases.acquire(new Object(), 100 + i, 1L));
         }
         full.start(44);
         full.replySuccess(0);
         full.scheduler.runReady();
         full.assertDirectFallback("route_lease_full");
+        assertEquals(0, full.factory.created.get(0).authorizeCount);
+        assertEquals(0, full.factory.created.get(0).enableCount);
     }
 
     @Test
@@ -278,7 +327,7 @@ public final class LegacyPreprocessorSessionManagerTest {
     }
 
     @Test
-    public void controlLossAndTeardownFailuresStillRestoreDirectRoute() {
+    public void controlLossRestoresDirectRouteButUncertainTeardownQuarantinesIt() {
         Harness controlLoss = new Harness();
         controlLoss.start(51);
         controlLoss.replySuccess(0);
@@ -298,12 +347,16 @@ public final class LegacyPreprocessorSessionManagerTest {
         failing.disableStatus = -6;
         failing.releaseError = new Exception("release failed");
         teardown.manager.onStop(teardown.record);
-        assertFalse(teardown.manager.ownsRoute(teardown.record));
+        assertTrue(teardown.manager.ownsRoute(teardown.record));
         teardown.runDirectRead();
         teardown.scheduler.runReady();
+        assertTrue(teardown.manager.ownsRoute(teardown.record));
+        assertTrue(teardown.leases.isQuarantined(teardown.record));
+        assertEquals(0, teardown.directTransforms);
         assertTrue(teardown.diagnostics.codes.contains("effect_revoke_-5"));
         assertTrue(teardown.diagnostics.codes.contains("effect_disable_-6"));
         assertTrue(teardown.diagnostics.codes.contains("effect_release_failed"));
+        assertTrue(teardown.diagnostics.codes.contains("route_quarantined"));
     }
 
     @Test
@@ -357,6 +410,25 @@ public final class LegacyPreprocessorSessionManagerTest {
         scheduleRejected.start(46);
         scheduleRejected.assertDirectFallback("executor_saturated_health");
         assertEquals(1, scheduleRejected.factory.created.get(0).releaseCount);
+
+        Harness stopRejected = new Harness();
+        stopRejected.start(46);
+        stopRejected.replySuccess(0);
+        stopRejected.scheduler.runReady();
+        FakeEffect liveEffect = stopRejected.factory.created.get(0);
+        stopRejected.scheduler.rejectExecute = true;
+        stopRejected.manager.onStop(stopRejected.record);
+        assertTrue(stopRejected.manager.ownsRoute(stopRejected.record));
+        assertTrue(stopRejected.leases.isQuarantined(stopRejected.record));
+        assertEquals(0, liveEffect.releaseCount);
+        stopRejected.runDirectRead();
+        assertEquals(0, stopRejected.directTransforms);
+        assertTrue(stopRejected.diagnostics.codes.contains("executor_saturated_stop"));
+
+        stopRejected.scheduler.rejectExecute = false;
+        stopRejected.scheduler.advance(250L);
+        assertEquals(1, liveEffect.releaseCount);
+        assertFalse(stopRejected.manager.ownsRoute(stopRejected.record));
     }
 
     @Test
@@ -395,7 +467,8 @@ public final class LegacyPreprocessorSessionManagerTest {
 
         harness.manager.onStop(harness.record);
         harness.manager.onStart(harness.record, 48);
-        assertFalse(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertEquals(0, first.releaseCount);
         harness.scheduler.runReady();
         assertEquals(1, first.releaseCount);
         assertEquals(2, harness.factory.createCount);
@@ -405,9 +478,11 @@ public final class LegacyPreprocessorSessionManagerTest {
 
         FakeEffect second = harness.factory.created.get(1);
         harness.manager.onRelease(harness.record);
-        assertFalse(harness.manager.ownsRoute(harness.record));
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertEquals(0, second.releaseCount);
         harness.scheduler.runReady();
         assertEquals(1, second.releaseCount);
+        assertFalse(harness.manager.ownsRoute(harness.record));
 
         Harness shutdown = new Harness();
         shutdown.start(49);
@@ -415,10 +490,11 @@ public final class LegacyPreprocessorSessionManagerTest {
         shutdown.scheduler.runReady();
         FakeEffect shutdownEffect = shutdown.factory.created.get(0);
         shutdown.manager.shutdown();
-        assertFalse(shutdown.manager.ownsRoute(shutdown.record));
+        assertTrue(shutdown.manager.ownsRoute(shutdown.record));
         assertEquals(0, shutdownEffect.releaseCount);
         shutdown.scheduler.runReady();
         assertEquals(1, shutdownEffect.releaseCount);
+        assertFalse(shutdown.manager.ownsRoute(shutdown.record));
     }
 
     @Test
@@ -875,6 +951,11 @@ public final class LegacyPreprocessorSessionManagerTest {
         long generation;
         long telemetrySequence;
         int telemetryReadCount;
+        Runnable beforeAuthorize;
+        Runnable beforeRevoke;
+        Runnable beforeEnable;
+        Runnable beforeDisable;
+        Runnable beforeRelease;
 
         @Override
         public LegacyPreprocessorSessionManager.Descriptor descriptor() {
@@ -890,12 +971,14 @@ public final class LegacyPreprocessorSessionManagerTest {
         public int setParameter(byte[] parameter, byte[] value) {
             if (Arrays.equals(
                     parameter, LegacyPreprocessorSessionManager.AUTHORIZE_PARAMETER)) {
+                if (beforeAuthorize != null) beforeAuthorize.run();
                 authorizeCount++;
                 lastAuthorizeParameter = parameter.clone();
                 generation = ByteBuffer.wrap(value).order(ByteOrder.BIG_ENDIAN).getLong(32);
                 return authorizeStatus;
             }
             if (Arrays.equals(parameter, LegacyPreprocessorSessionManager.REVOKE_PARAMETER)) {
+                if (beforeRevoke != null) beforeRevoke.run();
                 revokeCount++;
                 return revokeStatus;
             }
@@ -929,15 +1012,18 @@ public final class LegacyPreprocessorSessionManagerTest {
         @Override
         public int setEnabled(boolean enabled) {
             if (enabled) {
+                if (beforeEnable != null) beforeEnable.run();
                 enableCount++;
                 return enableStatus;
             }
+            if (beforeDisable != null) beforeDisable.run();
             disableCount++;
             return disableStatus;
         }
 
         @Override
         public void release() throws Exception {
+            if (beforeRelease != null) beforeRelease.run();
             releaseCount++;
             if (releaseError != null) {
                 throw releaseError;
