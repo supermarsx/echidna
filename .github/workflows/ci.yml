@@ -189,8 +189,28 @@ jobs:
       - name: Build Control Service
         run: gradle --project-dir android/control-service assembleDebug
 
+      - name: Install Android NDK and Ninja for LSPosed runtime payload
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;27.0.12077973" > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Build per-ABI LSPosed native runtime
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
+          ANDROID_PLATFORM=android-26 bash tools/build_native_ndk.sh
+
       - name: Build LSPosed Shim
         run: gradle --project-dir android/lsposed-shim assembleDebug
+
+      - name: Verify Android APK native payload contract
+        run: |
+          set -euo pipefail
+          python3 tools/verify_android_artifacts.py \
+            --companion android/app/app/build/outputs/apk/debug/app-debug.apk \
+            --shim android/lsposed-shim/shim/build/outputs/apk/debug/shim-debug.apk
 
   smoke-tests:
     name: "Smoke tests (real hook/DSP harness)"

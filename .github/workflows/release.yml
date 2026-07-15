@@ -74,6 +74,54 @@ jobs:
             --manual-tag "${RELEASE_TAG_INPUT}" \
             --tags-file "${RUNNER_TEMP}/release-tags.txt"
 
+      # Validate secrets before creating an automatic tag. A failed signing
+      # preflight must not leave an orphan YY.N tag behind, and publishable APKs
+      # must never use Gradle's local Android-debug fallback.
+      - name: Require publishable APK signing inputs
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
+        run: python3 tools/check_release_signing.py
+
+      - name: Set up JDK for release signing preflight
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Importing the selected private-key entry validates the keystore bytes,
+      # store password, alias, and key password before an automatic tag exists.
+      - name: Validate release keystore credentials
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${RELEASE_STORE_PASSWORD}"
+          echo "::add-mask::${RELEASE_KEY_PASSWORD}"
+          umask 077
+          cleanup_preflight() {
+            rm -f "$RUNNER_TEMP/release-preflight.jks" \
+              "$RUNNER_TEMP/release-preflight.p12"
+          }
+          trap cleanup_preflight EXIT
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/release-preflight.jks"
+          keytool -importkeystore -noprompt \
+            -srckeystore "$RUNNER_TEMP/release-preflight.jks" \
+            -srcstorepass "$RELEASE_STORE_PASSWORD" \
+            -srcalias "$RELEASE_KEY_ALIAS" \
+            -srckeypass "$RELEASE_KEY_PASSWORD" \
+            -destkeystore "$RUNNER_TEMP/release-preflight.p12" \
+            -deststoretype PKCS12 \
+            -deststorepass echidna-preflight \
+            -destkeypass echidna-preflight
+
       - name: Create tag if needed and reject duplicate releases
         uses: actions/github-script@v9
         env:
@@ -215,8 +263,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build zip
 
-      # Cross-compiles libech_dsp.so + libechidna.so for arm64-v8a, armeabi-v7a,
-      # x86_64 into build/<abi>/lib/ (tools/build_native_ndk.sh, t2-e10).
+      # Cross-compile the DSP, Zygisk module, and standalone LSPosed JNI bridge
+      # for every supported ABI into build/<abi>/lib/.
       - name: Build native libraries (per-ABI NDK)
         run: |
           set -euo pipefail
@@ -232,13 +280,20 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.tag }}"
-          mkdir -p artifacts/native/package/native-libs
+          mkdir -p artifacts/native/package/native-libs artifacts/android-runtime-libs
           for abi in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p "artifacts/native/package/native-libs/${abi}"
+            mkdir -p "artifacts/android-runtime-libs/${abi}/lib"
             cp "build/${abi}/lib/libech_dsp.so" \
               "artifacts/native/package/native-libs/${abi}/libech_dsp.so"
             cp "build/${abi}/lib/libechidna.so" \
               "artifacts/native/package/native-libs/${abi}/libechidna.so"
+            cp "build/${abi}/lib/libechidna_shim_jni.so" \
+              "artifacts/native/package/native-libs/${abi}/libechidna_shim_jni.so"
+            cp "build/${abi}/lib/libech_dsp.so" \
+              "artifacts/android-runtime-libs/${abi}/lib/libech_dsp.so"
+            cp "build/${abi}/lib/libechidna_shim_jni.so" \
+              "artifacts/android-runtime-libs/${abi}/lib/libechidna_shim_jni.so"
           done
           cat > artifacts/native/package/README.md <<EOF
           # Echidna native libraries ${VERSION}
@@ -247,6 +302,7 @@ jobs:
 
           - libechidna.so: Zygisk/native hook engine
           - libech_dsp.so: DSP engine library
+          - libechidna_shim_jni.so: standalone LSPosed AudioRecord JNI bridge
 
           End users normally install echidna-magisk-${VERSION}.zip instead. These
           raw libraries are attached for inspection, debugging, and integrators.
@@ -270,10 +326,17 @@ jobs:
           name: magisk
           path: artifacts/magisk/echidna-magisk-*.zip
 
+      - name: Upload LSPosed native runtime inputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-runtime-libs
+          path: artifacts/android-runtime-libs
+          retention-days: 1
+
   android:
     name: "Signed release APKs"
     runs-on: ubuntu-latest
-    needs: prepare
+    needs: [prepare, native]
     env:
       ECHIDNA_VERSION: ${{ needs.prepare.outputs.tag }}
     steps:
@@ -282,6 +345,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Download per-ABI LSPosed native runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: android-runtime-libs
+          path: build
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -295,6 +364,9 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses > /dev/null || true
 
+      - name: Install APK verification build tools
+        run: sdkmanager --install "build-tools;34.0.0" > /dev/null
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -307,43 +379,29 @@ jobs:
             echo "sdk.dir=${ANDROID_SDK_ROOT}" > "$dir/local.properties"
           done
 
-      # Materialize the release keystore from a base64 secret. When the secret is
-      # absent (e.g. a fork), leave has_keystore=false so the build below never
-      # exports RELEASE_STORE_FILE and build.gradle.kts falls back to debug signing.
+      # The prepare job already rejected missing/partial signing inputs before
+      # tag creation. Materialize the required keystore without echoing it.
       - name: Decode release keystore
-        id: keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
-          if [ -n "${RELEASE_KEYSTORE_BASE64:-}" ]; then
-            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "store_file=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
-            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No RELEASE_KEYSTORE_BASE64 secret set -> release APKs will be debug-signed" \
-              "(non-distributable)."
-            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
-          fi
+          umask 077
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          test -s "$RUNNER_TEMP/release.jks"
+          chmod 0600 "$RUNNER_TEMP/release.jks"
 
-      # RELEASE_STORE_FILE is exported ONLY when a keystore exists. build.gradle.kts
-      # resolves it via System.getenv(); an empty value would be non-null and break
-      # the fallback, so we must leave the variable unset in the no-secret path.
       - name: Build signed release APKs
         env:
-          HAS_KEYSTORE: ${{ steps.keystore.outputs.has_keystore }}
-          STORE_FILE: ${{ steps.keystore.outputs.store_file }}
+          RELEASE_STORE_FILE: ${{ runner.temp }}/release.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ "${HAS_KEYSTORE}" = "true" ]; then
-            export RELEASE_STORE_FILE="${STORE_FILE}"
-            echo "Building release with the configured keystore."
-          else
-            echo "Building release with debug-signing fallback."
-          fi
+          echo "::add-mask::${RELEASE_STORE_PASSWORD}"
+          echo "::add-mask::${RELEASE_KEY_PASSWORD}"
+          echo "Building publishable APKs with the configured release keystore."
           gradle --project-dir android/app :app:assembleRelease
           gradle --project-dir android/lsposed-shim :shim:assembleRelease
 
@@ -362,15 +420,31 @@ jobs:
           - echidna-companion-${VERSION}.apk: companion app and in-process control service.
           - echidna-lsposed-shim-${VERSION}.apk: installable LSPosed/Xposed Java fallback shim.
 
-          The release APKs are signed with the configured release key when the RELEASE_*
-          secrets are present. Without those secrets, CI falls back to debug signing and the
-          APKs are non-distributable.
+          Both APKs are signed with the configured release key. The release workflow fails
+          closed before tag creation when any required signing secret is missing.
           EOF
           (
             cd artifacts/android/package
             zip -r -X "../echidna-apks-${VERSION}.zip" .
           )
           cp artifacts/android/package/apks/*.apk artifacts/android/
+
+      - name: Verify APK payloads, signing, and bundle provenance
+        env:
+          RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare.outputs.tag }}"
+          python3 tools/verify_android_artifacts.py \
+            --companion "artifacts/android/echidna-companion-${VERSION}.apk" \
+            --shim "artifacts/android/echidna-lsposed-shim-${VERSION}.apk" \
+            --apks-bundle "artifacts/android/echidna-apks-${VERSION}.zip" \
+            --apksigner "${ANDROID_SDK_ROOT}/build-tools/34.0.0/apksigner" \
+            --require-release-signing
+
+      - name: Remove temporary release keystore
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v7
@@ -390,10 +464,23 @@ jobs:
       startsWith(github.ref, 'refs/tags/') ||
       github.event_name == 'workflow_dispatch'
     steps:
-      - name: Download artifacts
+      - name: Download native library package
         uses: actions/download-artifact@v8
         with:
-          path: release_artifacts
+          name: native-libs
+          path: release_artifacts/native-libs
+
+      - name: Download Magisk package
+        uses: actions/download-artifact@v8
+        with:
+          name: magisk
+          path: release_artifacts/magisk
+
+      - name: Download verified Android packages
+        uses: actions/download-artifact@v8
+        with:
+          name: android-apks
+          path: release_artifacts/android-apks
 
       - name: Prepare release asset set
         run: |
@@ -429,8 +516,12 @@ jobs:
           ## Convenience packages
 
           - echidna-apks-${VERSION}.zip: companion APK plus LSPosed shim APK.
-          - echidna-native-libs-${VERSION}.zip: raw per-ABI libechidna.so and libech_dsp.so.
+          - echidna-native-libs-${VERSION}.zip: raw per-ABI Zygisk, DSP, and shim JNI libraries.
           - echidna-complete-${VERSION}.zip: all release assets above plus this manifest.
+
+          Use the newest release unless you are intentionally rolling back or already
+          understand the recovery procedure. Earlier releases may contain boot/module bugs
+          fixed later and can be harder to recover from after flashing.
 
           Install the Magisk/Zygisk module and companion APK for the native path. Install
           the LSPosed shim only when validating or using the Java fallback path. Avoid

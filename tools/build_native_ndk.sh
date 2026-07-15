@@ -8,6 +8,7 @@ set -euo pipefail
 #
 #   build/<abi>/lib/libech_dsp.so     (DSP engine)
 #   build/<abi>/lib/libechidna.so     (Zygisk module -> packaged as zygisk/<abi>.so)
+#   build/<abi>/lib/libechidna_shim_jni.so (standalone LSPosed JNI bridge)
 #
 # for each <abi> in: arm64-v8a (primary), armeabi-v7a, x86_64.
 #
@@ -68,6 +69,7 @@ for ABI in ${ABIS}; do
 
   DSP_SO="${BUILD_DIR}/lib/libech_dsp.so"
   ZYG_SO="${BUILD_DIR}/lib/libechidna.so"
+  SHIM_SO="${BUILD_DIR}/lib/libechidna_shim_jni.so"
   if [[ ! -f "${DSP_SO}" ]]; then
     echo "ERROR: expected ${DSP_SO} was not produced for ${ABI}" >&2
     exit 1
@@ -76,7 +78,12 @@ for ABI in ${ABIS}; do
     echo "ERROR: expected ${ZYG_SO} was not produced for ${ABI}" >&2
     exit 1
   fi
-  echo "==> [${ABI}] OK -> build/${ABI}/lib/{libech_dsp.so,libechidna.so}"
+  if [[ ! -f "${SHIM_SO}" ]]; then
+    echo "ERROR: expected ${SHIM_SO} was not produced for ${ABI}" >&2
+    exit 1
+  fi
+  echo "==> [${ABI}] OK -> build/${ABI}/lib/" \
+    "{libech_dsp.so,libechidna.so,libechidna_shim_jni.so}"
 done
 
 echo ""
