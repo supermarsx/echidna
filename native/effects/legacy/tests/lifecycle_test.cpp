@@ -61,13 +61,13 @@ int main()
     CHECK_TRUE(std::memcmp(&returned, &config, sizeof(config)) == 0);
 
     CHECK_TRUE(SendStatusCommand(handle, EFFECT_CMD_ENABLE, 0, nullptr, &status) == 0);
-    CHECK_TRUE(status == 0);
+    CHECK_TRUE(status == -EPERM);
     CHECK_TRUE(SendStatusCommand(handle,
                                  EFFECT_CMD_SET_CONFIG,
                                  sizeof(config),
                                  &config,
                                  &status) == 0);
-    CHECK_TRUE(status == -EBUSY);
+    CHECK_TRUE(status == 0);
     uint32_t reset_reply = 99;
     CHECK_TRUE((*handle)->command(handle,
                                   EFFECT_CMD_RESET,
@@ -77,7 +77,7 @@ int main()
                                   nullptr) == 0);
     CHECK_TRUE(reset_reply == 0);
     CHECK_TRUE(SendStatusCommand(handle, EFFECT_CMD_DISABLE, 0, nullptr, &status) == 0);
-    CHECK_TRUE(status == 0);
+    CHECK_TRUE(status == -EINVAL);
 
     std::array<float, 4> input{0.1f, -0.2f, 0.3f, -0.4f};
     std::array<float, 4> output{};

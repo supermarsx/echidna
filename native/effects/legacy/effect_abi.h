@@ -175,6 +175,17 @@ typedef struct effect_config_s
     buffer_config_t outputCfg;
 } effect_config_t;
 
+typedef struct effect_param_s
+{
+    int32_t status;
+    uint32_t psize;
+    uint32_t vsize;
+    char data[];
+} effect_param_t;
+
+static_assert(sizeof(effect_param_t) == 12);
+static_assert(offsetof(effect_param_t, data) == 12);
+
 struct effect_interface_s;
 using effect_handle_t = effect_interface_s **;
 

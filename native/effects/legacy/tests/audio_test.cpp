@@ -37,7 +37,11 @@ namespace
         EffectContext context(101, 9);
         CHECK_TRUE(Configure(context, MakeEffectConfig()) == 0);
         CHECK_TRUE(context.session_id() == 101 && context.io_id() == 9);
+        auto neutral_preset = GainPreset(0.0f);
+        CHECK_TRUE(context.Enable() == -EPERM);
+        CHECK_TRUE(context.SetPolicyPreset(true, &neutral_preset) == 0);
         CHECK_TRUE(context.Enable() == 0);
+        context.RevokeAuthorization();
 
         std::array<float, 8> input{-0.8f, -0.4f, -0.1f, 0.0f,
                                    0.1f, 0.4f, 0.7f, 0.9f};
@@ -73,8 +77,9 @@ namespace
         EffectContext context(102, 10);
         CHECK_TRUE(Configure(context, MakeEffectConfig()) == 0);
         auto preset = GainPreset(-6.0f);
-        CHECK_TRUE(context.SetPolicyPreset(false, &preset) == 0);
+        CHECK_TRUE(context.SetPolicyPreset(true, &preset) == 0);
         CHECK_TRUE(context.Enable() == 0);
+        context.RevokeAuthorization();
 
         std::vector<float> input(256);
         std::vector<float> output(256, 0.0f);
@@ -118,7 +123,10 @@ namespace
                                            AUDIO_FORMAT_PCM_16_BIT);
         EffectContext neutral(103, 11);
         CHECK_TRUE(Configure(neutral, pcm_config) == 0);
+        auto neutral_preset = GainPreset(0.0f);
+        CHECK_TRUE(neutral.SetPolicyPreset(true, &neutral_preset) == 0);
         CHECK_TRUE(neutral.Enable() == 0);
+        neutral.RevokeAuthorization();
         std::array<int16_t, 8> samples{-32768, -12000, -1, 0, 1, 9000, 16000, 32767};
         const auto original = samples;
         audio_buffer_t in{samples.size() / 2, {.s16 = samples.data()}};
@@ -147,7 +155,9 @@ namespace
                                                   EFFECT_BUFFER_ACCESS_ACCUMULATE);
         EffectContext accumulate(105, 13);
         CHECK_TRUE(Configure(accumulate, accumulate_config) == 0);
+        CHECK_TRUE(accumulate.SetPolicyPreset(true, &neutral_preset) == 0);
         CHECK_TRUE(accumulate.Enable() == 0);
+        accumulate.RevokeAuthorization();
         std::array<float, 2> add_input{0.1f, -0.2f};
         std::array<float, 2> add_output{0.2f, 0.3f};
         audio_buffer_t add_in{2, {.f32 = add_input.data()}};
@@ -185,7 +195,10 @@ namespace
         invalid.outputCfg.accessMode = EFFECT_BUFFER_ACCESS_READ;
         CHECK_TRUE(context.SetConfig(invalid) == -EINVAL);
         CHECK_TRUE(context.SetConfig(config) == 0);
+        auto neutral_preset = GainPreset(0.0f);
+        CHECK_TRUE(context.SetPolicyPreset(true, &neutral_preset) == 0);
         CHECK_TRUE(context.Enable() == 0);
+        context.RevokeAuthorization();
 
         constexpr float kCanary = 12345.0f;
         constexpr size_t kFrames = 64;

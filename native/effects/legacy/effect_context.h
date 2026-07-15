@@ -4,8 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <vector>
 
+#include "capability_protocol.h"
 #include "effect_abi.h"
 #include "config/preset_loader.h"
 #include "engine.h"
@@ -31,7 +34,9 @@ namespace echidna::effects::legacy
     class EffectContext
     {
     public:
-        EffectContext(int32_t session_id, int32_t io_id);
+        EffectContext(int32_t session_id,
+                      int32_t io_id,
+                      CapabilityVerifierOptions verifier_options = {});
         ~EffectContext();
 
         EffectContext(const EffectContext &) = delete;
@@ -51,15 +56,12 @@ namespace echidna::effects::legacy
                         void *reply_data);
         int32_t Process(audio_buffer_t *input, audio_buffer_t *output) noexcept;
 
-        /**
-         * Non-realtime Phase-1 seam for a future authenticated session policy.
-         * The exported effect never calls this itself, so new instances remain
-         * fail-open/bypassed until a later control boundary explicitly supplies
-         * both an allowed policy and a validated preset.
-         */
+        /** Host-test seam. Production AELI activation uses ApplyCapability(). */
         int32_t SetPolicyPreset(
             bool policy_allowed,
             const echidna::dsp::config::PresetDefinition *preset);
+        int32_t ApplyCapability(std::string_view value);
+        void RevokeAuthorization() noexcept;
 
         TelemetrySnapshot telemetry() const noexcept;
         bool plugin_directory_scanned() const;
@@ -100,6 +102,9 @@ namespace echidna::effects::legacy
                           size_t samples) noexcept;
         void WriteProcessed(audio_buffer_t &output,
                             size_t samples) noexcept;
+        bool AuthorizationActive() noexcept;
+        bool NonceSeen(const CapabilityNonce &nonce) const noexcept;
+        void RememberNonce(const CapabilityNonce &nonce) noexcept;
 
         int32_t session_id_{0};
         int32_t io_id_{0};
@@ -114,6 +119,19 @@ namespace echidna::effects::legacy
         std::atomic<bool> enabled_{false};
         std::atomic<bool> policy_allowed_{false};
         std::atomic<bool> profile_ready_{false};
+        std::atomic<uint32_t> authorization_deadline_ms_{0};
+        std::atomic<int32_t> permanent_bypass_status_{0};
+        CapabilityVerifier capability_verifier_;
+        std::mutex capability_mutex_;
+        uint64_t capability_generation_{0};
+        uint64_t capability_issued_ms_{0};
+        uint64_t capability_expires_ms_{0};
+        uint32_t capability_target_uid_{0};
+        std::string capability_process_;
+        CapabilityHash capability_preset_hash_{};
+        std::array<CapabilityNonce, 16> accepted_nonces_{};
+        size_t accepted_nonce_count_{0};
+        size_t next_nonce_slot_{0};
         RealtimeCounters counters_{};
     };
 

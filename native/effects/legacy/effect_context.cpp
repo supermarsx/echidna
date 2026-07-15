@@ -39,8 +39,12 @@ namespace echidna::effects::legacy
 
     } // namespace
 
-    EffectContext::EffectContext(int32_t session_id, int32_t io_id)
-        : session_id_(session_id), io_id_(io_id)
+    EffectContext::EffectContext(int32_t session_id,
+                                 int32_t io_id,
+                                 CapabilityVerifierOptions verifier_options)
+        : session_id_(session_id),
+          io_id_(io_id),
+          capability_verifier_(std::move(verifier_options))
     {
     }
 
@@ -127,8 +131,7 @@ namespace echidna::effects::legacy
         {
             return -EBUSY;
         }
-        policy_allowed_.store(false, std::memory_order_release);
-        profile_ready_.store(false, std::memory_order_release);
+        RevokeAuthorization();
         configured_.store(false, std::memory_order_release);
         engine_.reset();
         input_float_.clear();
@@ -136,6 +139,17 @@ namespace echidna::effects::legacy
         config_ = {};
         channels_ = 0;
         preset_ = {};
+        {
+            std::scoped_lock lock(capability_mutex_);
+            capability_generation_ = 0;
+            capability_issued_ms_ = 0;
+            capability_expires_ms_ = 0;
+            capability_target_uid_ = 0;
+            capability_process_.clear();
+            capability_preset_hash_.fill(0);
+            accepted_nonce_count_ = 0;
+            next_nonce_slot_ = 0;
+        }
         lifecycle_ = Lifecycle::kInitialized;
         return 0;
     }
@@ -211,6 +225,10 @@ namespace echidna::effects::legacy
         {
             return -ENODATA;
         }
+        if (!AuthorizationActive())
+        {
+            return -EPERM;
+        }
         enabled_.store(true, std::memory_order_release);
         lifecycle_ = Lifecycle::kEnabled;
         return 0;
@@ -223,6 +241,7 @@ namespace echidna::effects::legacy
             return -EINVAL;
         }
         enabled_.store(false, std::memory_order_release);
+        RevokeAuthorization();
         lifecycle_ = Lifecycle::kConfigured;
         return 0;
     }
@@ -236,6 +255,7 @@ namespace echidna::effects::legacy
         const bool was_enabled = enabled_.load(std::memory_order_acquire);
         enabled_.store(false, std::memory_order_release);
         const int32_t status = RebuildEngine(config_.inputCfg.samplingRate, channels_);
+        RevokeAuthorization();
         if (status != 0)
         {
             lifecycle_ = Lifecycle::kConfigured;
@@ -286,6 +306,10 @@ namespace echidna::effects::legacy
             }
             preset_ = std::move(candidate);
             profile_ready_.store(true, std::memory_order_release);
+            const uint64_t now = capability_verifier_.nowBoottimeMs();
+            authorization_deadline_ms_.store(
+                static_cast<uint32_t>(now + kCapabilityMaxLifetimeMs),
+                std::memory_order_release);
             policy_allowed_.store(policy_allowed, std::memory_order_release);
             return 0;
         }
@@ -297,6 +321,143 @@ namespace echidna::effects::legacy
         {
             return -EINVAL;
         }
+    }
+
+    bool EffectContext::NonceSeen(const CapabilityNonce &nonce) const noexcept
+    {
+        for (size_t index = 0; index < accepted_nonce_count_; ++index)
+        {
+            if (accepted_nonces_[index] == nonce)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void EffectContext::RememberNonce(const CapabilityNonce &nonce) noexcept
+    {
+        accepted_nonces_[next_nonce_slot_] = nonce;
+        next_nonce_slot_ = (next_nonce_slot_ + 1) % accepted_nonces_.size();
+        accepted_nonce_count_ = std::min(accepted_nonce_count_ + 1,
+                                         accepted_nonces_.size());
+    }
+
+    void EffectContext::RevokeAuthorization() noexcept
+    {
+        policy_allowed_.store(false, std::memory_order_release);
+        profile_ready_.store(false, std::memory_order_release);
+        authorization_deadline_ms_.store(0, std::memory_order_release);
+    }
+
+    int32_t EffectContext::ApplyCapability(std::string_view value)
+    {
+        const int32_t permanent_status =
+            permanent_bypass_status_.load(std::memory_order_acquire);
+        if (permanent_status != 0)
+        {
+            RevokeAuthorization();
+            return permanent_status;
+        }
+
+        CapabilityClaims claims;
+        const CapabilityStatus verification =
+            capability_verifier_.verify(value, session_id_, &claims);
+        if (verification != CapabilityStatus::kOk)
+        {
+            if (verification == CapabilityStatus::kKeyUnavailable ||
+                verification == CapabilityStatus::kSignatureInvalid)
+            {
+                int32_t expected = 0;
+                permanent_bypass_status_.compare_exchange_strong(
+                    expected,
+                    static_cast<int32_t>(verification),
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire);
+            }
+            RevokeAuthorization();
+            return static_cast<int32_t>(verification);
+        }
+
+        std::scoped_lock lock(capability_mutex_);
+        if (NonceSeen(claims.nonce))
+        {
+            return kCapabilityReplayStatus;
+        }
+        if (claims.generation < capability_generation_)
+        {
+            return kCapabilityRollbackStatus;
+        }
+        const bool same_generation = claims.generation == capability_generation_;
+        if (same_generation)
+        {
+            const bool same_identity =
+                claims.target_uid == capability_target_uid_ &&
+                claims.process == capability_process_ &&
+                claims.preset_hash == capability_preset_hash_;
+            if (!same_identity || claims.expires_boottime_ms <= capability_expires_ms_ ||
+                claims.issued_boottime_ms < capability_issued_ms_)
+            {
+                return kCapabilityConflictStatus;
+            }
+            capability_issued_ms_ = claims.issued_boottime_ms;
+            capability_expires_ms_ = claims.expires_boottime_ms;
+            RememberNonce(claims.nonce);
+            authorization_deadline_ms_.store(
+                static_cast<uint32_t>(claims.expires_boottime_ms),
+                std::memory_order_release);
+            profile_ready_.store(true, std::memory_order_release);
+            policy_allowed_.store(true, std::memory_order_release);
+            return 0;
+        }
+
+        if (enabled_.load(std::memory_order_acquire))
+        {
+            return kCapabilityBusyStatus;
+        }
+        const auto loaded =
+            echidna::dsp::config::LoadPresetFromJson(claims.preset_json);
+        if (!loaded.ok)
+        {
+            RevokeAuthorization();
+            return -EINVAL;
+        }
+        const int32_t preset_status = SetPolicyPreset(true, &loaded.preset);
+        if (preset_status != 0)
+        {
+            RevokeAuthorization();
+            return preset_status;
+        }
+        capability_generation_ = claims.generation;
+        capability_issued_ms_ = claims.issued_boottime_ms;
+        capability_expires_ms_ = claims.expires_boottime_ms;
+        capability_target_uid_ = claims.target_uid;
+        capability_process_ = std::move(claims.process);
+        capability_preset_hash_ = claims.preset_hash;
+        RememberNonce(claims.nonce);
+        authorization_deadline_ms_.store(
+            static_cast<uint32_t>(claims.expires_boottime_ms),
+            std::memory_order_release);
+        return 0;
+    }
+
+    bool EffectContext::AuthorizationActive() noexcept
+    {
+        if (!policy_allowed_.load(std::memory_order_acquire) ||
+            !profile_ready_.load(std::memory_order_acquire))
+        {
+            return false;
+        }
+        const uint32_t deadline =
+            authorization_deadline_ms_.load(std::memory_order_acquire);
+        const uint32_t now =
+            static_cast<uint32_t>(capability_verifier_.nowBoottimeMs());
+        if (!CapabilityVerifier::IsActiveDeadline(now, deadline))
+        {
+            RevokeAuthorization();
+            return false;
+        }
+        return true;
     }
 
     int32_t EffectContext::Identity(audio_buffer_t *input,
@@ -455,8 +616,7 @@ namespace echidna::effects::legacy
             const int32_t status = Identity(input, output, samples);
             return status == 0 ? -ENODATA : status;
         }
-        if (!policy_allowed_.load(std::memory_order_acquire) ||
-            !profile_ready_.load(std::memory_order_acquire))
+        if (!AuthorizationActive())
         {
             Increment(counters_.bypass_calls);
             return Identity(input, output, samples);
@@ -523,6 +683,28 @@ namespace echidna::effects::legacy
                 return -EINVAL;
             }
             return WriteStatusReply(reply_size, reply_data, Disable());
+        case EFFECT_CMD_SET_PARAM:
+        {
+            if (command_data == nullptr || command_size < sizeof(effect_param_t) ||
+                reinterpret_cast<uintptr_t>(command_data) % alignof(effect_param_t) != 0)
+            {
+                return -EINVAL;
+            }
+            const auto &parameter = *static_cast<const effect_param_t *>(command_data);
+            if (IsRevokeParameter(parameter, command_size))
+            {
+                RevokeAuthorization();
+                return WriteStatusReply(reply_size, reply_data, 0);
+            }
+            if (!IsAuthorizeParameter(parameter, command_size))
+            {
+                return WriteStatusReply(reply_size, reply_data, -EINVAL);
+            }
+            return WriteStatusReply(
+                reply_size,
+                reply_data,
+                ApplyCapability(EffectParameterValue(parameter, command_size)));
+        }
         case EFFECT_CMD_GET_CONFIG:
             if (command_size != 0 || reply_size == nullptr || reply_data == nullptr ||
                 *reply_size < sizeof(effect_config_t))
