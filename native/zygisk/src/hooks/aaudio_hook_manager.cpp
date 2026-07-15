@@ -19,6 +19,7 @@
 #include "echidna/api.h"
 #include "hooks/aaudio_callback_registry.h"
 #include "hooks/aaudio_hook_readiness.h"
+#include "hooks/aaudio_stream_contract.h"
 #include "hooks/aaudio_stream_registry.h"
 #include "runtime/profile_sync_protocol.h"
 #include "state/shared_state.h"
@@ -52,63 +53,16 @@ namespace echidna::hooks
 
         enum : int32_t
         {
-            kAAudioFormatI16 = 1,
-            kAAudioFormatFloat = 2,
-            kAAudioDirectionInput = 1,
             kAAudioResultOk = 0,
             kAAudioCallbackContinue = 0,
         };
 
-        struct StreamFns
-        {
-            using GetIntFn = int32_t (*)(void *);
-            GetIntFn get_sample_rate{nullptr};
-            GetIntFn get_channel_count{nullptr};
-            GetIntFn get_format{nullptr};
-            GetIntFn get_direction{nullptr};
-
-            bool complete() const
-            {
-                return get_sample_rate && get_channel_count && get_format && get_direction;
-            }
-        };
-
-        StreamFns gStreamFns;
+        AAudioStreamQueryApi gStreamQueries;
 
         echidna_stream_config_t QueryStreamConfig(void *stream)
         {
             echidna_stream_config_t config{};
-            if (!stream || !gStreamFns.complete())
-            {
-                return config;
-            }
-
-            const int32_t sample_rate = gStreamFns.get_sample_rate(stream);
-            const int32_t channels = gStreamFns.get_channel_count(stream);
-            const int32_t format = gStreamFns.get_format(stream);
-            const int32_t direction = gStreamFns.get_direction(stream);
-            if (sample_rate < 8000 || sample_rate > 384000 ||
-                channels < 1 || channels > 8 || direction != kAAudioDirectionInput)
-            {
-                return config;
-            }
-            if (format == kAAudioFormatI16)
-            {
-                config.format = ECHIDNA_PCM_FORMAT_SIGNED_16;
-            }
-            else if (format == kAAudioFormatFloat)
-            {
-                config.format = ECHIDNA_PCM_FORMAT_FLOAT_32;
-            }
-            else
-            {
-                return config;
-            }
-            config.struct_size = sizeof(config);
-            config.sample_rate = static_cast<uint32_t>(sample_rate);
-            config.channel_count = static_cast<uint32_t>(channels);
-            config.max_frames = static_cast<uint32_t>(
-                32768U / static_cast<uint32_t>(channels));
+            (void)QueryAAudioStreamConfig(stream, gStreamQueries, &config);
             return config;
         }
 
@@ -237,7 +191,7 @@ namespace echidna::hooks
                 const bool read_ready =
                     (ready_routes & AAudioHookReadiness::kReadRoute) != 0;
                 const bool callback_owned = callback_ready &&
-                    gCallbackRegistry.attachOpenedStream(builder, *stream_out);
+                                            gCallbackRegistry.attachOpenedStream(builder, *stream_out);
                 const echidna_stream_config_t config = QueryStreamConfig(*stream_out);
                 if (config.struct_size == sizeof(config) &&
                     (callback_owned || read_ready))
@@ -307,15 +261,21 @@ namespace echidna::hooks
         gHookReadiness.clear();
         constexpr const char *kLibrary = "libaaudio.so";
 
-        gStreamFns.get_sample_rate = reinterpret_cast<StreamFns::GetIntFn>(
+        gStreamQueries.get_sample_rate = reinterpret_cast<AAudioStreamQueryApi::GetIntFn>(
             resolver_.findSymbol(kLibrary, "AAudioStream_getSampleRate"));
-        gStreamFns.get_channel_count = reinterpret_cast<StreamFns::GetIntFn>(
+        gStreamQueries.get_channel_count = reinterpret_cast<AAudioStreamQueryApi::GetIntFn>(
             resolver_.findSymbol(kLibrary, "AAudioStream_getChannelCount"));
-        gStreamFns.get_format = reinterpret_cast<StreamFns::GetIntFn>(
+        gStreamQueries.get_format = reinterpret_cast<AAudioStreamQueryApi::GetIntFn>(
             resolver_.findSymbol(kLibrary, "AAudioStream_getFormat"));
-        gStreamFns.get_direction = reinterpret_cast<StreamFns::GetIntFn>(
+        gStreamQueries.get_direction = reinterpret_cast<AAudioStreamQueryApi::GetIntFn>(
             resolver_.findSymbol(kLibrary, "AAudioStream_getDirection"));
-        if (!gStreamFns.complete())
+        gStreamQueries.get_buffer_capacity_frames =
+            reinterpret_cast<AAudioStreamQueryApi::GetIntFn>(resolver_.findSymbol(
+                kLibrary, "AAudioStream_getBufferCapacityInFrames"));
+        gStreamQueries.get_frames_per_burst =
+            reinterpret_cast<AAudioStreamQueryApi::GetIntFn>(resolver_.findSymbol(
+                kLibrary, "AAudioStream_getFramesPerBurst"));
+        if (!gStreamQueries.complete())
         {
             last_info_.reason = "stream_metadata_unavailable";
             return false;
@@ -388,8 +348,8 @@ namespace echidna::hooks
         }
 
         const bool transform_symbols_present = available.open && available.close &&
-            (available.read ||
-             (available.delete_builder && available.set_data_callback));
+                                               (available.read ||
+                                                (available.delete_builder && available.set_data_callback));
         last_info_.reason = transform_symbols_present
                                 ? "hook_failed"
                                 : "transform_symbol_not_found";

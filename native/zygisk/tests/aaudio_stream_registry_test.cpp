@@ -42,6 +42,7 @@ namespace
     std::atomic<uint32_t> gNextHandle{1};
     std::atomic<uint32_t> gCreates{0};
     std::atomic<uint32_t> gDestroys{0};
+    std::atomic<uint32_t> gProcessCalls{0};
     std::atomic<bool> gFailCreate{false};
     std::atomic<bool> gFailUpdate{false};
     std::atomic<bool> gBlockProcess{false};
@@ -62,6 +63,7 @@ namespace
         gNextHandle = 1;
         gCreates = 0;
         gDestroys = 0;
+        gProcessCalls = 0;
         gFailCreate = false;
         gFailUpdate = false;
         gBlockProcess = false;
@@ -97,6 +99,7 @@ namespace
                                  uint32_t frames,
                                  uint32_t format)
     {
+        gProcessCalls.fetch_add(1, std::memory_order_relaxed);
         if (handle == 0 || handle >= gHandles.size() || !input || !output)
         {
             return ECHIDNA_RESULT_INVALID_ARGUMENT;
@@ -179,13 +182,16 @@ namespace
         return {FakeCreate, FakeProcess, FakeUpdate, FakeDestroy};
     }
 
-    echidna_stream_config_t Config(uint32_t rate, uint32_t channels, uint32_t format)
+    echidna_stream_config_t Config(uint32_t rate,
+                                   uint32_t channels,
+                                   uint32_t format,
+                                   uint32_t max_frames = 256)
     {
         echidna_stream_config_t config{};
         config.struct_size = sizeof(config);
         config.sample_rate = rate;
         config.channel_count = channels;
-        config.max_frames = 256;
+        config.max_frames = max_frames;
         config.format = format;
         return config;
     }
@@ -473,6 +479,79 @@ namespace
             registry.close(reinterpret_cast<void *>(uintptr_t{i + 1}));
         }
     }
+
+    void TestActualCapacityBoundsProcessingAndAllocation()
+    {
+        ResetFake();
+        const auto api = Api();
+        echidna::hooks::AAudioStreamRegistry registry;
+        CHECK(registry.publishProfile(1, true, "gain", api),
+              "capacity policy publishes");
+
+        void *read_stream = reinterpret_cast<void *>(uintptr_t{0x5100});
+        CHECK(registry.open(read_stream,
+                            Config(48000,
+                                   2,
+                                   ECHIDNA_PCM_FORMAT_SIGNED_16,
+                                   4),
+                            echidna::hooks::AAudioProcessOwner::kRead,
+                            api),
+              "actual four-frame read capacity allocates one handle");
+        CHECK(gHandles[1].max_frames == 4,
+              "handle memory sizing receives actual capacity frames");
+        std::array<int16_t, 8> read_pcm{100, 200, 300, 400, 500, 600, 700, 800};
+        CHECK(registry.process(read_stream,
+                               echidna::hooks::AAudioProcessOwner::kRead,
+                               read_pcm.data(),
+                               2) == echidna::hooks::AAudioProcessResult::kProcessed,
+              "partial read below capacity is processed");
+        CHECK((read_pcm ==
+               std::array<int16_t, 8>{200, 400, 600, 800, 500, 600, 700, 800}),
+              "partial read mutates only returned frames");
+        registry.close(read_stream);
+
+        void *callback_stream = reinterpret_cast<void *>(uintptr_t{0x5200});
+        CHECK(registry.open(callback_stream,
+                            Config(48000,
+                                   1,
+                                   ECHIDNA_PCM_FORMAT_FLOAT_32,
+                                   4),
+                            echidna::hooks::AAudioProcessOwner::kCallback,
+                            api),
+              "callback stream uses its exact capacity");
+        const uint32_t calls_before = gProcessCalls.load(std::memory_order_acquire);
+        const uint64_t allocations_before =
+            gAllocationCount.load(std::memory_order_acquire);
+        std::array<float, 5> callback_pcm{0.1f, 0.2f, 0.3f, 0.4f, 0.5f};
+        const auto original = callback_pcm;
+        gTrackAllocations.store(true, std::memory_order_release);
+        const auto overflow_result = registry.process(
+            callback_stream,
+            echidna::hooks::AAudioProcessOwner::kCallback,
+            callback_pcm.data(),
+            5);
+        gTrackAllocations.store(false, std::memory_order_release);
+        CHECK(overflow_result == echidna::hooks::AAudioProcessResult::kProcessorError,
+              "callback larger than recorded capacity fails closed");
+        CHECK(gProcessCalls.load(std::memory_order_acquire) == calls_before &&
+                  callback_pcm == original,
+              "callback overflow never enters DSP or mutates audio");
+        CHECK(gAllocationCount.load(std::memory_order_acquire) == allocations_before,
+              "callback overflow handling performs no allocation");
+        registry.close(callback_stream);
+
+        ResetFake();
+        echidna::hooks::AAudioStreamRegistry invalid;
+        CHECK(!invalid.open(reinterpret_cast<void *>(uintptr_t{0x5300}),
+                            Config(48000,
+                                   2,
+                                   ECHIDNA_PCM_FORMAT_SIGNED_16,
+                                   16385),
+                            echidna::hooks::AAudioProcessOwner::kRead,
+                            api) &&
+                  gCreates.load(std::memory_order_acquire) == 0,
+              "oversized capacity fails before allocating a handle");
+    }
 } // namespace
 
 void *operator new(std::size_t size)
@@ -500,6 +579,7 @@ int main()
     TestProfileUpdateRevokeAndFailureBypass();
     TestCloseAndPublicationQuiesceProcessing();
     TestExhaustionAndNoRealtimeAllocations();
+    TestActualCapacityBoundsProcessingAndAllocation();
     if (gFailures != 0)
     {
         std::fprintf(stderr, "aaudio_stream_registry_test: %d failure(s)\n", gFailures);

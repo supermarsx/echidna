@@ -4,6 +4,8 @@
 #include <thread>
 #include <utility>
 
+#include "hooks/aaudio_stream_contract.h"
+
 namespace echidna::hooks
 {
     static_assert(std::atomic<uint32_t>::is_always_lock_free,
@@ -46,7 +48,7 @@ namespace echidna::hooks
         if (config.struct_size != sizeof(config) || config.sample_rate < 8000 ||
             config.sample_rate > 384000 || config.channel_count == 0 ||
             config.channel_count > 8 || config.max_frames == 0 ||
-            config.max_frames > static_cast<uint32_t>(32768U / config.channel_count) ||
+            config.max_frames > kAAudioMaxPreparedSamples / config.channel_count ||
             (config.format != ECHIDNA_PCM_FORMAT_SIGNED_16 &&
              config.format != ECHIDNA_PCM_FORMAT_FLOAT_32))
         {
@@ -210,6 +212,12 @@ namespace echidna::hooks
             else if (slot.handle == 0 || !slot.process)
             {
                 result = AAudioProcessResult::kUnavailable;
+            }
+            else if (frames > slot.config.max_frames)
+            {
+                // The platform capacity was captured at successful open. Never
+                // let a read/callback overrun the preallocated DSP contract.
+                result = AAudioProcessResult::kProcessorError;
             }
             else
             {

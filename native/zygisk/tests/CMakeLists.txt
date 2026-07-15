@@ -92,6 +92,15 @@ target_include_directories(aaudio_hook_install_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(aaudio_hook_install_test PRIVATE cxx_std_20)
 
+add_executable(aaudio_stream_contract_test
+    aaudio_stream_contract_test.cpp
+    ../src/hooks/aaudio_stream_contract.cpp)
+target_include_directories(aaudio_stream_contract_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(aaudio_stream_contract_test PRIVATE cxx_std_20)
+
 add_executable(opensl_pcm_contract_test opensl_pcm_contract_test.cpp)
 target_include_directories(opensl_pcm_contract_test
     PRIVATE
@@ -235,6 +244,7 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     aaudio_callback_registry_test
     aaudio_stream_registry_test
     aaudio_hook_install_test
+    aaudio_stream_contract_test
     opensl_pcm_contract_test
     opensl_buffer_fifo_test
     opensl_lifecycle_test
@@ -266,6 +276,7 @@ add_test(NAME audiohal_contract_test COMMAND audiohal_contract_test)
 add_test(NAME aaudio_callback_registry_test COMMAND aaudio_callback_registry_test)
 add_test(NAME aaudio_stream_registry_test COMMAND aaudio_stream_registry_test)
 add_test(NAME aaudio_hook_install_test COMMAND aaudio_hook_install_test)
+add_test(NAME aaudio_stream_contract_test COMMAND aaudio_stream_contract_test)
 add_test(NAME opensl_pcm_contract_test COMMAND opensl_pcm_contract_test)
 add_test(NAME opensl_buffer_fifo_test COMMAND opensl_buffer_fifo_test)
 add_test(NAME opensl_lifecycle_test COMMAND opensl_lifecycle_test)
