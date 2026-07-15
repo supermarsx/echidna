@@ -59,7 +59,11 @@ jobs:
       - name: Run cppcheck on native sources
         run: |
           set -euo pipefail
-          cppcheck --enable=warning,style,performance,portability --error-exitcode=1 native/dsp native/zygisk || true
+          # Keep every new finding blocking. The suppression list contains only
+          # line-scoped, reviewed style advisories from cppcheck 2.13.0.
+          cppcheck --enable=warning,style,performance,portability \
+            --suppressions-list=.cppcheck-suppressions \
+            --error-exitcode=1 native/dsp native/zygisk
 
       - name: Set up JDK for Android checks
         uses: actions/setup-java@v5
