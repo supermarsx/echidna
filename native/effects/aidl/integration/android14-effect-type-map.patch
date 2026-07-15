@@ -1,0 +1,28 @@
+From: Echidna project integration
+Subject: [PATCH] audio: map the Echidna vendor effect type on Android 14
+
+Android 14's reference Stable AIDL effect config parser does not accept the
+Android 15 `type` XML attribute. Register the custom effect name before the
+factory builds its implementation/type identity set.
+
+---
+ audio/aidl/default/EffectConfig.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/audio/aidl/default/EffectConfig.cpp b/audio/aidl/default/EffectConfig.cpp
+--- a/audio/aidl/default/EffectConfig.cpp
++++ b/audio/aidl/default/EffectConfig.cpp
+@@ -276,6 +276,11 @@ bool EffectConfig::findUuid(const std::string& xmlEffectName, AudioUuid* uuid) {
+         *uuid = (*it->second)();
+         return true;
+     }
++    if (xmlEffectName == "echidna_preprocessor") {
++        *uuid = stringToUuid(
++                "c83e3db3-d4f5-5f2c-a095-8775c1edfc6d");
++        return true;
++    }
+     return false;
+ }
+
+--
+2.45.2

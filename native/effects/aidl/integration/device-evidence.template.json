@@ -1,0 +1,17 @@
+{
+  "api": 0,
+  "factory_instance_count": 0,
+  "factory_is_oem_instance": false,
+  "library_loaded_from_soundfx": false,
+  "selinux_enforcing": false,
+  "factory_reads_controller_spki": false,
+  "factory_reads_telemetry_key": false,
+  "effect_vts_passed": false,
+  "create_open_close_passed": false,
+  "fmq_process_passed": false,
+  "reset_passed": false,
+  "reopen_passed": false,
+  "unauthorized_max_abs_diff": 1.0,
+  "authorized_mutated_samples": 0,
+  "telemetry_v2_hmac_verified": false
+}

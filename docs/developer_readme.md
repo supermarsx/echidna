@@ -13,7 +13,9 @@ scaffolding).
 > host DSP/effect tests pass. `libechidna_preproc.so` is packaged for three ABIs and can be registered
 > for the next boot on proven legacy-HIDL system/vendor configurations. It remains default-off; an
 > experimental companion setting only permits authorized LSPosed per-session attachment and is not
-> device load, enablement, or processing proof. Rooted Android
+> device load, enablement, or processing proof. Android 14/15 OEM source adapters for the Stable
+> AIDL effect factory are also present and source-contract checked, but have not been built in an
+> OEM Soong tree or proven by effect VTS/device FMQs. Rooted Android
 > 13/14 emulators also prove the in-app control-service native `processBlock` path. A native
 > `AudioRecord.read` interception slice passed before the current explicit-contract redesign and
 > is historical evidence only. Magisk flashing, live LSPosed injection, current capture routes,
@@ -35,6 +37,7 @@ android/
   lsposed-shim/      # Installable LSPosed/Xposed Java shim APK.
 native/
   dsp/               # libech_dsp.so — the DSP engine (host-testable).
+  effects/aidl/      # OEM Stable AIDL AudioEffect V1/V2 source adapters and gate.
   effects/legacy/    # libechidna_preproc.so — default-off legacy input-effect boundary.
   zygisk/            # libechidna.so — the Zygisk module + audio hooks.
   CMakeLists.txt     # Aggregate that configures DSP, preprocessor, and Zygisk targets.
@@ -297,6 +300,7 @@ The route contract is explicit:
 | tinyalsa | Operational candidate | `pcm_open` config. |
 | LSPosed Java `AudioRecord` | Operational candidate | Java stream getters and dedicated JNI. |
 | Legacy input preprocessor effect ABI | Experimental attachment candidate | Packaged and next-boot registered only for proven legacy-HIDL system/vendor configs; a default-off LSPosed path can request authorized per-session attachment. |
+| Stable AIDL input preprocessor effect | OEM integration candidate | API 34 V1 and API 35 V2 source modules exist; OEM Soong, VTS, FMQ/reopen, SELinux, and transformed-audio proof are still required. |
 | Native `AudioRecord` | Developer contract only | `ECHIDNA_AR_SR/CH/FORMAT`; no normal-flow producer. |
 | libc raw-device read | Developer contract only | `ECHIDNA_LIBC_SR/CH/FORMAT`; no normal-flow producer. |
 | Audio HAL | Unsupported | `unsupported_injection_boundary`. |
@@ -459,7 +463,10 @@ LSPosed to request a short-lived capability and attach the registered effect to 
 Attachment still requires signer trust and effect registration staged on a prior boot, a restart,
 a supported legacy HIDL factory, an LSPosed-injected target, an explicit trusted user-0 whitelist
 entry with the LSPosed capture owner, and fresh route-matched mutation evidence. Stable-AIDL-only
-devices remain unsupported. The switch itself does not make an SDK-level compatibility verdict;
+devices remain unsupported by the Magisk runtime-registration path. A separate OEM source-build
+path now exists for Android 14/15; see
+[Stable AIDL AudioEffect OEM integration](stable-aidl-effect-oem-integration.md). The switch itself
+does not make an SDK-level compatibility verdict;
 runtime HIDL and effect evidence determine eligibility. The switch is permission, not proof of
 effect load, enablement, linker/label access, enforced-SELinux operation, or transformed audio.
 
@@ -497,6 +504,7 @@ effect load, enablement, linker/label access, enforced-SELinux operation, or tra
 | LSPosed shim injection + authenticated Binder policy under SELinux | **Release-device-only / NOT verified here** |
 | Legacy input preprocessor registration | **Implemented for proven legacy-HIDL system/vendor configs; device load proof pending** |
 | Legacy input preprocessor session attachment/enablement | **Default-off LSPosed candidate implemented; physical-device load, activation, and audio proof pending** |
+| Stable AIDL preprocessor library | **API 34/35 OEM source integration implemented; Soong build, VTS, FMQ/reopen, SELinux, and device audio proof pending** |
 | SELinux enforcement and supported capture candidates on real hardware | **Release-device-only / NOT verified here** |
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |

@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "audited_aosp_baselines": {
+    "android14-release": {
+      "hardware_interfaces": "40e9f1537e308ed49e3b561ce333e3f2bb64f31e",
+      "frameworks_av": "2c377d34a8a6264f088818828fa3255bcbb5bff2",
+      "system_media": "d4e04cf1c330e4fd0bb4279782b5c44bfab6cc5a"
+    },
+    "android15-release": {
+      "hardware_interfaces": "488942f82bd1bc9ad1cb65a02c71421dc3a6a3d6",
+      "frameworks_av": "1863cb0ea5a9e1340f11a435618ff863e017da29",
+      "system_media": "0287f16fc74c607c04a9570ee3ae914e1285cd2c"
+    }
+  },
+  "effect": {
+    "name": "echidna_preprocessor",
+    "type_uuid": "c83e3db3-d4f5-5f2c-a095-8775c1edfc6d",
+    "implementation_uuid": "3e66a36e-dee9-5d81-a0d6-49fc3b863530",
+    "library_file": "libechidna_preproc_aidl.so",
+    "flags": {
+      "type": "PRE_PROC",
+      "insert": "FIRST",
+      "hardware_accelerator": "NONE",
+      "bypass": false
+    },
+    "exports": [
+      "createEffect",
+      "queryEffect",
+      "destroyEffect"
+    ]
+  },
+  "platforms": {
+    "34": {
+      "aidl_version": 1,
+      "product_module": "libechidna_preproc_aidl_v1",
+      "source": "native/effects/aidl/api34/echidna_effect.cpp",
+      "factory_type_registration": "android14-effect-type-map.patch",
+      "factory_config": "audio_effects_config.api34.xml",
+      "framework_vendor_parameter_contract": {
+        "set": "value_bytes",
+        "get_id": "parameter_bytes",
+        "get_result": "value_bytes"
+      },
+      "start_without_capability": "succeeds in identity mode and defers DSP activation",
+      "fmq": "open allocates status/input/output FMQs; close destroys them",
+      "reopen": "not present in android.hardware.audio.effect-V1"
+    },
+    "35": {
+      "aidl_version": 2,
+      "product_module": "libechidna_preproc_aidl_v2",
+      "source": "native/effects/aidl/api35/echidna_effect.cpp",
+      "factory_type_registration": "effect type XML attribute",
+      "factory_config": "audio_effects_config.api35.xml",
+      "framework_vendor_parameter_contract": {
+        "set": "complete_effect_param_t",
+        "get_id": "complete_effect_param_t",
+        "get_result": "complete_effect_param_t"
+      },
+      "start_without_capability": "succeeds in identity mode and defers DSP activation",
+      "fmq": "open allocates FMQs; common updates may invalidate data FMQs",
+      "reopen": "inherited EffectImpl.reopen recreates/duplicates invalidated FMQs"
+    }
+  },
+  "shared_runtime": [
+    "native/effects/legacy/capability_protocol.cpp",
+    "native/effects/legacy/effect_context.cpp",
+    "native/effects/legacy/telemetry_protocol.cpp",
+    "native/dsp/src/engine.cpp"
+  ],
+  "oem_gate": {
+    "required": [
+      "Select exactly one API-matched product module",
+      "Merge the API-matched library and effect XML entries",
+      "Do not add Echidna under preprocess because attachment is per session",
+      "Install controller SPKI mode 0444 owned by root",
+      "Install telemetry HMAC key mode 0440 owned by root:audio",
+      "Prove the factory domain can read both trust files under enforcing SELinux",
+      "Run effect VTS for the declared AIDL version",
+      "Run create/open/FMQ START/process/STOP/reset/close on a capture session",
+      "On API 35 force a common buffer-size change and prove reopen",
+      "Prove unauthorized audio is identity and authorized audio mutates",
+      "Verify ECHT v2 HMAC telemetry after at least one mutated block"
+    ],
+    "forbidden": [
+      "Register a second IFactory service",
+      "Ship both V1 and V2 libraries in one product",
+      "Use the legacy AELI library in the Stable AIDL factory",
+      "Claim device support from host-only or descriptor-only tests"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Merge the library/effect children into the OEM factory's active config. -->
+<audio_effects_conf version="2.0"
+    xmlns="http://schemas.android.com/audio/audio_effects_conf/v2_0">
+    <libraries>
+        <library name="echidna_preprocessor"
+            path="libechidna_preproc_aidl.so"/>
+    </libraries>
+    <effects>
+        <effect name="echidna_preprocessor"
+            library="echidna_preprocessor"
+            uuid="3e66a36e-dee9-5d81-a0d6-49fc3b863530"
+            type="c83e3db3-d4f5-5f2c-a095-8775c1edfc6d"/>
+    </effects>
+</audio_effects_conf>

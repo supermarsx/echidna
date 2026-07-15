@@ -1,0 +1,76 @@
+package {
+    default_applicable_licenses: ["echidna_license"],
+}
+
+license {
+    name: "echidna_license",
+    visibility: [":__subpackages__"],
+    // Echidna's repository license contains a commercial-use restriction.
+    // Keep platform dependency review fail-closed instead of labelling it MIT.
+    license_kinds: ["legacy_by_exception_only"],
+    license_text: ["license.md"],
+}
+
+cc_defaults {
+    name: "echidna_stable_aidl_effect_defaults",
+    defaults: ["aidlaudioeffectservice_defaults"],
+    srcs: [
+        "native/effects/aidl/legacy_runtime.cpp",
+        "native/effects/legacy/capability_protocol.cpp",
+        "native/effects/legacy/effect_context.cpp",
+        "native/effects/legacy/telemetry_protocol.cpp",
+        "native/dsp/src/engine.cpp",
+        "native/dsp/src/config/preset_loader.cpp",
+        "native/dsp/src/runtime/block_queue.cpp",
+        "native/dsp/src/runtime/simd.cpp",
+        "native/dsp/src/effects/effect_base.cpp",
+        "native/dsp/src/effects/gate_processor.cpp",
+        "native/dsp/src/effects/parametric_eq.cpp",
+        "native/dsp/src/effects/compressor.cpp",
+        "native/dsp/src/effects/pitch_shifter.cpp",
+        "native/dsp/src/effects/formant_shifter.cpp",
+        "native/dsp/src/effects/auto_tune.cpp",
+        "native/dsp/src/effects/reverb.cpp",
+        "native/dsp/src/effects/mix_bus.cpp",
+        "native/dsp/src/plugins/plugin_loader.cpp",
+        ":effectCommonFile",
+    ],
+    local_include_dirs: [
+        "native/dsp/include",
+        "native/dsp/src",
+        "native/effects/aidl",
+        "native/effects/legacy",
+        "native/include",
+    ],
+    shared_libs: [
+        "libcrypto",
+        "libdl",
+    ],
+    cflags: [
+        "-DECHIDNA_HAS_BORINGSSL=1",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    cpp_std: "c++20",
+    relative_install_path: "soundfx",
+    stem: "libechidna_preproc_aidl",
+    visibility: ["//visibility:public"],
+}
+
+// Select exactly one module in PRODUCT_PACKAGES. V1 is the Android 14 effect
+// contract; V2 is the Android 15 contract and implements reopen through the
+// AOSP EffectImpl/EffectContext common sources.
+cc_library_shared {
+    name: "libechidna_preproc_aidl_v1",
+    defaults: ["echidna_stable_aidl_effect_defaults"],
+    srcs: ["native/effects/aidl/api34/echidna_effect.cpp"],
+    min_sdk_version: "34",
+}
+
+cc_library_shared {
+    name: "libechidna_preproc_aidl_v2",
+    defaults: ["echidna_stable_aidl_effect_defaults"],
+    srcs: ["native/effects/aidl/api35/echidna_effect.cpp"],
+    min_sdk_version: "35",
+}
