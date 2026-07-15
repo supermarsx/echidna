@@ -253,6 +253,40 @@ namespace
               "same generation with different bytes must reject without hashes");
     }
 
+    void TestSigned64BitIntegerBounds()
+    {
+        echidna::runtime::DecodedProfileSnapshot snapshot;
+        std::string error;
+
+        std::string maximum_generation = Envelope();
+        maximum_generation.replace(maximum_generation.find("\"generation\":7"),
+                                   std::string("\"generation\":7").size(),
+                                   "\"generation\":9223372036854775807");
+        CHECK(Decode(maximum_generation, "com.example.app", &snapshot, &error), error);
+        CHECK(snapshot.generation == 9223372036854775807ULL,
+              "Kotlin Long maximum generation must be accepted exactly");
+
+        std::string oversized_generation = Envelope();
+        oversized_generation.replace(oversized_generation.find("\"generation\":7"),
+                                     std::string("\"generation\":7").size(),
+                                     "\"generation\":9223372036854775808");
+        ExpectRejected(std::move(oversized_generation), "signed 64-bit");
+
+        std::string maximum_panic = Envelope();
+        maximum_panic.replace(maximum_panic.find("\"panicUntilEpochMs\":0"),
+                              std::string("\"panicUntilEpochMs\":0").size(),
+                              "\"panicUntilEpochMs\":9223372036854775807");
+        CHECK(Decode(maximum_panic, "com.example.app", &snapshot, &error), error);
+        CHECK(!snapshot.global_hooks_enabled,
+              "maximum representable future panic deadline must remain active");
+
+        std::string oversized_panic = Envelope();
+        oversized_panic.replace(oversized_panic.find("\"panicUntilEpochMs\":0"),
+                                std::string("\"panicUntilEpochMs\":0").size(),
+                                "\"panicUntilEpochMs\":9223372036854775808");
+        ExpectRejected(std::move(oversized_panic), "signed 64-bit");
+    }
+
 } // namespace
 
 int main()
@@ -264,6 +298,7 @@ int main()
     TestReferenceAndTypeRejection();
     TestSizeAndCountBounds();
     TestGenerationDecisions();
+    TestSigned64BitIntegerBounds();
 
     if (g_failures != 0)
     {

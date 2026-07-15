@@ -584,6 +584,18 @@ namespace
         return true;
     }
 
+    bool ParseNonNegativeSigned64(const JsonValue &value, uint64_t *output)
+    {
+        uint64_t parsed = 0;
+        if (!ParseUnsigned(value, &parsed) ||
+            parsed > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+        {
+            return false;
+        }
+        *output = parsed;
+        return true;
+    }
+
     bool IsFiniteNumber(const JsonValue &value)
     {
         if (value.type != JsonType::kNumber)
@@ -724,9 +736,10 @@ namespace echidna::runtime
         {
             return SetError(error, "schemaVersion must be integer 2");
         }
-        if (!ParseUnsigned(*generation, &snapshot->generation) || snapshot->generation == 0)
+        if (!ParseNonNegativeSigned64(*generation, &snapshot->generation) ||
+            snapshot->generation == 0)
         {
-            return SetError(error, "generation must be a positive integer");
+            return SetError(error, "generation must be a positive signed 64-bit integer");
         }
         if (profiles->type != JsonType::kObject || profiles->object.empty() ||
             profiles->object.size() > kProfileSyncMaxEntries)
@@ -824,9 +837,10 @@ namespace echidna::runtime
             return SetError(error, "masterEnabled and bypass must be booleans");
         }
         uint64_t panic_until_ms = 0;
-        if (!ParseUnsigned(*panic_until, &panic_until_ms))
+        if (!ParseNonNegativeSigned64(*panic_until, &panic_until_ms))
         {
-            return SetError(error, "panicUntilEpochMs must be a non-negative integer");
+            return SetError(error,
+                            "panicUntilEpochMs must be a non-negative signed 64-bit integer");
         }
         if (const JsonValue *sidetone = FindMember(*control, "sidetoneEnabled"))
         {
