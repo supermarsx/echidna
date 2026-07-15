@@ -377,12 +377,23 @@ namespace
 
     // --- Gate --------------------------------------------------------------
     // A loud tone above the open threshold passes unattenuated; the gate is a
-    // pure attenuator (gain in [0, 1]) so it must never amplify. (The current
-    // envelope floor prevents full closure on sub-threshold input; see log.)
+    // pure attenuator (gain in [0, 1]) so it must never amplify.
     void test_gate()
     {
         const uint32_t sr = static_cast<uint32_t>(kSampleRate);
         GateParameters gp{-45.0f, 5.0f, 80.0f, 3.0f};
+
+        auto process_stream = [sr](GateProcessor &gate,
+                                   std::vector<float> &buffer,
+                                   size_t block_frames)
+        {
+            for (size_t offset = 0; offset < buffer.size(); offset += block_frames)
+            {
+                const size_t frames = std::min(block_frames, buffer.size() - offset);
+                ProcessContext ctx{buffer.data() + offset, frames, 1, sr};
+                gate.process(ctx);
+            }
+        };
 
         // Disabled: identity.
         {
@@ -436,6 +447,75 @@ namespace
             ProcessContext ctx{buf.data(), n, 1, sr};
             g.process(ctx);
             CHECK(peak(buf, 0, n) <= peak(in, 0, n) * 1.001, "gate must not amplify");
+        }
+
+        // A signal below the close threshold must settle closed independent of
+        // callback size. This reproduces the public 48 kHz / 256-frame failure.
+        double reference_gain = -1.0;
+        for (size_t block_frames : {size_t{64}, size_t{128}, size_t{256}, size_t{960}})
+        {
+            const size_t n = sr * 2;
+            const auto in = make_sine(300.0, n, 0.002);
+            auto buf = in;
+            GateProcessor g;
+            g.set_parameters(gp);
+            g.prepare(sr, 1);
+            g.set_enabled(true);
+            g.reset();
+            process_stream(g, buf, block_frames);
+
+            CHECK(all_finite(buf), "sub-threshold gate output must be finite");
+            const double settled_gain = rms(buf, n / 2, n) / rms(in, n / 2, n);
+            CHECK(settled_gain < 0.1, "sub-threshold signal must settle below 0.1 gain");
+            if (reference_gain < 0.0)
+            {
+                reference_gain = settled_gain;
+            }
+            else
+            {
+                CHECK(std::fabs(settled_gain - reference_gain) < 1e-5,
+                      "gate timing must be callback-size invariant");
+            }
+        }
+
+        // Once open, a level inside the hysteresis band remains open. After a
+        // genuinely quiet interval closes it, that same mid-level signal cannot
+        // reopen the gate; a new above-threshold onset can.
+        {
+            const size_t segment_frames = sr / 4;
+            const auto loud = make_sine(300.0, segment_frames, 0.1);
+            const auto mid = make_sine(300.0, segment_frames, 0.006);
+            const auto quiet = make_sine(300.0, segment_frames * 2, 0.002);
+            auto open_mid = mid;
+            auto closed_mid = mid;
+            auto reopened = loud;
+
+            GateProcessor g;
+            g.set_parameters(gp);
+            g.prepare(sr, 1);
+            g.set_enabled(true);
+            g.reset();
+
+            auto onset = loud;
+            process_stream(g, onset, 256);
+            process_stream(g, open_mid, 256);
+            auto quiet_out = quiet;
+            process_stream(g, quiet_out, 256);
+            process_stream(g, closed_mid, 256);
+            process_stream(g, reopened, 256);
+
+            CHECK(rms(open_mid, segment_frames / 2, segment_frames) /
+                          rms(mid, segment_frames / 2, segment_frames) >
+                      0.95,
+                  "hysteresis band must remain open after a loud onset");
+            CHECK(rms(closed_mid, segment_frames / 2, segment_frames) /
+                          rms(mid, segment_frames / 2, segment_frames) <
+                      0.1,
+                  "hysteresis band must not reopen a closed gate");
+            CHECK(rms(reopened, segment_frames / 2, segment_frames) /
+                          rms(loud, segment_frames / 2, segment_frames) >
+                      0.95,
+                  "above-threshold signal must reopen the gate");
         }
     }
 

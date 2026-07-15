@@ -12,8 +12,6 @@ namespace echidna::dsp::effects
 {
     namespace
     {
-        constexpr float kMinDb = -120.0f;
-
         float db_to_amplitude(float db)
         {
             return std::pow(10.0f, db / 20.0f);
@@ -49,6 +47,7 @@ namespace echidna::dsp::effects
     {
         envelope_ = 0.0f;
         gain_ = 1.0f;
+        gate_open_ = false;
     }
 
     /** Apply gating algorithm to the provided buffer in-place. */
@@ -59,33 +58,49 @@ namespace echidna::dsp::effects
             return;
         }
 
-        const float threshold_amp = db_to_amplitude(params_.threshold_db);
         const float open_amp =
             db_to_amplitude(params_.threshold_db + params_.hysteresis_db);
         const float close_amp =
             db_to_amplitude(params_.threshold_db - params_.hysteresis_db);
 
-        float *buffer = ctx.buffer;
-        const size_t samples = ctx.frames * ctx.channels;
-        for (size_t i = 0; i < samples; ++i)
+        if (ctx.buffer == nullptr || ctx.frames == 0 || ctx.channels == 0)
         {
-            const float level = std::abs(buffer[i]);
-            envelope_ = std::max(level, envelope_);
-            if (envelope_ > open_amp)
+            return;
+        }
+
+        for (size_t frame = 0; frame < ctx.frames; ++frame)
+        {
+            float level = 0.0f;
+            const size_t frame_offset = frame * ctx.channels;
+            for (uint32_t channel = 0; channel < ctx.channels; ++channel)
             {
-                const float delta = 1.0f - gain_;
-                gain_ += (1.0f - attack_coeff_) * delta;
+                level = std::max(level, std::abs(ctx.buffer[frame_offset + channel]));
             }
-            else if (envelope_ < close_amp)
+
+            const float envelope_coeff = level > envelope_ ? attack_coeff_ : release_coeff_;
+            envelope_ = envelope_coeff * envelope_ + (1.0f - envelope_coeff) * level;
+
+            if (gate_open_)
             {
-                gain_ *= release_coeff_;
+                if (envelope_ <= close_amp)
+                {
+                    gate_open_ = false;
+                }
             }
-            if (envelope_ < threshold_amp)
+            else if (envelope_ >= open_amp)
             {
-                envelope_ = threshold_amp;
+                gate_open_ = true;
             }
-            buffer[i] *= gain_;
-            envelope_ *= release_coeff_;
+
+            const float target_gain = gate_open_ ? 1.0f : 0.0f;
+            const float gain_coeff = gate_open_ ? attack_coeff_ : release_coeff_;
+            gain_ = gain_coeff * gain_ + (1.0f - gain_coeff) * target_gain;
+            gain_ = std::clamp(gain_, 0.0f, 1.0f);
+
+            for (uint32_t channel = 0; channel < ctx.channels; ++channel)
+            {
+                ctx.buffer[frame_offset + channel] *= gain_;
+            }
         }
     }
 

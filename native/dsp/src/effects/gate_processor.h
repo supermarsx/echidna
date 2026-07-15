@@ -39,6 +39,7 @@ namespace echidna::dsp::effects
         float gain_{1.0f};
         float attack_coeff_{0.0f};
         float release_coeff_{0.0f};
+        bool gate_open_{false};
     };
 
 } // namespace echidna::dsp::effects
