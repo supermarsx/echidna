@@ -324,6 +324,7 @@ namespace
         // live route engine before native capture admission changes.
         (void)echidna::hooks::PublishAAudioProfile(snapshot);
         (void)echidna::hooks::PublishOpenSLProfile(snapshot);
+        (void)echidna::hooks::PublishTinyAlsaProfile(snapshot);
         auto &state = echidna::state::SharedState::instance();
         {
             std::scoped_lock lock(g_activation_mutex);

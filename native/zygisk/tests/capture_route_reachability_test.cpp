@@ -85,7 +85,10 @@ int main()
           "tinyalsa manager must map to tinyalsa reachability descriptor");
     CheckOperational(kAAudioRoute);
     CheckOperational(kOpenSlRoute);
-    CheckOperational(kTinyAlsaRoute);
+    Check(kTinyAlsaRoute.support == CaptureRouteSupport::kDeviceTargetGated &&
+              std::strcmp(kTinyAlsaRoute.unavailable_reason,
+                          "requires_mapped_compatible_tinyalsa_in_target_process") == 0,
+          "tinyalsa must report its device and target-process gate honestly");
     CheckOperational(kLsposedJavaAudioRecordRoute);
 
     Check(&AudioRecordHookManager::kReachability == &kNativeAudioRecordRoute,
@@ -114,6 +117,9 @@ int main()
           "AudioFlinger manager must remain unsupported without audioserver injection");
     Check(std::strcmp(CaptureRouteSupportName(CaptureRouteSupport::kOperational),
                       "operational") == 0 &&
+              std::strcmp(CaptureRouteSupportName(
+                              CaptureRouteSupport::kDeviceTargetGated),
+                          "device_target_process_gated") == 0 &&
               std::strcmp(CaptureRouteSupportName(
                               CaptureRouteSupport::kDeveloperContractOnly),
                           "developer_contract_only") == 0 &&

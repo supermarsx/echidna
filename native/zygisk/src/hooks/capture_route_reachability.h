@@ -7,6 +7,7 @@ namespace echidna::hooks
     enum class CaptureRouteSupport
     {
         kOperational,
+        kDeviceTargetGated,
         kDeveloperContractOnly,
         kUnsupported,
     };
@@ -33,9 +34,9 @@ namespace echidna::hooks
     };
     inline constexpr CaptureRouteDescriptor kTinyAlsaRoute{
         "tinyalsa",
-        CaptureRouteSupport::kOperational,
+        CaptureRouteSupport::kDeviceTargetGated,
         "tinyalsa_pcm_open_config",
-        "",
+        "requires_mapped_compatible_tinyalsa_in_target_process",
     };
     inline constexpr CaptureRouteDescriptor kLsposedJavaAudioRecordRoute{
         "lsposed_java_audiorecord",
@@ -86,6 +87,8 @@ namespace echidna::hooks
         {
         case CaptureRouteSupport::kOperational:
             return "operational";
+        case CaptureRouteSupport::kDeviceTargetGated:
+            return "device_target_process_gated";
         case CaptureRouteSupport::kDeveloperContractOnly:
             return "developer_contract_only";
         case CaptureRouteSupport::kUnsupported:

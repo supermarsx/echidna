@@ -12,6 +12,11 @@
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
 
+namespace echidna::runtime
+{
+    struct DecodedProfileSnapshot;
+}
+
 namespace echidna
 {
     namespace hooks
@@ -47,3 +52,9 @@ namespace echidna
 
     } // namespace hooks
 } // namespace echidna
+
+namespace echidna::hooks
+{
+    /** Publishes an authenticated process policy to every live tinyalsa pcm. */
+    bool PublishTinyAlsaProfile(const runtime::DecodedProfileSnapshot &snapshot);
+} // namespace echidna::hooks

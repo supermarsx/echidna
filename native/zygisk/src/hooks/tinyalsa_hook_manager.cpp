@@ -2,7 +2,7 @@
 
 /**
  * @file tinyalsa_hook_manager.cpp
- * @brief Track exact tinyalsa input contracts from pcm_open through pcm_close.
+ * @brief Gate tinyalsa hooks to mapped compatible targets and isolate pcm state.
  */
 
 #ifdef __ANDROID__
@@ -10,20 +10,20 @@
 #else
 #define __android_log_print(...) ((void)0)
 #define ANDROID_LOG_INFO 0
+#define ANDROID_LOG_WARN 0
 #endif
 
-#include <algorithm>
-#include <array>
 #include <atomic>
-#include <cstddef>
 #include <cstdint>
-#include <string>
-#include <time.h>
+#include <string_view>
 
 #include "echidna/api.h"
-#include "hooks/capture_buffer_router.h"
 #include "hooks/tinyalsa_contract.h"
+#include "hooks/tinyalsa_stream_registry.h"
+#include "hooks/tinyalsa_target_gate.h"
+#include "runtime/profile_sync_protocol.h"
 #include "state/shared_state.h"
+#include "utils/proc_maps_scanner.h"
 #include "utils/telemetry_accumulator.h"
 
 namespace echidna::hooks
@@ -36,109 +36,66 @@ namespace echidna::hooks
                                     unsigned int,
                                     TinyAlsaConfigPrefix *);
         using PcmCloseFn = int (*)(void *);
+        using PcmIsReadyFn = int (*)(void *);
+        using PcmFormatToBitsFn = unsigned int (*)(int32_t);
 
         PcmReadFn gOriginalRead = nullptr;
         PcmReadFn gOriginalReadi = nullptr;
         PcmReadFn gOriginalMmapRead = nullptr;
         PcmOpenFn gOriginalOpen = nullptr;
         PcmCloseFn gOriginalClose = nullptr;
-
-        struct alignas(64) PcmContext
-        {
-            std::atomic<bool> claimed{false};
-            std::atomic<bool> active{false};
-            void *pcm{nullptr};
-            TinyAlsaPcmContract contract{};
+        PcmIsReadyFn gPcmIsReady = nullptr;
+        PcmFormatToBitsFn gPcmFormatToBits = nullptr;
+        std::atomic<bool> gHooksReady{false};
+        TinyAlsaStreamRegistry gPcmStreams;
+        const TinyAlsaDspApi gDspApi{
+            echidna_stream_create,
+            echidna_stream_process,
+            echidna_stream_update,
+            echidna_stream_destroy,
         };
-
-        constexpr size_t kMaxPcmLifetimes = 1024;
-        std::array<PcmContext, kMaxPcmLifetimes> gPcmContexts;
         thread_local uint32_t gReadDepth = 0;
-
-        PcmContext *FindPcm(void *pcm)
-        {
-            if (!pcm)
-            {
-                return nullptr;
-            }
-            for (auto &context : gPcmContexts)
-            {
-                if (context.active.load(std::memory_order_acquire) && context.pcm == pcm)
-                {
-                    return &context;
-                }
-            }
-            return nullptr;
-        }
-
-        void RegisterPcm(void *pcm, const TinyAlsaPcmContract &contract)
-        {
-            if (!pcm)
-            {
-                return;
-            }
-            for (auto &context : gPcmContexts)
-            {
-                if (context.active.load(std::memory_order_acquire) && context.pcm == pcm)
-                {
-                    context.active.store(false, std::memory_order_release);
-                }
-            }
-            for (auto &context : gPcmContexts)
-            {
-                bool expected = false;
-                if (!context.claimed.compare_exchange_strong(expected,
-                                                             true,
-                                                             std::memory_order_acq_rel,
-                                                             std::memory_order_relaxed))
-                {
-                    continue;
-                }
-                context.pcm = pcm;
-                context.contract = contract;
-                context.active.store(true, std::memory_order_release);
-                return;
-            }
-        }
-
-        void RetirePcm(void *pcm)
-        {
-            for (auto &context : gPcmContexts)
-            {
-                if (context.active.load(std::memory_order_acquire) && context.pcm == pcm)
-                {
-                    context.active.store(false, std::memory_order_release);
-                }
-            }
-        }
 
         class ReadDepthGuard
         {
         public:
             ReadDepthGuard() : outermost_(gReadDepth++ == 0) {}
             ~ReadDepthGuard() { --gReadDepth; }
-            bool outermost() const { return outermost_; }
+            [[nodiscard]] bool outermost() const { return outermost_; }
 
         private:
             bool outermost_;
         };
+
+        bool TargetMapsTinyAlsa()
+        {
+            utils::ProcMapsScanner scanner;
+            for (const auto &region : scanner.regions())
+            {
+                if (IsTinyAlsaExecutableMapping(region.path, region.permissions))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         bool ProcessingAllowed()
         {
             return state::SharedState::instance().audioProcessingAllowed();
         }
 
-        bool ProcessBuffer(void *data,
-                           size_t bytes,
-                           const TinyAlsaPcmContract &contract)
+        void RecordNonDspOutcome(uint32_t frames, TinyAlsaProcessResult result)
         {
-            utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kTinyAlsa);
-            return RouteCaptureBufferInPlace(data,
-                                             bytes,
-                                             contract.format,
-                                             contract.sample_rate,
-                                             contract.channels,
-                                             echidna_process_block);
+            if (result == TinyAlsaProcessResult::kProcessed)
+            {
+                return;
+            }
+            const auto outcome = result == TinyAlsaProcessResult::kBypassed
+                                     ? utils::TelemetryBlockOutcome::kBypassed
+                                     : utils::TelemetryBlockOutcome::kFailure;
+            state::SharedState::instance().telemetry().recordBlock(
+                utils::TelemetryRoute::kTinyAlsa, frames, outcome);
         }
 
         int ForwardReadBytes(void *pcm,
@@ -148,20 +105,28 @@ namespace echidna::hooks
         {
             ReadDepthGuard depth;
             const int result = original ? original(pcm, data, bytes) : -1;
-            // pcm_read and pcm_mmap_read are documented to return zero only
-            // after filling the requested byte count. A nested pcm_readi call
-            // is processed by the outer wrapper exactly once.
-            if (!depth.outermost() || result != 0 || !data || bytes == 0 ||
-                !ProcessingAllowed())
+            const auto completed_bytes = TinyAlsaCompletedByteRead(result, bytes);
+            if (!depth.outermost() || !completed_bytes || !data ||
+                !gHooksReady.load(std::memory_order_acquire))
             {
                 return result;
             }
-            PcmContext *context = FindPcm(pcm);
-            if (!context)
+
+            utils::ScopedTelemetryRoute route(utils::TelemetryRoute::kTinyAlsa);
+            uint32_t frames = 0;
+            if (!gPcmStreams.framesForBytes(pcm, *completed_bytes, &frames))
             {
+                RecordNonDspOutcome(0, TinyAlsaProcessResult::kProcessorError);
                 return result;
             }
-            (void)ProcessBuffer(data, bytes, context->contract);
+            if (!ProcessingAllowed())
+            {
+                RecordNonDspOutcome(frames, TinyAlsaProcessResult::kBypassed);
+                return result;
+            }
+            const TinyAlsaProcessResult processed =
+                gPcmStreams.processBytes(pcm, data, *completed_bytes);
+            RecordNonDspOutcome(frames, processed);
             return result;
         }
 
@@ -171,24 +136,26 @@ namespace echidna::hooks
                               PcmReadFn original)
         {
             ReadDepthGuard depth;
-            const int result = original ? original(pcm, data, requested_frames) : -1;
-            if (!depth.outermost() || result <= 0 || !data || !ProcessingAllowed())
+            const int result =
+                original ? original(pcm, data, requested_frames) : -1;
+            const auto completed_frames =
+                TinyAlsaCompletedFrameRead(result, requested_frames);
+            if (!depth.outermost() || !completed_frames || !data ||
+                !gHooksReady.load(std::memory_order_acquire))
             {
                 return result;
             }
-            PcmContext *context = FindPcm(pcm);
-            if (!context)
+
+            const uint32_t frames = *completed_frames;
+            utils::ScopedTelemetryRoute route(utils::TelemetryRoute::kTinyAlsa);
+            if (!ProcessingAllowed())
             {
+                RecordNonDspOutcome(frames, TinyAlsaProcessResult::kBypassed);
                 return result;
             }
-            const uint32_t frames = std::min<uint32_t>(
-                static_cast<uint32_t>(result), requested_frames);
-            const auto bytes = TinyAlsaBytesForFrames(context->contract, frames);
-            if (!bytes)
-            {
-                return result;
-            }
-            (void)ProcessBuffer(data, *bytes, context->contract);
+            const TinyAlsaProcessResult processed =
+                gPcmStreams.processFrames(pcm, data, frames);
+            RecordNonDspOutcome(frames, processed);
             return result;
         }
 
@@ -197,107 +164,155 @@ namespace echidna::hooks
                           unsigned int flags,
                           TinyAlsaConfigPrefix *config)
         {
-            void *pcm = gOriginalOpen ? gOriginalOpen(card, device, flags, config) : nullptr;
-            const auto contract = ParseTinyAlsaContract(flags, config);
-            if (pcm && contract &&
-                echidna_prepare_stream(contract->sample_rate, contract->channels) ==
-                    ECHIDNA_RESULT_OK)
+            void *pcm =
+                gOriginalOpen ? gOriginalOpen(card, device, flags, config) : nullptr;
+            if (!pcm || !gHooksReady.load(std::memory_order_acquire) ||
+                !gPcmIsReady || gPcmIsReady(pcm) != 1 || !gPcmFormatToBits ||
+                !config)
             {
-                RegisterPcm(pcm, *contract);
+                return pcm;
+            }
+            const uint32_t format_bits = gPcmFormatToBits(config->format);
+            const auto contract =
+                ParseTinyAlsaContract(flags, config, format_bits);
+            if (contract && !gPcmStreams.open(pcm, *contract, gDspApi))
+            {
+                __android_log_print(ANDROID_LOG_WARN,
+                                    "echidna",
+                                    "tinyalsa pcm opened without isolated DSP handle");
             }
             return pcm;
         }
 
         int ForwardClose(void *pcm)
         {
-            const int result = gOriginalClose ? gOriginalClose(pcm) : -1;
-            if (result == 0)
+            if (gHooksReady.load(std::memory_order_acquire))
             {
-                RetirePcm(pcm);
+                gPcmStreams.close(pcm);
             }
-            return result;
+            return gOriginalClose ? gOriginalClose(pcm) : -1;
         }
     } // namespace
 
     TinyAlsaHookManager::TinyAlsaHookManager(utils::PltResolver &resolver)
         : resolver_(resolver) {}
 
+    bool PublishTinyAlsaProfile(
+        const runtime::DecodedProfileSnapshot &snapshot)
+    {
+        const bool published = gPcmStreams.publishProfile(
+            snapshot.generation,
+            snapshot.nativeProcessAdmitted(),
+            snapshot.preset_json,
+            gDspApi);
+        if (!published)
+        {
+            __android_log_print(ANDROID_LOG_WARN,
+                                "echidna",
+                                "tinyalsa profile publication failed generation=%llu",
+                                static_cast<unsigned long long>(snapshot.generation));
+        }
+        return published;
+    }
+
     bool TinyAlsaHookManager::install()
     {
         last_info_ = {};
+        gHooksReady.store(false, std::memory_order_release);
         constexpr const char *kLibrary = "libtinyalsa.so";
-        void *open = resolver_.findSymbol(kLibrary, "pcm_open");
-        void *close = resolver_.findSymbol(kLibrary, "pcm_close");
-        if (!open || !close)
+        if (!TargetMapsTinyAlsa())
         {
-            last_info_.reason = "lifecycle_symbols_not_found";
+            last_info_.reason = "library_not_mapped_in_target_process";
             return false;
         }
-        const bool open_installed = hook_open_.install(
-            open,
-            reinterpret_cast<void *>(&ForwardOpen),
-            reinterpret_cast<void **>(&gOriginalOpen));
-        const bool close_installed = hook_close_.install(
-            close,
-            reinterpret_cast<void *>(&ForwardClose),
-            reinterpret_cast<void **>(&gOriginalClose));
-        if (!open_installed || !close_installed)
+
+        void *open = resolver_.findSymbol(kLibrary, "pcm_open");
+        void *close = resolver_.findSymbol(kLibrary, "pcm_close");
+        void *is_ready = resolver_.findSymbol(kLibrary, "pcm_is_ready");
+        void *format_to_bits =
+            resolver_.findSymbol(kLibrary, "pcm_format_to_bits");
+        void *read = resolver_.findSymbol(kLibrary, "pcm_read");
+        void *readi = resolver_.findSymbol(kLibrary, "pcm_readi");
+        void *mmap_read = resolver_.findSymbol(kLibrary, "pcm_mmap_read");
+        const TinyAlsaSymbolEvidence symbols{
+            .open = open != nullptr,
+            .close = close != nullptr,
+            .is_ready = is_ready != nullptr,
+            .format_to_bits = format_to_bits != nullptr,
+            .read = read != nullptr,
+            .readi = readi != nullptr,
+            .mmap_read = mmap_read != nullptr,
+        };
+        if (!IsCompatibleTinyAlsaTarget(true, symbols))
+        {
+            last_info_.reason = "incompatible_tinyalsa_symbols";
+            return false;
+        }
+        gPcmIsReady = reinterpret_cast<PcmIsReadyFn>(is_ready);
+        gPcmFormatToBits = reinterpret_cast<PcmFormatToBitsFn>(format_to_bits);
+
+        const TinyAlsaHookInstallation installed = InstallTinyAlsaHookSet(
+            symbols,
+            [this, open, close, read, readi, mmap_read](TinyAlsaHookRole role)
+            {
+                switch (role)
+                {
+                case TinyAlsaHookRole::kClose:
+                    return hook_close_.install(
+                        close,
+                        reinterpret_cast<void *>(&ForwardClose),
+                        reinterpret_cast<void **>(&gOriginalClose));
+                case TinyAlsaHookRole::kRead:
+                    return hook_read_.install(
+                        read,
+                        reinterpret_cast<void *>(&ReplacementRead),
+                        reinterpret_cast<void **>(&gOriginalRead));
+                case TinyAlsaHookRole::kReadi:
+                    return hook_readi_.install(
+                        readi,
+                        reinterpret_cast<void *>(&ReplacementReadi),
+                        reinterpret_cast<void **>(&gOriginalReadi));
+                case TinyAlsaHookRole::kMmapRead:
+                    return hook_mmap_read_.install(
+                        mmap_read,
+                        reinterpret_cast<void *>(&ReplacementMmapRead),
+                        reinterpret_cast<void **>(&gOriginalMmapRead));
+                case TinyAlsaHookRole::kOpen:
+                    return hook_open_.install(
+                        open,
+                        reinterpret_cast<void *>(&ForwardOpen),
+                        reinterpret_cast<void **>(&gOriginalOpen));
+                }
+                return false;
+            });
+        if (!installed.complete())
         {
             last_info_.reason = "lifecycle_hook_failed";
             return false;
         }
 
-        struct ReadCandidate
-        {
-            const char *symbol;
-            runtime::InlineHook *hook;
-            void *replacement;
-            PcmReadFn *original;
-        };
-        ReadCandidate candidates[] = {
-            {"pcm_read", &hook_read_, reinterpret_cast<void *>(&ReplacementRead), &gOriginalRead},
-            {"pcm_readi", &hook_readi_, reinterpret_cast<void *>(&ReplacementReadi), &gOriginalReadi},
-            {"pcm_mmap_read", &hook_mmap_read_, reinterpret_cast<void *>(&ReplacementMmapRead), &gOriginalMmapRead},
-        };
-        bool installed = false;
-        bool failed = false;
-        for (auto &candidate : candidates)
-        {
-            void *target = resolver_.findSymbol(kLibrary, candidate.symbol);
-            if (!target)
-            {
-                continue;
-            }
-            const bool success = candidate.hook->install(
-                target,
-                candidate.replacement,
-                reinterpret_cast<void **>(candidate.original));
-            if (success && !installed)
-            {
-                last_info_.symbol = candidate.symbol;
-            }
-            installed = installed || success;
-            failed = failed || !success;
-        }
-        if (!installed)
-        {
-            last_info_.reason = failed ? "read_hook_failed" : "read_symbols_not_found";
-            return false;
-        }
+        gHooksReady.store(true, std::memory_order_release);
         last_info_.success = true;
         last_info_.library = kLibrary;
+        last_info_.symbol = installed.read
+                                ? "pcm_read"
+                                : (installed.readi ? "pcm_readi" : "pcm_mmap_read");
         __android_log_print(ANDROID_LOG_INFO,
                             "echidna",
-                            "tinyalsa input lifecycle and read hooks installed");
+                            "tinyalsa mapped target lifecycle hooks installed");
         return true;
     }
 
-    int TinyAlsaHookManager::ReplacementRead(void *pcm, void *data, unsigned int count)
+    int TinyAlsaHookManager::ReplacementRead(void *pcm,
+                                             void *data,
+                                             unsigned int count)
     {
         return ForwardReadBytes(pcm, data, count, gOriginalRead);
     }
 
-    int TinyAlsaHookManager::ReplacementReadi(void *pcm, void *data, unsigned int frames)
+    int TinyAlsaHookManager::ReplacementReadi(void *pcm,
+                                              void *data,
+                                              unsigned int frames)
     {
         return ForwardReadFrames(pcm, data, frames, gOriginalReadi);
     }

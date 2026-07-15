@@ -33,6 +33,7 @@ add_library(echidna SHARED
     src/hooks/audioflinger_hook_manager.cpp
     src/hooks/libc_read_hook_manager.cpp
     src/hooks/tinyalsa_hook_manager.cpp
+    src/hooks/tinyalsa_stream_registry.cpp
     src/hooks/audiohal_hook_manager.cpp
     src/hooks/audio_hook_orchestrator.cpp
     src/utils/proc_maps_scanner.cpp
