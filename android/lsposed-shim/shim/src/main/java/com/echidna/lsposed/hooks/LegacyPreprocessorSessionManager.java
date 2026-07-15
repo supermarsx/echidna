@@ -4,6 +4,7 @@ import android.os.Build;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -681,6 +682,10 @@ final class LegacyPreprocessorSessionManager {
         EffectFailure(String code) {
             super(code);
         }
+
+        EffectFailure(String code, Throwable cause) {
+            super(code, cause);
+        }
     }
 
     static final class DefaultScheduler implements Scheduler {
@@ -754,18 +759,50 @@ final class LegacyPreprocessorSessionManager {
         }
     }
 
-    /** API26-33 hidden AudioEffect boundary. No framework object is touched on hook threads. */
+    interface EffectReflection {
+        EffectHandle create(UUID type, UUID implementation, int sessionId) throws Exception;
+    }
+
+    /** API26+ hidden AudioEffect boundary. No framework object is touched on hook threads. */
     static final class ReflectionEffectFactory implements EffectFactory {
+        private final int sdkInt;
+        private final EffectReflection reflection;
+
+        ReflectionEffectFactory() {
+            this(Build.VERSION.SDK_INT, new AndroidEffectReflection());
+        }
+
+        ReflectionEffectFactory(int sdkInt, EffectReflection reflection) {
+            this.sdkInt = sdkInt;
+            this.reflection = reflection;
+        }
+
         @Override
         public EffectHandle create(int sessionId) throws Exception {
-            if (Build.VERSION.SDK_INT < 26 || Build.VERSION.SDK_INT > 33) {
+            if (sdkInt < 26) {
                 throw new EffectFailure("effect_api_unsupported");
             }
+            try {
+                return reflection.create(TYPE_UUID, IMPLEMENTATION_UUID, sessionId);
+            } catch (InvocationTargetException error) {
+                Throwable cause = error.getCause();
+                if (cause instanceof IllegalArgumentException
+                        || cause instanceof UnsupportedOperationException) {
+                    throw new EffectFailure("effect_unregistered", cause);
+                }
+                throw error;
+            }
+        }
+    }
+
+    private static final class AndroidEffectReflection implements EffectReflection {
+        @Override
+        public EffectHandle create(UUID type, UUID implementation, int sessionId) throws Exception {
             Class<?> effectClass = Class.forName("android.media.audiofx.AudioEffect");
             Constructor<?> constructor = effectClass.getDeclaredConstructor(
                     UUID.class, UUID.class, int.class, int.class);
             constructor.setAccessible(true);
-            Object effect = constructor.newInstance(TYPE_UUID, IMPLEMENTATION_UUID, 0, sessionId);
+            Object effect = constructor.newInstance(type, implementation, 0, sessionId);
             return new ReflectionEffectHandle(effectClass, effect);
         }
     }

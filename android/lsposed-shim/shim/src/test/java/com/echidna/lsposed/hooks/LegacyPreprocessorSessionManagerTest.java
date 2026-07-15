@@ -6,6 +6,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.SecureRandom;
@@ -97,6 +98,84 @@ public final class LegacyPreprocessorSessionManagerTest {
         noControl.factory.next.hasControl = false;
         noControl.start(42);
         noControl.assertDirectFallback("effect_no_control");
+    }
+
+    @Test
+    public void api34RegisteredLegacyEffectUsesRuntimeDescriptorAndControlEvidence() {
+        FakeEffect effect = new FakeEffect();
+        LegacyPreprocessorSessionManager.ReflectionEffectFactory factory =
+                new LegacyPreprocessorSessionManager.ReflectionEffectFactory(
+                        34,
+                        (type, implementation, sessionId) -> {
+                            assertEquals(LegacyPreprocessorSessionManager.TYPE_UUID, type);
+                            assertEquals(
+                                    LegacyPreprocessorSessionManager.IMPLEMENTATION_UUID,
+                                    implementation);
+                            effect.sessionId = sessionId;
+                            return effect;
+                        });
+        Harness harness = new Harness(factory);
+
+        harness.start(84);
+        assertEquals(1, harness.capabilities.requests.size());
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+
+        assertTrue(harness.manager.ownsRoute(harness.record));
+        assertEquals(84, effect.sessionId);
+        assertEquals(1, effect.authorizeCount);
+        assertEquals(1, effect.enableCount);
+    }
+
+    @Test
+    public void api34StableAidlOnlyEffectUnavailabilityKeepsDirectRoute() {
+        LegacyPreprocessorSessionManager.ReflectionEffectFactory factory =
+                new LegacyPreprocessorSessionManager.ReflectionEffectFactory(
+                        34,
+                        (type, implementation, sessionId) -> {
+                            throw new InvocationTargetException(
+                                    new IllegalArgumentException("legacy effect is unregistered"));
+                        });
+        Harness harness = new Harness(factory);
+
+        harness.start(85);
+
+        harness.assertDirectFallback("effect_unregistered");
+        assertTrue(harness.capabilities.requests.isEmpty());
+    }
+
+    @Test
+    public void futureSdkReflectionFailureKeepsDirectRouteWithoutUpperSdkCutoff() {
+        LegacyPreprocessorSessionManager.ReflectionEffectFactory factory =
+                new LegacyPreprocessorSessionManager.ReflectionEffectFactory(
+                        10_000,
+                        (type, implementation, sessionId) -> {
+                            throw new NoSuchMethodException("AudioEffect constructor changed");
+                        });
+        Harness harness = new Harness(factory);
+
+        harness.start(86);
+
+        harness.assertDirectFallback("effect_create_failed");
+        assertTrue(harness.capabilities.requests.isEmpty());
+    }
+
+    @Test
+    public void preApi26StillFailsClosedBeforeReflection() {
+        int[] reflectionCalls = {0};
+        LegacyPreprocessorSessionManager.ReflectionEffectFactory factory =
+                new LegacyPreprocessorSessionManager.ReflectionEffectFactory(
+                        25,
+                        (type, implementation, sessionId) -> {
+                            reflectionCalls[0]++;
+                            return new FakeEffect();
+                        });
+        Harness harness = new Harness(factory);
+
+        harness.start(87);
+
+        harness.assertDirectFallback("effect_api_unsupported");
+        assertEquals(0, reflectionCalls[0]);
     }
 
     @Test
@@ -423,16 +502,24 @@ public final class LegacyPreprocessorSessionManagerTest {
         final ManualScheduler scheduler = new ManualScheduler(clock);
         final LegacyPreprocessorSessionManager.RouteLeases leases =
                 new LegacyPreprocessorSessionManager.RouteLeases();
-        final LegacyPreprocessorSessionManager manager = new LegacyPreprocessorSessionManager(
-                policy,
-                capabilities,
-                factory,
-                clock,
-                diagnostics,
-                scheduler,
-                new FixedRandom(),
-                leases);
+        final LegacyPreprocessorSessionManager manager;
         int directTransforms;
+
+        Harness() {
+            this(null);
+        }
+
+        Harness(LegacyPreprocessorSessionManager.EffectFactory effectFactory) {
+            manager = new LegacyPreprocessorSessionManager(
+                    policy,
+                    capabilities,
+                    effectFactory != null ? effectFactory : factory,
+                    clock,
+                    diagnostics,
+                    scheduler,
+                    new FixedRandom(),
+                    leases);
+        }
 
         void start(int sessionId) {
             manager.onInitialized(record, sessionId, true);
