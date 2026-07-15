@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://echidna.local/schemas/audio-pipeline-result-1.0.0.json",
+  "title": "Echidna audio pipeline benchmark result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_utc",
+    "scope",
+    "methodology",
+    "environment",
+    "effect_inventory",
+    "validations",
+    "performance"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "generated_utc": { "type": "string", "format": "date-time" },
+    "scope": { "type": "string" },
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "warmups_per_scenario",
+        "measured_iterations_per_scenario",
+        "clock",
+        "public_api_path",
+        "clock_is_steady",
+        "clock_tick_ns",
+        "percentile_method",
+        "scenario_seed",
+        "allocations_config_and_pcm_reset_outside_timed_region",
+        "warmups_run_under_configured_load",
+        "compiler_barrier_before_end_timestamp",
+        "output_checksum_after_end_timestamp",
+        "observable_checksum",
+        "strict_deadline_uses",
+        "safety_gate_uses",
+        "safety_factor"
+      ],
+      "properties": {
+        "mode": { "enum": ["quick", "full"] },
+        "warmups_per_scenario": { "type": "integer", "minimum": 1 },
+        "measured_iterations_per_scenario": { "type": "integer", "minimum": 1 },
+        "clock": { "type": "string" },
+        "public_api_path": { "type": "string" },
+        "clock_is_steady": { "type": "boolean" },
+        "clock_tick_ns": { "type": "number", "minimum": 0 },
+        "percentile_method": { "type": "string" },
+        "scenario_seed": { "type": "integer", "minimum": 0 },
+        "allocations_config_and_pcm_reset_outside_timed_region": {
+          "type": "boolean",
+          "const": true
+        },
+        "warmups_run_under_configured_load": { "type": "boolean", "const": true },
+        "compiler_barrier_before_end_timestamp": { "type": "boolean", "const": true },
+        "output_checksum_after_end_timestamp": { "type": "boolean", "const": true },
+        "observable_checksum": { "type": "integer", "minimum": 0 },
+        "strict_deadline_uses": { "type": "string" },
+        "safety_gate_uses": { "type": "string" },
+        "safety_factor": { "type": "number", "minimum": 1 }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "cpu", "logical_cpu_count", "compiler", "build_type", "cxx_flags"],
+      "properties": {
+        "os": { "type": "string" },
+        "cpu": { "type": "string" },
+        "logical_cpu_count": { "type": "integer", "minimum": 0 },
+        "compiler": { "type": "string" },
+        "build_type": { "type": "string" },
+        "cxx_flags": { "type": "string" }
+      }
+    },
+    "effect_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "unavailable", "note"],
+      "properties": {
+        "available": { "type": "array", "items": { "type": "string" } },
+        "unavailable": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": "string" }
+      }
+    },
+    "validations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "effect", "fixture", "passed", "detail", "metrics"],
+        "properties": {
+          "id": { "type": "string" },
+          "effect": { "type": "string" },
+          "fixture": { "type": "string" },
+          "passed": { "type": "boolean" },
+          "detail": { "type": "string" },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": { "type": ["number", "null"] }
+          }
+        }
+      }
+    },
+    "performance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "profile",
+          "path",
+          "fixture",
+          "sample_rate_hz",
+          "channels",
+          "frames_per_buffer",
+          "background_load_threads",
+          "warmup_count",
+          "sample_count",
+          "scenario_seed",
+          "setup_ok",
+          "processing_ok",
+          "error",
+          "latency_us",
+          "per_frame_us",
+          "frames_per_second",
+          "real_time_factor",
+          "deadline_us",
+          "strict_deadline_met",
+          "safety_limit_us",
+          "safety_gate_applies",
+          "safety_gate_passed",
+          "ratios"
+        ],
+        "properties": {
+          "scenario_id": { "type": "string" },
+          "profile": { "type": "string" },
+          "path": { "enum": ["float32", "pcm16_bridge"] },
+          "fixture": { "type": "string" },
+          "sample_rate_hz": { "type": "integer", "minimum": 1 },
+          "channels": { "type": "integer", "minimum": 1, "maximum": 8 },
+          "frames_per_buffer": { "type": "integer", "minimum": 1 },
+          "background_load_threads": { "type": "integer", "minimum": 0 },
+          "warmup_count": { "type": "integer", "minimum": 1 },
+          "sample_count": { "type": "integer", "minimum": 1 },
+          "scenario_seed": { "type": "integer", "minimum": 0 },
+          "setup_ok": { "type": "boolean" },
+          "processing_ok": { "type": "boolean" },
+          "error": { "type": "string" },
+          "latency_us": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mean", "p50", "p95", "p99", "max"],
+            "properties": {
+              "mean": { "type": "number", "minimum": 0 },
+              "p50": { "type": "number", "minimum": 0 },
+              "p95": { "type": "number", "minimum": 0 },
+              "p99": { "type": "number", "minimum": 0 },
+              "max": { "type": "number", "minimum": 0 }
+            }
+          },
+          "per_frame_us": { "type": "number", "minimum": 0 },
+          "frames_per_second": { "type": "number", "minimum": 0 },
+          "real_time_factor": { "type": "number", "minimum": 0 },
+          "deadline_us": { "type": "number", "minimum": 0 },
+          "strict_deadline_met": { "type": "boolean" },
+          "safety_limit_us": { "type": "number", "minimum": 0 },
+          "safety_gate_applies": { "type": "boolean" },
+          "safety_gate_passed": { "type": "boolean" },
+          "ratios": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mean_vs_baseline",
+              "p95_vs_baseline",
+              "p99_vs_baseline",
+              "mean_overhead_vs_baseline_us",
+              "p95_overhead_vs_baseline_us",
+              "p99_overhead_vs_baseline_us",
+              "mean_vs_neutral",
+              "p95_vs_neutral",
+              "p99_vs_neutral",
+              "mean_overhead_vs_neutral_us",
+              "p95_overhead_vs_neutral_us",
+              "p99_overhead_vs_neutral_us",
+              "p95_loaded_vs_unloaded",
+              "p99_loaded_vs_unloaded"
+            ],
+            "properties": {
+              "mean_vs_baseline": { "type": "number", "minimum": 0 },
+              "p95_vs_baseline": { "type": "number", "minimum": 0 },
+              "p99_vs_baseline": { "type": "number", "minimum": 0 },
+              "mean_overhead_vs_baseline_us": { "type": "number" },
+              "p95_overhead_vs_baseline_us": { "type": "number" },
+              "p99_overhead_vs_baseline_us": { "type": "number" },
+              "mean_vs_neutral": { "type": "number", "minimum": 0 },
+              "p95_vs_neutral": { "type": "number", "minimum": 0 },
+              "p99_vs_neutral": { "type": "number", "minimum": 0 },
+              "mean_overhead_vs_neutral_us": { "type": "number" },
+              "p95_overhead_vs_neutral_us": { "type": "number" },
+              "p99_overhead_vs_neutral_us": { "type": "number" },
+              "p95_loaded_vs_unloaded": { "type": "number", "minimum": 0 },
+              "p99_loaded_vs_unloaded": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
