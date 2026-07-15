@@ -49,6 +49,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -57,6 +60,7 @@ import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.LatencyMode
+import com.echidna.app.model.LegacyPreprocessorControlState
 import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
@@ -81,6 +85,7 @@ fun SettingsScreen(
     val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
     val whitelistBindings by viewModel.whitelistBindings.collectAsStateWithLifecycle()
+    val legacyPreprocessor by viewModel.legacyPreprocessorState.collectAsStateWithLifecycle()
 
     var newProfileName by remember { mutableStateOf("") }
     var selectedProfileId by remember { mutableStateOf<String?>(null) }
@@ -157,13 +162,19 @@ fun SettingsScreen(
                 )
             }
 
-            SettingsTab.ENGINE -> EngineSection(
-                settings = settings,
-                onEngineMode = viewModel::setDspEngineMode,
-                onLatencyMode = viewModel::setLatencyMode,
-                onSidetoneEnabled = viewModel::setSidetoneEnabled,
-                onSidetoneLevel = viewModel::setSidetoneLevel
-            )
+            SettingsTab.ENGINE -> {
+                EngineSection(
+                    settings = settings,
+                    onEngineMode = viewModel::setDspEngineMode,
+                    onLatencyMode = viewModel::setLatencyMode,
+                    onSidetoneEnabled = viewModel::setSidetoneEnabled,
+                    onSidetoneLevel = viewModel::setSidetoneLevel
+                )
+                LegacyPreprocessorSection(
+                    state = legacyPreprocessor,
+                    onEnabledChange = viewModel::setLegacyPreprocessorEnabled,
+                )
+            }
 
             SettingsTab.SAFETY -> SafetySection(
                 settings = settings,
@@ -519,6 +530,68 @@ private fun EngineSection(
 }
 
 @Composable
+internal fun LegacyPreprocessorSection(
+    state: LegacyPreprocessorControlState,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    val title = "Legacy AudioFlinger preprocessor (experimental)"
+    val status = when {
+        state.updating && !state.loaded -> "Loading persisted state…"
+        state.updating -> "Saving and confirming…"
+        !state.loaded -> "Unavailable until the control service connects"
+        !state.available -> if (state.enabled) {
+            "Unavailable — last confirmed enabled"
+        } else {
+            "Unavailable — last confirmed disabled"
+        }
+        state.enabled -> "Attachment permission enabled"
+        else -> "Attachment permission disabled (default)"
+    }
+    val accessibilityState = when {
+        state.updating -> "Updating; last confirmed ${if (state.enabled) "on" else "off"}"
+        !state.available -> "Unavailable; last confirmed ${if (state.enabled) "on" else "off"}"
+        state.enabled -> "On; confirmed by control service"
+        else -> "Off; confirmed by control service"
+    }
+
+    SettingsSection(title = "Experimental Capture Attachment") {
+        ToggleRow(
+            title = title,
+            description = "Permit LSPosed to request authorized attachment for individual " +
+                "AudioRecord sessions. Enabling this does not prove the effect is loaded, " +
+                "active, or processing audio.",
+            checked = state.enabled,
+            enabled = state.loaded && state.available && !state.updating,
+            stateDescription = accessibilityState,
+            onCheckedChange = onEnabledChange,
+        )
+        StatusPill(text = status)
+        state.error?.let { error ->
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Text(
+            text = "Active processing still requires staged signer trust and effect registration " +
+                "from a prior boot, a restart, a supported legacy HIDL effects factory, LSPosed " +
+                "for the target app, and fresh route-matched mutation proof.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Current authorization is limited to trusted, explicitly whitelisted user 0 " +
+                "targets with the LSPosed capture owner. Device behavior remains unproven; " +
+                "Stable-AIDL-only devices are unsupported. The switch itself is not an SDK-level " +
+                "compatibility verdict; runtime HIDL and effect evidence determine eligibility.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
 private fun DiagnosticsSection(
     settings: SettingsState,
     onDebugMode: (Boolean) -> Unit,
@@ -811,7 +884,9 @@ private fun ToggleRow(
     title: String,
     description: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    stateDescription: String = if (checked) "On" else "Off",
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -826,7 +901,15 @@ private fun ToggleRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            modifier = Modifier.semantics {
+                contentDescription = title
+                this.stateDescription = stateDescription
+            },
+        )
     }
 }
 

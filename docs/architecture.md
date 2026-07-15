@@ -118,7 +118,7 @@ PCM back in place. All hooking is gated on `hooksEnabled()` **and**
 | OpenSL ES | Operational candidate | Recorder sink PCM descriptor and tested wrapper lifecycle. |
 | tinyalsa | Operational candidate | `pcm_open` configuration. |
 | LSPosed Java `AudioRecord` | Operational candidate | Java sample-rate, channel-count, and format getters. |
-| Legacy input preprocessor effect ABI | Registered boundary | ABI/lifecycle/audio/RT tests pass; packaged and next-boot registered only for eligible system/vendor HIDL configs; default-off and unattached. |
+| Legacy input preprocessor effect ABI | Experimental attachment candidate | ABI/lifecycle/audio/RT tests pass; eligible system/vendor HIDL configs can stage next-boot registration, and the default-off LSPosed path requests authorized per-session attachment. No device audio proof. |
 | Native `AudioRecord` | Developer contract only | Requires `ECHIDNA_AR_SR`, `ECHIDNA_AR_CH`, and `ECHIDNA_AR_FORMAT`; normal app specialization does not provide them. |
 | libc raw-device read | Developer contract only | Requires `ECHIDNA_LIBC_SR`, `ECHIDNA_LIBC_CH`, and `ECHIDNA_LIBC_FORMAT`. |
 | Audio HAL | Unsupported | `unsupported_injection_boundary`; vendor stream objects live behind audioserver. |
@@ -134,7 +134,9 @@ flowchart TB
     B["OpenSL ES"] --> P
     C["tinyalsa"] --> P
     J["LSPosed Java AudioRecord"] --> Q["dedicated shim JNI + packaged DSP"]
-    L["legacy input preprocessor<br/>default-off registry"] -.-> R["not session-attached"]
+    L["legacy input preprocessor<br/>default-off permission"]
+    R["authorized LSPosed<br/>session attachment"]
+    L -.-> R
     D["native AudioRecord / libc<br/>developer contract"] -.-> P
     X["Audio HAL / AudioFlinger<br/>unsupported boundary"] -.-> N["fail closed + telemetry"]
     P --> H["dlopen libech_dsp.so → dsp.process()"]
@@ -189,8 +191,10 @@ The native superbuild targets **four** shared objects per ABI — `libechidna.so
 `armeabi-v7a`, and `x86_64`. That is 12 generated targets. Release tooling carries the engine,
 DSP, and preprocessor through the Magisk module and shim JNI/DSP through the LSPosed APK. The
 preprocessor remains in inert ABI staging until runtime evidence proves a legacy-HIDL system/vendor
-registry; the generated next-boot overlay adds only library/effect registration and never attaches
-or enables it on a capture session. The inline-hook
+registry. The generated next-boot overlay adds only library/effect registration. Separately, the
+default-off companion setting can permit the LSPosed shim to request a short-lived capability and
+attach the registered effect to one eligible `AudioRecord` session. It does not auto-apply the
+effect or prove load, enablement, or mutation on a device. The inline-hook
 trampoline support differs by ABI (t2-e11):
 
 - **arm64-v8a** — full trampoline (LDR X16 / BR X16 with relocation fixups); the

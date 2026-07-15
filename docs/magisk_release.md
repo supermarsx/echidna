@@ -203,9 +203,9 @@ auto-apply, or hot audioserver restart tokens.
 
 This is still device-gated. The repository has not yet proved a real device's active HIDL host and
 config, post-fs/mount ordering, magic-mount file labels/linker namespace, factory descriptor,
-process maps, or AVC-free load. Host fixtures cover activation rollback and first-OTA refusal, but
-no session attachment or effect enablement exists, so registration alone does not transform capture
-audio.
+process maps, or AVC-free load. Host fixtures cover activation rollback and first-OTA refusal.
+Registration alone never attaches or enables the effect; only the separate default-off LSPosed
+session manager can request authorized attachment, and no device audio transformation is proved.
 
 Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
 `echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem

@@ -349,7 +349,9 @@ Current route expectations:
 - Audio HAL and AudioFlinger fail closed as `unsupported_injection_boundary`; Diagnostics must not
   be interpreted as proof that those routes transform audio.
 - The legacy input preprocessor is packaged and may be registered for the next boot on a proven
-  legacy-HIDL system/vendor registry. It cannot yet be selected or session-attached by the app.
+  legacy-HIDL system/vendor registry. The default-off **Legacy AudioFlinger preprocessor
+  (experimental)** setting only permits authorized LSPosed attachment for eligible user-0
+  `AudioRecord` sessions; it is not processing proof.
 
 !!! warning "Assign one capture owner per process"
     Zygisk receives UID-scoped v2 policy over an authenticated socket; LSPosed receives
@@ -373,7 +375,7 @@ Current route expectations:
 | Live Zygisk module load + real hook install on arm64 primary | **Device-gated / NOT verified here** |
 | LSPosed shim injection + authenticated Binder policy under SELinux | **Device-gated / NOT verified here** |
 | Legacy preprocessor packaging/registration | **Implemented for eligible system/vendor HIDL devices; device load proof pending** |
-| Legacy preprocessor session attachment/enablement | **Not implemented; default-off** |
+| Legacy preprocessor session attachment/enablement | **Default-off LSPosed candidate implemented; device proof pending** |
 | SELinux enforcement + supported capture candidates on real hardware | **Device-gated / NOT verified here** |
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |

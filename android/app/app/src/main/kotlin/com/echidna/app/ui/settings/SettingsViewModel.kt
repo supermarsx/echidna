@@ -4,9 +4,15 @@ import androidx.lifecycle.ViewModel
 import com.echidna.app.data.ControlStateRepository
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.LatencyMode
+import com.echidna.app.model.LegacyPreprocessorControlState
 import kotlinx.coroutines.flow.StateFlow
 
-class SettingsViewModel : ViewModel() {
+class SettingsViewModel(
+    val legacyPreprocessorState: StateFlow<LegacyPreprocessorControlState> =
+        ControlStateRepository.legacyPreprocessorState,
+    private val legacyPreprocessorSetter: (Boolean) -> Unit =
+        ControlStateRepository::setLegacyPreprocessorEnabled,
+) : ViewModel() {
     private val repo = ControlStateRepository
 
     val engineStatus = repo.engineStatus
@@ -34,6 +40,8 @@ class SettingsViewModel : ViewModel() {
     fun setSidetoneEnabled(enabled: Boolean) = repo.setSidetoneEnabled(enabled)
 
     fun setSidetoneLevel(levelDb: Float) = repo.updateSidetone(levelDb)
+
+    fun setLegacyPreprocessorEnabled(enabled: Boolean) = legacyPreprocessorSetter(enabled)
 
     fun setDebugMode(enabled: Boolean) = repo.setDebugMode(enabled)
 

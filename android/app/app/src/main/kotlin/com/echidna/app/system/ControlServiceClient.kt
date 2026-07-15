@@ -36,6 +36,15 @@ data class ControlServiceSyncSnapshot(
     val telemetryOptIn: Boolean,
 )
 
+sealed interface LegacyPreprocessorServiceResult {
+    data class Success(val enabled: Boolean) : LegacyPreprocessorServiceResult
+
+    data class Failure(
+        val message: String,
+        val confirmedEnabled: Boolean? = null,
+    ) : LegacyPreprocessorServiceResult
+}
+
 class ControlServiceClient(private val context: Context) {
     // The control service is hosted inside THIS APK (com.echidna.app); bind the
     // in-app component rather than the former phantom com.echidna.control package.
@@ -347,10 +356,76 @@ class ControlServiceClient(private val context: Context) {
         private const val TAG = "ControlServiceClient"
     }
 
+    /** Reads the separate, service-persisted attachment gate without deriving it from policy. */
+    fun readLegacyPreprocessorEnabled(): LegacyPreprocessorServiceResult {
+        val connectedService = service ?: return LegacyPreprocessorServiceResult.Failure(
+            "Control service is not connected.",
+        )
+        return try {
+            LegacyPreprocessorServiceResult.Success(
+                connectedService.isLegacyPreprocessorEnabled,
+            )
+        } catch (exception: DeadObjectException) {
+            legacyPreprocessorFailure("read", connectedService, exception)
+        } catch (exception: RemoteException) {
+            legacyPreprocessorFailure("read", connectedService, exception)
+        } catch (exception: RuntimeException) {
+            legacyPreprocessorFailure("read", connectedService, exception)
+        }
+    }
+
+    /**
+     * Persists the attachment gate and reads it back before reporting success. A rejected or
+     * mismatched write returns the actual confirmed value so callers never display optimistic
+     * state.
+     */
+    fun updateLegacyPreprocessorEnabled(enabled: Boolean): LegacyPreprocessorServiceResult {
+        val connectedService = service ?: return LegacyPreprocessorServiceResult.Failure(
+            "Control service is not connected.",
+        )
+        return try {
+            val accepted = connectedService.setLegacyPreprocessorEnabled(enabled)
+            val confirmed = connectedService.isLegacyPreprocessorEnabled
+            when {
+                !accepted -> LegacyPreprocessorServiceResult.Failure(
+                    "The control service rejected the attachment setting.",
+                    confirmed,
+                )
+                confirmed != enabled -> LegacyPreprocessorServiceResult.Failure(
+                    "The control service did not persist the requested attachment setting.",
+                    confirmed,
+                )
+                else -> LegacyPreprocessorServiceResult.Success(confirmed)
+            }
+        } catch (exception: DeadObjectException) {
+            legacyPreprocessorFailure("update", connectedService, exception)
+        } catch (exception: RemoteException) {
+            legacyPreprocessorFailure("update", connectedService, exception)
+        } catch (exception: RuntimeException) {
+            legacyPreprocessorFailure("update", connectedService, exception)
+        }
+    }
+
     private fun markDisconnected() {
         bound.set(false)
         service = null
         _connectionState.value = false
+    }
+
+    private fun legacyPreprocessorFailure(
+        action: String,
+        connectedService: IEchidnaControlService,
+        exception: Exception,
+    ): LegacyPreprocessorServiceResult.Failure {
+        Log.w(TAG, "Failed to $action legacy preprocessor attachment gate", exception)
+        if (exception is DeadObjectException || !connectedService.asBinder().isBinderAlive) {
+            markDisconnected()
+            releaseBinding()
+            bind()
+        }
+        return LegacyPreprocessorServiceResult.Failure(
+            "Unable to $action the attachment setting. Reconnect and try again.",
+        )
     }
 
     private fun releaseBinding() {

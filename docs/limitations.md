@@ -113,7 +113,7 @@ of claiming that every manager is operational:
 | OpenSL ES | Operational candidate; recorder sink provides the PCM descriptor. |
 | tinyalsa | Operational candidate; `pcm_open` config provides metadata. |
 | LSPosed Java `AudioRecord` | Operational candidate through Java getters and dedicated JNI. |
-| Legacy input preprocessor | Packaged and conditionally registered for next boot; default-off and not session-attached. |
+| Legacy input preprocessor | Packaged and conditionally registered for next boot; default-off authorized LSPosed attachment candidate with no device audio proof. |
 | Native `AudioRecord` | Developer contract only (`ECHIDNA_AR_SR/CH/FORMAT`). |
 | libc raw-device read | Developer contract only (`ECHIDNA_LIBC_SR/CH/FORMAT`). |
 | Audio HAL | Unsupported (`unsupported_injection_boundary`). |
@@ -195,7 +195,7 @@ To keep expectations honest:
 | Native `processBlock` | **Verified** on rooted Android 13/14 emulators |
 | Historical native `AudioRecord.read` slice | Passed before current route redesign; not reachability proof |
 | AAudio/OpenSL/tinyalsa/LSPosed capture | **Device-gated** — not validated here |
-| Legacy input preprocessor | **Device-gated** — packaging/registration exist for proven system/vendor HIDL configs; session attachment and device load/audio proof remain |
+| Legacy input preprocessor | **Device-gated** — packaging/registration and a default-off authorized LSPosed session manager exist for proven system/vendor HIDL configs; device load/enable/audio proof remains |
 | Native AudioRecord/libc | **Developer contract only** — not a normal-flow route |
 | Audio HAL / AudioFlinger transform | **Unsupported injection boundary** |
 | SELinux interaction for supported routes | **Device-gated** — per-device |

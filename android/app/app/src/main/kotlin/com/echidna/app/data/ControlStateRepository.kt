@@ -13,6 +13,7 @@ import com.echidna.app.model.EffectModule
 import com.echidna.app.model.FormantState
 import com.echidna.app.model.LatencyBucket
 import com.echidna.app.model.LatencyMode
+import com.echidna.app.model.LegacyPreprocessorControlState
 import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.MusicalKey
 import com.echidna.app.model.MusicalScale
@@ -27,10 +28,12 @@ import com.echidna.app.model.TunerState
 import com.echidna.app.model.WhitelistBindings
 import com.echidna.app.system.ControlServiceClient
 import com.echidna.app.system.ControlServiceSyncSnapshot
+import com.echidna.app.system.LegacyPreprocessorServiceResult
 import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
 import com.echidna.app.ui.diagnostics.NoteUtils
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
@@ -207,6 +210,11 @@ object ControlStateRepository {
     private val _settingsState = MutableStateFlow(SettingsState())
     val settingsState: StateFlow<SettingsState> = _settingsState.asStateFlow()
 
+    private val _legacyPreprocessorState = MutableStateFlow(LegacyPreprocessorControlState())
+    val legacyPreprocessorState: StateFlow<LegacyPreprocessorControlState> =
+        _legacyPreprocessorState.asStateFlow()
+    private val legacyPreprocessorOperation = AtomicLong(0L)
+
     private var observersStarted = false
 
     fun initialize(appContext: Context) {
@@ -236,7 +244,12 @@ object ControlStateRepository {
             synchronizeServiceState()
             scope.launch {
                 serviceClient.connectionState.collect { connected ->
-                    if (connected) fetchWhitelistBindings()
+                    if (connected) {
+                        fetchWhitelistBindings()
+                        refreshLegacyPreprocessorState(showLoading = true)
+                    } else {
+                        markLegacyPreprocessorDisconnected()
+                    }
                 }
             }
             scope.launch {
@@ -262,6 +275,7 @@ object ControlStateRepository {
                         // Module/SELinux/HAL probes change slowly — refresh every ~10s.
                         if (tick % 5L == 0L) {
                             fetchWhitelistBindings()
+                            refreshLegacyPreprocessorState(showLoading = false)
                             serviceClient.getModuleStatus()?.let { json ->
                                 TelemetryParser.parseModuleStatus(json)?.let { applyModuleStatus(it) }
                             }
@@ -561,6 +575,24 @@ object ControlStateRepository {
     fun setRemindCompatibilityProbe(enabled: Boolean) {
         _remindCompatibilityProbe.value = enabled
         commitSettingsChange()
+    }
+
+    fun setLegacyPreprocessorEnabled(enabled: Boolean) {
+        if (!::serviceClient.isInitialized) return
+        val current = _legacyPreprocessorState.value
+        if (
+            !current.loaded || !current.available || current.updating || current.enabled == enabled
+        ) {
+            return
+        }
+        val operation = legacyPreprocessorOperation.incrementAndGet()
+        _legacyPreprocessorState.value = current.copy(updating = true, error = null)
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                serviceClient.updateLegacyPreprocessorEnabled(enabled)
+            }
+            applyLegacyPreprocessorResult(operation, result)
+        }
     }
 
     fun runCompatibilityProbe() {
@@ -1006,6 +1038,61 @@ object ControlStateRepository {
             persistPresets()
         }
         refreshSettingsState()
+    }
+
+    private suspend fun refreshLegacyPreprocessorState(showLoading: Boolean) {
+        if (!::serviceClient.isInitialized || !serviceClient.isBound()) return
+        val current = _legacyPreprocessorState.value
+        // A periodic read must not supersede an in-flight write and hide its confirmed result.
+        if (current.updating) return
+        val operation = legacyPreprocessorOperation.incrementAndGet()
+        if (showLoading && !current.loaded) {
+            _legacyPreprocessorState.value = current.copy(
+                available = false,
+                updating = true,
+                error = null,
+            )
+        }
+        val result = withContext(Dispatchers.IO) {
+            serviceClient.readLegacyPreprocessorEnabled()
+        }
+        applyLegacyPreprocessorResult(operation, result)
+    }
+
+    private fun applyLegacyPreprocessorResult(
+        operation: Long,
+        result: LegacyPreprocessorServiceResult,
+    ) {
+        if (legacyPreprocessorOperation.get() != operation) return
+        val previous = _legacyPreprocessorState.value
+        _legacyPreprocessorState.value = when (result) {
+            is LegacyPreprocessorServiceResult.Success -> LegacyPreprocessorControlState(
+                enabled = result.enabled,
+                loaded = true,
+                available = true,
+            )
+            is LegacyPreprocessorServiceResult.Failure -> previous.copy(
+                enabled = result.confirmedEnabled ?: previous.enabled,
+                loaded = result.confirmedEnabled != null || previous.loaded,
+                available = serviceClient.isBound(),
+                updating = false,
+                error = result.message,
+            )
+        }
+    }
+
+    private fun markLegacyPreprocessorDisconnected() {
+        legacyPreprocessorOperation.incrementAndGet()
+        val previous = _legacyPreprocessorState.value
+        _legacyPreprocessorState.value = previous.copy(
+            available = false,
+            updating = false,
+            error = if (previous.loaded) {
+                "Control service disconnected. The switch shows the last confirmed value."
+            } else {
+                null
+            },
+        )
     }
 
     /**

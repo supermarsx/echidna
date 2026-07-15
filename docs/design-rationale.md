@@ -107,7 +107,8 @@ arm64-v8a, armeabi-v7a, and x86_64; zero were being produced correctly.
  produces four Android targets per ABI. Release delivery transports all four families. The Magisk
  module consumes engine/DSP pairs plus inert per-ABI `libechidna_preproc.so` staging, while the
  LSPosed APK consumes dedicated JNI/DSP pairs. Eligible legacy-HIDL system/vendor devices can stage
- an exact next-boot registry overlay; no automatic application or session attachment is added.
+ an exact next-boot registry overlay. No automatic application is added; the separate default-off
+ companion permission allows only authorized LSPosed per-session attachment.
  Per-ABI builds also enable ABI-specific SIMD and are the only
 way the trampoline code (which is inherently architecture-specific — see
 [Architecture](architecture.md#multi-abi-hooking)) can be compiled and shipped for

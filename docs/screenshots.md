@@ -11,7 +11,8 @@ UI reference.
   real captures from the companion app's fallback state using `adb exec-out
   screencap` at 1080 x 2400.
 - `07-settings.png` is a **generated UI documentation screenshot**, not a
-  device capture. It reflects the current settings state/view-model surface:
+  device capture. It predates the experimental legacy-preprocessor row and reflects the remaining
+  settings state/view-model surface:
   profiles, startup behavior, engine mode, safety, diagnostics, notification,
   Quick Settings, widget controls, and the compatibility/whitelist actions.
 
@@ -119,11 +120,13 @@ an active hook.
 ![Generated Settings docs screenshot](assets/screenshots/07-settings.png)
 
 This image is a generated UI documentation screenshot, not an emulator or device
-capture. It mirrors the current settings organization exposed by
+capture. It predates the experimental **Legacy AudioFlinger preprocessor** row and mirrors the
+remaining settings organization exposed by
 `SettingsViewModel` and `SettingsState`: settings profiles, startup behavior,
 engine mode, latency, sidetone, master/bypass controls, fail-closed safety,
 diagnostic logging, persistent notification, Quick Settings, widget controls,
-and the buttons for the Compatibility Wizard and Per-App Whitelist. Engine mode
+and the buttons for the Compatibility Wizard and Per-App Whitelist. The omitted experimental row
+only permits authorized LSPosed attachment and is not device processing proof. Engine mode
 is persisted through the control service; Compatibility mode asks the native
 hook gate to stand down so fragile devices can use the fallback path.
 

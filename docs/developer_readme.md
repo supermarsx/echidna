@@ -11,8 +11,9 @@ scaffolding).
 > (Android SDK, NDK r27, JDK 21, Gradle 8.5): the companion and shim APKs build, the native
 > superbuild generates four libraries per ABI, all 12 native outputs have a release transport, and
 > host DSP/effect tests pass. `libechidna_preproc.so` is packaged for three ABIs and can be registered
-> for the next boot on proven legacy-HIDL system/vendor configurations. It remains default-off and is
-> not session-attached or enabled. Rooted Android
+> for the next boot on proven legacy-HIDL system/vendor configurations. It remains default-off; an
+> experimental companion setting only permits authorized LSPosed per-session attachment and is not
+> device load, enablement, or processing proof. Rooted Android
 > 13/14 emulators also prove the in-app control-service native `processBlock` path. A native
 > `AudioRecord.read` interception slice passed before the current explicit-contract redesign and
 > is historical evidence only. Magisk flashing, live LSPosed injection, current capture routes,
@@ -295,7 +296,7 @@ The route contract is explicit:
 | OpenSL ES | Operational candidate | Recorder sink PCM descriptor. |
 | tinyalsa | Operational candidate | `pcm_open` config. |
 | LSPosed Java `AudioRecord` | Operational candidate | Java stream getters and dedicated JNI. |
-| Legacy input preprocessor effect ABI | Registered boundary | Packaged and next-boot registered only for proven legacy-HIDL system/vendor configs; never auto-applied or session-attached. |
+| Legacy input preprocessor effect ABI | Experimental attachment candidate | Packaged and next-boot registered only for proven legacy-HIDL system/vendor configs; a default-off LSPosed path can request authorized per-session attachment. |
 | Native `AudioRecord` | Developer contract only | `ECHIDNA_AR_SR/CH/FORMAT`; no normal-flow producer. |
 | libc raw-device read | Developer contract only | `ECHIDNA_LIBC_SR/CH/FORMAT`; no normal-flow producer. |
 | Audio HAL | Unsupported | `unsupported_injection_boundary`. |
@@ -443,9 +444,18 @@ registry outside the auto-mounted tree only after a registered `lshal` factory P
 `/proc` maps/ELF identity pass. On the next boot, `post-fs-data` removes stale backing and validates
 fingerprint, stock config, registry, library, key, and metadata before exposing the transient config
 to Magisk's later mount phase. Any mismatch leaves the stock config active; Stable-AIDL-only,
-ambiguous-PID, and active-ODM configurations fail closed. Registration adds no
-`preprocess`/`pre_processing` application; session attachment, device enablement, linker/label proof,
-and enforced-SELinux audio proof remain.
+ambiguous-PID, and active-ODM configurations fail closed. Registration adds no automatic
+`preprocess`/`pre_processing` application. The companion's **Legacy AudioFlinger preprocessor
+(experimental)** switch is a separate, companion-UID-only persisted flag. Enabling it only permits
+LSPosed to request a short-lived capability and attach the registered effect to an eligible
+`AudioRecord` session; policy/profile updates do not overwrite the flag.
+
+Attachment still requires signer trust and effect registration staged on a prior boot, a restart,
+a supported legacy HIDL factory, an LSPosed-injected target, an explicit trusted user-0 whitelist
+entry with the LSPosed capture owner, and fresh route-matched mutation evidence. Stable-AIDL-only
+devices remain unsupported. The switch itself does not make an SDK-level compatibility verdict;
+runtime HIDL and effect evidence determine eligibility. The switch is permission, not proof of
+effect load, enablement, linker/label access, enforced-SELinux operation, or transformed audio.
 
 ## Status: verified vs. needs a device
 
@@ -480,7 +490,7 @@ and enforced-SELinux audio proof remain.
 | Live Zygisk module load + real hook install on arm64 primary | **Release-device-only / NOT verified here** |
 | LSPosed shim injection + authenticated Binder policy under SELinux | **Release-device-only / NOT verified here** |
 | Legacy input preprocessor registration | **Implemented for proven legacy-HIDL system/vendor configs; device load proof pending** |
-| Legacy input preprocessor session attachment/enablement | **Not implemented; default-off** |
+| Legacy input preprocessor session attachment/enablement | **Default-off LSPosed candidate implemented; physical-device load, activation, and audio proof pending** |
 | SELinux enforcement and supported capture candidates on real hardware | **Release-device-only / NOT verified here** |
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |

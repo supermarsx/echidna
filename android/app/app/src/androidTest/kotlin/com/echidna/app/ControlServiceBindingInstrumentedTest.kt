@@ -72,17 +72,24 @@ class ControlServiceBindingInstrumentedTest {
     }
 
     @Test
-    fun legacyPreprocessorGatePersistsOutsidePolicyUpdates() {
+    fun legacyPreprocessorGatePersistsAcrossRebindAndOutsidePolicyUpdates() {
         val service = bind()
         assertTrue(service.setLegacyPreprocessorEnabled(true))
         assertTrue(service.isLegacyPreprocessorEnabled)
 
-        service.setMasterEnabled(false)
-        service.setMasterEnabled(true)
-        assertTrue("full control mutations must not erase the separate gate", service.isLegacyPreprocessorEnabled)
+        serviceRule.unbindService()
+        val rebound = bind()
+        assertTrue("rebind must reload the persisted gate", rebound.isLegacyPreprocessorEnabled)
 
-        assertTrue(service.setLegacyPreprocessorEnabled(false))
-        assertFalse(service.isLegacyPreprocessorEnabled)
+        rebound.setMasterEnabled(false)
+        rebound.setMasterEnabled(true)
+        assertTrue(
+            "full control mutations must not erase the separate gate",
+            rebound.isLegacyPreprocessorEnabled,
+        )
+
+        assertTrue(rebound.setLegacyPreprocessorEnabled(false))
+        assertFalse(rebound.isLegacyPreprocessorEnabled)
     }
 
     @Test
