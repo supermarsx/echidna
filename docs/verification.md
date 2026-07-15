@@ -5,8 +5,9 @@ capture-path interception is a very hard, device-specific problem, and Echidna i
 not to work on many phones even when every artifact builds, installs, and launches
 correctly. The matrix below separates what was **really built, run, and measured on this
 build host, stock emulator, and rooted emulators** from what still needs release-device
-validation: full Magisk/LSPosed install, physical-device SELinux/HAL behavior, and
-broader hook coverage.
+validation: full Magisk/LSPosed install, physical-device SELinux behavior, and
+supported capture-route coverage. Audio HAL and AudioFlinger are explicitly unsupported
+boundaries rather than unverified routes.
 
 > **Reading guide.** Every row in the "Verified" table below corresponds to a real build,
 > test run, or on-device action with recorded output. The "Still not verified" section
@@ -18,7 +19,7 @@ NDK r27 (`27.0.12077973`), JBR OpenJDK 21, Gradle 8.5 (wrapper), CMake 4.2.1 / N
 apksigner (build-tools 34.0.0), Docker Desktop 4.72.0 (engine 29.4.2), stock emulator
 `emulator-5554` (AVD `echidna_e2e`, API 34 / Android 14, x86_64, **unrooted**), plus rooted
 x86_64 AVDs `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) for the native
-`processBlock` and `AudioRecord.read` interception probes.
+`processBlock` testing and the historical, pre-redesign `AudioRecord.read` interception probes.
 
 ---
 
@@ -26,22 +27,28 @@ x86_64 AVDs `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) for the 
 
 | Check | Method | Result |
 | --- | --- | --- |
-| **Signed release APK** | `./gradlew clean :app:assembleRelease` with a real (throwaway) 2048-bit RSA release key | **PASS** — `app-release.apk` = **14,729,186 B (~14.7 MB)**; `apksigner verify` PASS; signer DN `CN=Echidna Release Gate, O=Echidna, C=US` (a real release key, not the Android debug key) |
-| **Debug APK** | `:app:assembleDebug` in the same clean run | **PASS** — `app-debug.apk` = **20,648,459 B (~20.6 MB)**, green |
-| **Per-ABI native libs** | `tools/build_native_ndk.sh` (NDK r27), arch-checked with `llvm-readelf -h` | **PASS** — all **6** `.so`: `{libech_dsp, libechidna}.so` × `arm64-v8a` (AArch64), `armeabi-v7a` (ARM), `x86_64` (x86-64), each arch-confirmed. BoringSSL test/tool targets excluded (0 built; only the 2 libs link) |
-| **Flashable Magisk zip** | `tools/build_magisk_module.sh` | **PASS** — flashable zip, **21 entries**, single module `id=echidna`, `minMagisk=24000`; `zygisk/<abi>.so` ×3 + `libs/<abi>/libech_dsp.so` ×3 + `META-INF` installer + `customize.sh`/`post-fs-data.sh`/`service.sh`/`module.prop`. All packaged `.so` are Android ELFs, arch-matched, no host ELF leaked |
-| **Docker native-build → magisk pipeline** | `docker compose build native-build` then `run native-build`, then `magisk-packager` | **PASS** — the container reproduced all **6** `.so` (arch/size matching the host build) and produced `out/echidna-magisk.zip` (8,537,632 B) with the correct layout. Full native → magisk chain works end-to-end in containers |
-| **Host native tests** | `cmake -S native -B … -DBUILD_TESTING=ON`, then root `ctest` | **PASS 5/5** — `dsp_preset_test`, `dsp_engine_test`, `dsp_effects_test` (6 DSP suites: pitch/formant/auto-tune/gate/compressor/EQ), `zygisk_dsp_smoke_test` (synth-PCM → int16↔float → real DSP-block harness with the fail-closed passthrough guard), and `capture_buffer_router_test` (production hook-body router for int16/float PCM). Exit 0 each |
+| **Signed release APKs** | Companion + shim `assembleRelease` with a disposable release key, then `tools/verify_android_artifacts.py` with its certificate SHA-256 | **PASS** — both APK signatures verify, both match the pinned non-debug certificate, and exact package/native payload checks pass. Hosted publication now performs the same fail-closed signing preflight and verification |
+| **Debug APK** | `:app:assembleDebug` plus exact payload verification | **PASS** — the companion contains only `libechidna_control_jni.so` for four ABIs; engine/DSP/shim JNI libraries do not leak into it |
+| **Per-ABI native libs** | NDK r27 superbuild, arch-checked with `llvm-readelf -h` | **PASS** — four targets × three ABIs: engine, DSP, shim JNI, and `libechidna_preproc.so`. Release tooling transports/verifies only the nine engine/DSP/shim-JNI artifacts; the Phase 1 preprocessor is unshipped |
+| **Flashable Magisk zip** | `tools/build_magisk_module.sh` plus exact archive verification | **PASS** — current archive has **25 entries**, one `id=echidna`, `minMagisk=24000`, three Zygisk engines, three DSP libraries, installer/bootstrap/watchdog files, narrow `sepolicy.rule`, status helper, and license. No host ELF or shim JNI leaks into the module |
+| **Docker native-build → magisk pipeline** | `docker compose build native-build` then `run native-build`, then `magisk-packager` | **PASS** — the packager consumed only the engine/DSP pairs into the verified module layout; preprocessor registration/session attachment is not part of the package |
+| **Host native tests** | Native CTest suites | **PASS** — DSP, routing, v2 protocol/generation, authenticated lifecycle/reconnect, and legacy preprocessor ABI/lifecycle/audio/no-allocation tests pass |
 | **App unit tests** | `./gradlew :app:testDebugUnitTest` (Robolectric, headless) | **PASS 24/24** — preset serialize/round-trip, status/control/whitelist JSON parsing, repository CRUD |
-| **Service unit tests** | `./gradlew :service:testDebugUnitTest` (headless) | **PASS 11/11** — unified control-plane snapshot, master/bypass/panic propagation, fail-closed whitelist default |
+| **Service unit tests** | `./gradlew :service:testDebugUnitTest` (headless) | **PASS** — strict v2/default/owner/control validation, persistence, panic expiry, authenticated scoped delivery, generation rules, and fail-closed defaults |
 | **Android instrumentation** | `:app:connectedDebugAndroidTest` on `emulator-5554` (clean install) | **PASS 12/12** — real in-APK `EchidnaControlService` bind + AIDL round-trips (control-state read, master, panic, whitelist write/read-back, `pushProfileSnapshot`/`listProfiles`, `getModuleStatus`), profile-switch flow, QS-tile state source, Compose dashboard render |
 | **Rooted Android app instrumentation** | `.\gradlew.bat :app:connectedDebugAndroidTest` on `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) | **PASS 13/13 on both** — includes the real in-APK service bind and `processBlockAppliesPresetWhenNativeEngineIsAvailable`, which applies a native cut preset and asserts finite, measurably attenuated output when `libechidna.so`/`libech_dsp.so` are reachable |
-| **Rooted `AudioRecord` interception probe** | `.\gradlew.bat :interception-probe:connectedDebugAndroidTest` on the same rooted emulators | **PASS 1/1 on both** — the probe opens Android `AudioRecord`, reads real PCM, and observes current-process hook evidence with `processed=1`; telemetry hook metadata is checked when available |
+| **Historical rooted `AudioRecord` interception probe** | `.\gradlew.bat :interception-probe:connectedDebugAndroidTest` on the same rooted emulators | **PASS 1/1 on both before the current redesign** — useful evidence for the older interception slice, but not proof that current native `AudioRecord` is reachable without its explicit PCM contract |
 | **App install + launch** | `adb install -r app-debug.apk`; launch `.MainActivity` | **PASS** — install `Success`, `MainActivity` resumed, process stays up |
 | **Crash-free relaunch** | 8 cold relaunches (`am force-stop` + `am start`) with a persisted `echidna_presets.json` present, scanning logcat | **PASS 8/8** — 0 crashes, process alive every launch. This is the exact trigger of the startup crash found by instrumentation (see highlight below) |
 | **In-app screen navigation** | `adb input` nav + `uiautomator dump` across screens | **PASS (honest)** — 6 screens rendered live and navigated (Dashboard, Preset Manager, Effects Editor, Diagnostics, Settings, Compatibility Wizard) with correct *module-not-active* state on the unrooted emulator; the Whitelist Editor was wired into the nav graph afterward (t2-e27) and verified to render; the QS tile is a registered `TileService` that cannot be driven headless-unrooted (its state source is unit-verified) |
 | **In-app control service bind** | `dumpsys activity services com.echidna.app` | **PASS** — live `ServiceRecord` for `EchidnaControlService` with an active `ConnectionRecord` (BIND_AUTO_CREATE); the app binds its in-app control service at runtime |
 | **Format gate** | `clang-format --dry-run -Werror` over all tracked native/android C/C++ | **PASS** — 0 non-conformant of 82 files |
+
+The final full host performance report (200 warmups, 1,200 measured calls, load 0 and 8) passed
+40/40 functional checks and 592 scenarios with zero strict-deadline misses and zero safety-gate
+failures. Its JSON contract validation passes. These are host processing-cost results only, not
+Android callback, HAL, acoustic, or end-to-end call latency. See
+[Audio pipeline performance testing](performance-testing.md).
 
 ### Latest rooted-emulator recheck
 
@@ -61,10 +68,12 @@ probes to `getModuleStatus()`:
   `Incomplete Magisk install` on the rooted emulator, so module-manager flashing is still not
   claimed as verified.
 
-The compatibility checker now reports CPU family, primary ABI, Zygisk ABI, active-hook support,
+These rooted interception results predate the current route-support contract and must not be used as
+current native-`AudioRecord` reachability proof. The compatibility checker reports CPU family,
+primary ABI, Zygisk ABI, active-hook support,
 vendor family, and the presence of `libOpenSLES.so`, `libaudioclient.so`, and `libtinyalsa.so`.
-Those are device signals, not live proof that OpenSL ES, AudioFlinger, tinyalsa, or vendor-HAL hooks
-successfully processed audio in a target app.
+Those are device signals, not live proof that OpenSL ES or tinyalsa processed audio. Audio HAL and
+AudioFlinger report `unsupported_injection_boundary` and are not current transform routes.
 
 ### Highlight — why end-to-end testing mattered: the startup crash
 
@@ -90,20 +99,36 @@ release-blocking startup crash:
 
 ## 2. Still not verified / device-gated
 
-The rooted-emulator pass proves a narrow but important live slice: x86_64 `AudioRecord.read`
-interception in the current process, plus service-side native `processBlock` routing through the
-DSP. It does **not** prove the whole release install path. Attempts to install the refreshed zip
+The rooted-emulator pass proves service-side native `processBlock` routing through the DSP. Its
+native `AudioRecord.read` result predates the explicit PCM-contract redesign and does **not** prove
+current route reachability or the whole release install path. Attempts to install the refreshed zip
 with `magisk --install-module /sdcard/Download/echidna-magisk.zip` on the rooted emulator images
 returned `Incomplete Magisk install`, so Magisk flashing remains unverified here.
 
 Requested coverage, explicitly:
 
+### Current capture-route status
+
+| Route | Code status | Live proof still required |
+| --- | --- | --- |
+| AAudio | Operational candidate; metadata from stream getters | Physical-device target app |
+| OpenSL ES | Operational candidate; recorder PCM descriptor and host lifecycle tests | Physical-device target app |
+| tinyalsa | Operational candidate; metadata from `pcm_open` config | Vendor/device target app |
+| LSPosed Java AudioRecord | Operational candidate; Java getters + dedicated JNI | Live LSPosed injection under SELinux |
+| Legacy input preprocessor | Phase 1 library and host/NDK tests only | Packaging, effects registration, policy wiring, session attachment, enablement, device audio |
+| Native AudioRecord | Developer contract only (`ECHIDNA_AR_*`) | A safe normal-flow metadata producer is not implemented |
+| libc raw-device read | Developer contract only (`ECHIDNA_LIBC_*`) | A safe normal-flow metadata producer is not implemented |
+| Audio HAL | Unsupported (`unsupported_injection_boundary`) | Requires a new, proven audioserver/vendor-stream design |
+| AudioFlinger | Unsupported (`unsupported_injection_boundary`) | Requires a new, stable transform boundary |
+
 | Requested item | Current status | What is covered / missing |
 | --- | --- | --- |
 | Live Zygisk module load + real hook install on **arm64 primary** | **Release-device-only / NOT verified here** | `arm64-v8a` native artifacts build and package, but no physical arm64 Magisk/Zygisk load, app-specialize, or hook-install run has been recorded. |
-| LSPosed shim injection + snapshot read under SELinux | **Release-device-only / NOT verified here** | The shim APK builds and the snapshot-reader code exists, but LSPosed install, scoping, injected-process execution, and SELinux-gated snapshot access were not run. |
-| SELinux enforcement + audio HAL behavior on real hardware | **Release-device-only / NOT verified here** | The app reports SELinux/audio-stack signals, but no enforcing physical device has proven vendor-HAL capture processing. |
-| x86_64 trampoline under real injection | **Rooted-emulator slice verified; broader release path NOT verified** | Rooted Android 13/14 x86_64 emulators prove one live `AudioRecord.read` hook path with `processed=1`; Magisk manager flash/reboot and arbitrary target-app injection are not claimed. |
+| LSPosed shim injection + authenticated Binder policy under SELinux | **Release-device-only / NOT verified here** | The shim and explicit provider build, but LSPosed install/scoping, injected-process binding, caller authentication, and transform were not run. |
+| SELinux enforcement + supported capture candidates on real hardware | **Release-device-only / NOT verified here** | The app reports SELinux/audio-stack signals, but no enforcing physical device has proven AAudio, OpenSL, tinyalsa, or LSPosed capture processing. |
+| Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** | These routes require explicit `ECHIDNA_AR_*` / `ECHIDNA_LIBC_*` sample-rate, channel, and format values that normal app specialization does not supply. |
+| Audio HAL / AudioFlinger transformation | **Unsupported** | Both fail closed with `unsupported_injection_boundary`; app-process Zygisk does not own a safe audioserver/vendor-stream ABI. |
+| x86_64 trampoline under real injection | **Host harness verified; current release path NOT verified** | The older rooted probe predates the current route contract; Magisk manager flash/reboot and arbitrary target-app injection are not claimed. |
 | armv7 degrade behavior | **Build/code-path covered; runtime device behavior NOT verified** | `armeabi-v7a` artifacts build, and the hook path is intended to fail closed with `hook_unsupported_abi`; no real armv7 device run has proved the runtime telemetry. |
 | APK install -> service bind -> live AIDL round-trip | **Verified on emulator/rooted emulator** | App instrumentation covers installable APK execution, in-app `EchidnaControlService` bind, and live AIDL round-trips; this does not prove Magisk/LSPosed hardware paths. |
 
@@ -113,18 +138,27 @@ Still not claimed as verified:
   resolution of `dlopen("libech_dsp.so")` against `system/lib(64)`.
 - **Full Zygisk lifecycle on release hardware** — loading from Magisk at zygote time, specializing
   into arbitrary target apps, and surviving reboot/module-manager install paths.
-- **Non-`AudioRecord` hook managers** — AAudio, OpenSL ES, AudioFlinger, tinyalsa, and HAL-level
-  paths still need live device coverage.
-- **Live LSPosed shim injection** — the shim builds and its snapshot reader is implemented, but
-  LSPosed installation, scoping, injected-process execution, and SELinux access were not exercised.
-- **`magiskpolicy --live` SELinux relaxations** and the SELinux / audio-HAL interaction on a real
-  enforcing device.
-- **arm64 primary hardware and armeabi-v7a runtime behavior** — x86_64 has rooted-emulator coverage
-  for the `AudioRecord` slice; arm64 still needs physical-device proof, and armv7 intentionally
-  fails closed.
-- **Live multi-reader profile-sync under SELinux** — the service-owned snapshot publisher and
-  native/LSPosed reader code paths build, but simultaneous hooked-app delivery still needs rooted
-  device validation under enforcing policy.
+- **Supported normal-flow candidates** — AAudio, OpenSL ES, tinyalsa, and LSPosed Java AudioRecord
+  still need live device coverage. Native AudioRecord/libc are developer-contract-only; Audio HAL
+  and AudioFlinger are unsupported.
+- **Live LSPosed shim injection** — the shim and Binder policy consumer are implemented, but
+  LSPosed installation, scoping, injected-process Binder policy, and SELinux access were not exercised.
+- **Narrow config/telemetry SELinux policy** and supported-route behavior on a real enforcing device.
+- **arm64 primary hardware and armeabi-v7a runtime behavior** — arm64 still needs physical-device
+  proof, and armv7 intentionally fails closed.
+- **Live authenticated policy delivery under SELinux** — UID-scoped Zygisk socket frames and
+  caller/process-scoped LSPosed Binder views build and have host/unit coverage, but simultaneous
+  injected-app delivery still needs enforcing-device validation.
+
+### Historical enforcing-emulator blocker signal
+
+On 2026-07-15, disposable API 33 x86_64 AVD `echidna_e2e33` was observed with SELinux Enforcing and
+a pre-existing Echidna Magisk snapshot reporting module v0.0.0. It was **not current HEAD**. Live
+logcat included `avc: denied { write }` from Maps in `untrusted_app` to
+`echidna_telemetry_file`; the same process logged `echidna_profile_sync: Failed to create profile
+listener`. The AVD was stopped without installing rebuilt artifacts. This makes a current-artifact
+enforcing-SELinux rerun release-blocking; it does not establish that the current authenticated
+socket/Binder implementation fails identically.
 
 ---
 
@@ -142,20 +176,22 @@ release path that the rooted-emulator probe did not cover:
    above). Magisk → Modules → *Install from storage* → select the zip → **reboot**.
    `customize.sh` places `libech_dsp.so` per ABI into `system/lib(64)` and stages
    `libechidna.so` for the in-app JNI `dlopen` path.
-4. **Install the LSPosed shim (Java fallback / control plane).** Install LSPosed (Zygisk
+4. **Install the LSPosed shim (Java fallback).** Install LSPosed (Zygisk
    flavour), enable the Echidna module in LSPosed, and scope it to the target app(s). This
-   drives the `ProfileSyncBridge` snapshot path when the native hook is degraded or unavailable.
+   drives the authenticated read-only Binder policy path when native capture is unavailable.
 5. **Grant the per-app whitelist.** In the companion app, enable the target package in the
    whitelist / app-binding. The system is **fail-closed** — unlisted processes are never hooked.
    Avoid scoping the same target app into both Zygisk and LSPosed unless this test is explicitly
    checking duplicate-hook behavior.
-6. **Open the target app** (e.g. a voice / call / recorder app) so its media process spawns and
-   the Zygisk module hooks the audio path.
+6. **Open a route-matched target app.** First identify whether it records through AAudio, OpenSL,
+   tinyalsa, or Java `AudioRecord`; then start its capture path. Do not treat HAL/AudioFlinger or an
+   unconfigured native AudioRecord/libc manager as a valid current test target.
 7. **Verify pitch/effect live.** Select a pitch/formant preset (e.g. Darth Vader or Helium),
    speak, and confirm the transform in the target app's monitor or sidetone. Cross-check on-device
    via **Diagnostics**: the **Tuner** should show a non-zero *Detected Hz / offset (cents)*, the
    **latency histogram** should populate (no longer *"No latency data yet"*), the CPU heatmap
-   should show samples, and **Engine** should read *Installed / active* instead of *Not Installed*.
+   should show samples. Treat *installed*, Zygisk availability, and fallback recommendations as
+   capability signals only; require recent transformed-buffer telemetry for a verified route.
    The **Compatibility Wizard** should then report Magisk **installed** + Zygisk **enabled** — the
    inverse of the unrooted state captured on the emulator.
 8. **Export diagnostics for support.** In **Diagnostics -> Logs & safety**, enable telemetry export
@@ -168,4 +204,5 @@ release path that the rooted-emulator probe did not cover:
 *Sources: release-readiness gate (`t2-e20`), docker native → magisk container run (`t3-e1b`),
 emulator install/launch/nav + crash-free confirmation (`t3-e3`), instrumentation + crash
 discovery (`t2-e18`), crash fix + proof (`t2-e26`), native tests (`t2-e17`), rooted Android
-13/14 app instrumentation, and rooted Android 13/14 `AudioRecord` interception probe.*
+13/14 app instrumentation, and the historical pre-redesign rooted Android 13/14 `AudioRecord`
+interception probe.*

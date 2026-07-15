@@ -38,17 +38,16 @@ of several native APIs, and each of those descends through vendor-specific layer
 - **AAudio** — the modern low-latency native API; apps register a data callback.
 - **OpenSL&nbsp;ES** — the older native audio API, buffer-queue based.
 - **`AudioRecord`** (Java, with a native bridge such as `android_media_AudioRecord_*`).
-- **AudioFlinger** — the system audio server's client read path.
+- **AudioFlinger** — the system audio server boundary, not a stable app-process transform ABI.
 - **Vendor HAL** — below all of the above, and different on Qualcomm, MediaTek,
   Samsung/Exynos, and Google silicon.
 
-Different apps use different APIs; the same app may behave differently across devices. To
-be broadly useful Echidna hooks **several** of these paths (its hook managers cover AAudio,
-OpenSL, `AudioRecord`, AudioFlinger, an audio-HAL path, a libc-read fallback, and
-tinyalsa) and **probes at attach time** to choose a working hook point, with fallbacks
-when the preferred API isn't the one in use. Every added path is more symbols to resolve,
-more per-vendor variation, and more that can differ from one HAL build to the next — which
-is also why hook offsets can need [per-device tuning](limitations.md#4-audio-hal-variance-across-socs-and-vendors).
+Different apps use different APIs; the same app may behave differently across devices. Current
+normal-flow candidates are AAudio, OpenSL ES, tinyalsa, and the LSPosed Java `AudioRecord` shim.
+Native `AudioRecord` and libc reads are developer-contract-only because normal specialization does
+not provide their PCM metadata. Audio HAL and AudioFlinger are explicitly unsupported
+(`unsupported_injection_boundary`) because app-process Zygisk cannot safely own audioserver/vendor
+stream objects. See the [capture-route matrix](limitations.md#4-capture-route-coverage-across-socs-and-vendors).
 
 ## 3. A hard real-time latency budget — while doing nontrivial DSP
 
@@ -88,8 +87,9 @@ original can still run. This is delicate for reasons that have nothing to do wit
 - You need **symbol resolution** that survives stripped/vendor libraries: try `dlsym`,
   then scan the PLT/GOT, then pattern-match, using `/proc/<pid>/maps` to find loaded
   ranges.
-- You are executing in a **security-sensitive system process** (a media/audio server).
-  A mistake doesn't just fail your feature — it can **crash that process** or the app.
+- You are executing in a **security-sensitive target app process**. A mistake does not just fail
+  the feature — it can crash that app. Crossing into audioserver would increase the blast radius,
+  which is one reason current HAL/AudioFlinger routes remain unsupported.
 
 Because the blast radius is a crash inside someone else's audio process, Echidna's hook
 engine is built to **fail closed**: if it cannot *safely* decode and relocate a prologue,
@@ -124,13 +124,15 @@ work, and the safe answer for the hardest ABI is to **not** hook rather than ris
 ## 6. SELinux on modern Android is trying to stop you
 
 Even with root, **SELinux enforcing** stands between injected code and the operations it
-needs. The contexts that Zygisk-injected code runs in may be denied the ability to create
-or connect the profile-sync socket, place libraries, or touch certain paths — and the
+needs. The contexts that Zygisk-injected code runs in may be denied the ability to connect the
+authenticated policy socket, map telemetry, place libraries, or touch certain paths — and the
 **policy differs per OEM**.
 
-Echidna's Magisk module therefore has to apply **`magiskpolicy` relaxations** at boot to
-allow its socket and library placement, and on strict-policy devices may be limited to the
-weaker **Java-only (LSPosed) fallback**. What's required can only be determined per device.
+Echidna's Magisk module defines dedicated config and telemetry file types with narrow grants:
+config is app-readable, telemetry is app-readable/writable, and parent traversal is search-only.
+It does not grant zygote transitions or binder access. Strict-policy devices may still block a
+required operation or limit the system to the **Java-only (LSPosed) fallback**. What works can only
+be determined per device.
 This is real, ongoing friction, not a one-time setup step — see
 [Limitations §3](limitations.md#3-oem-and-selinux-variance).
 
@@ -140,9 +142,9 @@ A tool that sits in the microphone path of arbitrary apps is a serious privacy s
 bug must never **silently** transform or leak audio from an app the user didn't authorize.
 So the whole system is designed to **fail closed**, which is *harder* than failing open:
 
-- The per-app **whitelist defaults to deny** — no snapshot, unparseable snapshot, or an
-  absent/`false` entry all mean **not hooked**. The Java hook zeroes the buffer and
-  returns 0 when hooking isn't allowed, rather than passing audio through unprocessed.
+- The per-app **whitelist defaults to deny** — no policy, unparseable policy, wrong capture owner,
+  or an absent/`false` entry leaves installed hooks inert. The Java transaction preserves original
+  bytes and the original read result unless a current permit authorizes the transformed commit.
 - The **plugin loader** requires a valid **Ed25519** signature and is **fail-closed by
   default**: without a real trusted key provisioned at build time (a deliberate all-zero
   placeholder ships by default), signature verification fails and no plugin loads.
@@ -163,12 +165,13 @@ across devices:
   JNI `libechidna.so` where the app's `dlopen` expects it.
 - A single canonical **module id** so the runtime's full-path `dlopen`
   (`/data/adb/modules/echidna/...`) resolves.
-- Boot scripts (`post-fs-data.sh` / `service.sh`) that prepare the socket/plugin
-  directories and apply the SELinux relaxations from item&nbsp;6 — and **fail loudly** if a
+- Boot scripts (`post-fs-data.sh` / `service.sh`) that arm/clear the watchdog, prepare runtime and
+  plugin directories, create narrowly labelled config/telemetry regions, and **fail loudly** if a
   per-ABI library is missing.
 
-Getting six cross-compiled `.so` files, the DSP, the JNI bridge, and the SELinux bootstrap
-into one zip that Zygisk actually loads on a real device — and doing it reproducibly (the
+Getting 12 cross-compiled native targets built, transporting only the nine supported engine/DSP/
+shim-JNI artifacts, and keeping the Phase 1 preprocessor out until it is registered and attached —
+while doing it reproducibly (the
 project builds this both on the host toolchain and in a Docker `magisk-packager`) — is its
 own layer of difficulty on top of everything above. See [Build & Install](build-install.md).
 

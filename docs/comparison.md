@@ -13,9 +13,10 @@ Echidna. This page lays out the differences honestly so you can pick the right t
 !!! warning "Read the honest-status note first"
     Echidna **builds green**, ships a signed APK and a flashable per-ABI Magisk/Zygisk
     module, and is crash-free through install → launch → navigation on an unrooted
-    emulator. Rooted Android 13/14 emulators now prove native `processBlock` and one
-    `AudioRecord.read` interception slice. Magisk flashing, LSPosed live injection, and
-    broader device/HAL hook coverage are still release-device work (see
+    emulator. Rooted Android 13/14 emulators prove native `processBlock`; their
+    `AudioRecord.read` interception slice predates the current explicit-contract redesign and is
+    historical evidence only. Magisk flashing, LSPosed live injection, and supported capture-route
+    coverage are still release-device work (see
     [Verification](verification.md)). The tools compared below are, by contrast, mature
     and widely shipped. Weigh that maturity gap when choosing. We describe each tool by
     what it does; we do not disparage any of them and we avoid claims we cannot
@@ -36,9 +37,10 @@ Android audio has two directions, and almost every existing effects tool works o
   the app then encodes and sends (a VoIP call, a voice note, a live stream). Changing
   it affects **what the other side hears** — this is what a voice changer needs.
 
-Echidna targets the **capture path**, inside the target app's own process, hooking the
-native APIs an app uses to read the mic: AAudio, OpenSL&nbsp;ES, `AudioRecord`, and the
-AudioFlinger/HAL record path (see [Architecture](architecture.md)). Nearly all the
+Echidna targets the **capture path** inside the target app's process. Its current normal-flow
+candidates are AAudio, OpenSL&nbsp;ES, tinyalsa, and LSPosed Java `AudioRecord`. Native
+`AudioRecord`/libc require developer-supplied PCM contracts; Audio HAL and AudioFlinger are
+unsupported injection boundaries (see [Architecture](architecture.md)). Nearly all the
 alternatives below target the **playback path** or run on a PC. That is the core reason
 they are not substitutes for one another.
 
@@ -50,16 +52,17 @@ they are not substitutes for one another.
 | --- | --- | --- | --- | --- | --- |
 | **Audio path affected** | **Capture / mic** (what apps record & transmit) | Playback / output | Playback / output (system-wide) | Playback / output (system-wide) | Capture — but only on the **PC**, via a virtual mic device |
 | **Runs on the Android device** | ✅ | ✅ | ✅ | ✅ | ❌ (runs on a paired PC) |
-| **Changes what the far end hears in a call** | ✅ for verified `AudioRecord` slice; broader paths device-gated | ❌ | ❌ | ❌ | ✅ only if the call app runs on that PC |
+| **Changes what the far end hears in a call** | Project goal; current capture candidates remain device-gated | ❌ | ❌ | ❌ | ✅ only if the call app runs on that PC |
 | **Real-time pitch / formant / Auto-Tune of your voice** | ✅ | ❌ (EQ/convolver/compressor for playback) | ❌ (playback DSP) | ❌ (playback effects) | ✅ (that is their purpose, on PC) |
 | **Per-app selection** | ✅ fail-closed whitelist + per-app preset | Global (per output) | Global (system-wide) | Global (system-wide) | Per-app on the PC (whichever app selects the virtual mic) |
 | **Requires root** | ✅ Magisk + Zygisk (+ optional LSPosed) | ❌ (rootless, uses playback capture) | ✅ (Magisk module) | ✅ (Magisk module) | ❌ on Android; N/A |
 | **Injection method** | Native inline hooks inside the target process (Zygisk), LSPosed Java shim as fallback | App using `AudioEffect` + AudioPlaybackCapture loopback | System audio effect module | System `AudioEffect` / `audio_effects` config | Virtual audio driver on the PC |
 | **Distribution** | Sideload APK + flash Magisk zip (no Play Store) | F-Droid / Play / GitHub | Magisk / GitHub | Magisk / XDA | PC installer |
-| **Maturity** | Early; one rooted-emulator capture slice proven, release-device matrix pending | Mature, widely used | Mature | Mature/legacy | Mature, commercial |
+| **Maturity** | Early; service-side DSP proven, current capture routes need a release-device matrix | Mature, widely used | Mature | Mature/legacy | Mature, commercial |
 
-Legend: ✅ = supported / yes · ❌ = not a goal of that tool. "Device-gated" means designed and
-built but not yet validated on release hardware in this project — see [Verification](verification.md).
+Legend: ✅ = supported / yes · ❌ = not a goal of that tool. “Device-gated” means a route has a
+normal-flow code contract but has not been validated on release hardware. It does not apply to
+developer-contract-only or unsupported routes — see [Verification](verification.md).
 
 ---
 

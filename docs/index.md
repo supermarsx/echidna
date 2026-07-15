@@ -8,10 +8,11 @@ apps.
 !!! warning "Current verification status"
     The repository builds the companion APK, per-ABI native libraries, and a
     flashable Magisk/Zygisk module. Emulator validation covers install, launch,
-    navigation, app/service binding, fallback UI state, rooted-emulator native
-    `processBlock`, and one rooted-emulator `AudioRecord.read` interception
-    probe. Magisk flashing, live LSPosed injection, physical-device SELinux
-    policy interaction, and broader HAL behavior still require release hardware.
+    navigation, app/service binding, fallback UI state, and rooted-emulator native
+    `processBlock`. A rooted `AudioRecord.read` probe predates the current route redesign and is
+    historical evidence only. Magisk flashing, live LSPosed injection, physical-device SELinux
+    policy interaction, and supported capture candidates still require release hardware. Audio HAL
+    and AudioFlinger are unsupported injection boundaries.
     Start with
     [Verification](verification.md) before treating any device path as proven.
 
@@ -46,7 +47,7 @@ release-device work.
   validation.
 - [Build & Install](build-install.md) - local, Docker, Android, native, and
   Magisk packaging commands for building the current tree.
-- [Architecture](architecture.md) - component boundaries, hook order, profile
+- [Architecture](architecture.md) - component boundaries, capture-route matrix, profile
   sync, and the native-first flow required by
   [spec sections 3-4][spec-3-4].
 - [Limitations](limitations.md) - root, SELinux, HAL, ABI, and duplicate hook-scope
@@ -60,6 +61,8 @@ release-device work.
   [spec section 20][spec-20].
 - [DSP & Effects](dsp-effects.md) - effect-chain order, preset catalog, safe
   ranges, and low-latency implications from [spec section 5][spec-5].
+- [Performance Testing](performance-testing.md) - reproducible host processing-cost benchmarks,
+  functional audio checks, and the boundary between host and device latency claims.
 - [Comparison](comparison.md) - how Echidna differs from app-level,
   desktop-routed, and generic Magisk audio tools.
 - [Why It's Hard](why-hard.md) - the engineering risks behind native audio
@@ -70,8 +73,8 @@ release-device work.
 - [Developer Guide](developer_readme.md) - source topology, in-process control
   service, build facts, native API, plugin schema, and known implementation
   limits. Treat this as the source of truth for build and control-plane facts.
-- [Signing](signing.md) - release APK signing, keystore sources, debug fallback,
-  and native/Magisk signing boundaries. Treat this as the source of truth for
+- [Signing](signing.md) - release APK signing, local debug fallback, hosted fail-closed checks,
+  certificate migration, and native/Magisk signing boundaries. Treat this as the source of truth for
   signing facts.
 - [Magisk Release](magisk_release.md) - flashable module layout, package
   contents, installation path, and release-gate expectations from
@@ -88,6 +91,7 @@ release-device work.
 | "How does audio flow through the system?" | [Architecture](architecture.md) |
 | "What does the app look like today?" | [Screenshots](screenshots.md) |
 | "Which effects and presets exist?" | [DSP & Effects](dsp-effects.md) |
+| "How do I benchmark processing cost?" | [Performance Testing](performance-testing.md) |
 | "What will break on real devices?" | [Limitations](limitations.md) |
 | Build/topology/signing facts | [Developer Guide](developer_readme.md), [Signing](signing.md) |
 

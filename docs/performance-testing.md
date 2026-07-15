@@ -2,8 +2,9 @@
 
 The host benchmark exercises Echidna's public DSP C API and the real native PCM conversion bridge.
 It implements the latency, instrumentation, stress, and DSP checks required by
-[Sections 5, 9, and 11 of the specification](../spec.md#5-dsp-pipeline--low-level-performance) and
-the effect checks in [Section 20](../spec.md#20-qa-checklist-ui--dsp).
+[Sections 5, 9, and 11 of the specification](https://github.com/supermarsx/echidna/blob/main/spec.md#5-dsp-pipeline--low-level-performance)
+and the effect checks in
+[Section 20](https://github.com/supermarsx/echidna/blob/main/spec.md#20-qa-checklist-ui--dsp).
 
 Host results measure processing cost only. They are not Android callback latency, Audio HAL latency,
 acoustic latency, or end-to-end call latency. Those claims still require release builds on target

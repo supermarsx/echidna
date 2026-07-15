@@ -9,20 +9,35 @@ this, see [Why It's Hard](why-hard.md).
 ## Why Zygisk + LSPosed (root injection, not an official API)
 
 **Constraint:** Android exposes **no supported API** to intercept or transform
-another app's microphone capture. AAudio, OpenSL ES, `AudioRecord`, AudioFlinger,
-tinyalsa, and the vendor HAL are all *inside* the target app's process (or a
-system service), and no public mechanism lets one app rewrite another app's audio
-buffers.
+another app's microphone capture. AAudio, OpenSL ES, `AudioRecord`, and tinyalsa
+may appear in a target process; AudioFlinger and vendor HAL objects live across
+the audioserver boundary. No public mechanism lets one app rewrite those buffers.
 
 **Decision:** run **inside** the target process. Zygisk (a Magisk feature) loads
 a native module into every specialized app process at fork time, which is exactly
 where the capture callbacks live — so the DSP can process a block in-place with
 no cross-process copy. LSPosed provides the parallel Java-side path for apps that
-capture through `AudioRecord`, and lets policy be resolved per process. Both
+capture through `AudioRecord`, using a dedicated JNI bridge and DSP library, and
+lets policy be resolved per process. Both
 require root because there is no other way to place code in a foreign process.
 The trade-off is explicit: Echidna needs Magisk + Zygisk and cannot function as
 an unrooted app for the native path. That cost buys the only viable interception
 point.
+
+## Why capture routes have explicit support states
+
+**Constraint:** transforming an untyped byte buffer is unsafe. A route must have trustworthy sample
+rate, channel count, sample format, stream direction, and lifecycle ownership. A successful symbol
+patch without that contract can corrupt audio or memory. Zygisk also specializes app processes; it
+does not inject and remain resident in audioserver, where AudioFlinger and vendor HAL stream objects
+live.
+
+**Decision:** make route reachability a code-owned matrix. AAudio, OpenSL, tinyalsa, and LSPosed
+Java `AudioRecord` are operational candidates because their normal APIs supply PCM metadata. Native
+`AudioRecord` and libc reads are developer-contract-only until a normal-flow metadata producer
+exists. Audio HAL and AudioFlinger return `unsupported_injection_boundary` until a separate,
+proven service-side injection design owns a stable stream ABI. Telemetry reports each route's
+support state and exact reason; unsupported routes are not presented as installed hooks.
 
 ## Why a native C++ DSP engine
 
@@ -75,8 +90,9 @@ file mappings under `/data/local/tmp/echidna` when available and a private
 `memfd_create` fallback when they are not. `memfd_create` is a plain libc syscall
 — no extra library to link, works from the injected module — and keeps degraded
 processes from crashing when the shared runtime files are unavailable. The
-profile-sync policy path no longer depends on fd handoff; the companion service
-serves framed JSON snapshots over its abstract `AF_UNIX` socket.
+ policy path no longer depends on fd handoff. The companion serves strict v2 through an
+ authenticated, UID-scoped abstract socket for Zygisk and a caller/process-scoped read-only Binder
+ provider for LSPosed.
 
 ## Why per-ABI NDK builds
 
@@ -88,9 +104,11 @@ arm64-v8a, armeabi-v7a, and x86_64; zero were being produced correctly.
 
 **Decision:** cross-compile **per ABI** with the NDK toolchain
 (`tools/build_native_ndk.sh` loops the ABI set into `build/<abi>/lib/`). This
-produces the six real Android `.so` (DSP + Zygisk × three ABIs) that the Magisk
-module actually needs: `libechidna.so` → `zygisk/<abi>.so`, `libech_dsp.so` →
-`system/lib(64)`. Per-ABI builds also enable ABI-specific SIMD and are the only
+ produces four Android targets per ABI. Release delivery transports nine artifacts
+ (`libechidna.so`, `libech_dsp.so`, and `libechidna_shim_jni.so` × three ABIs); the Phase 1
+ `libechidna_preproc.so` is built/tested but not shipped, registered, or session-attached. The
+ Magisk module consumes engine/DSP pairs and the LSPosed APK consumes dedicated JNI/DSP pairs.
+ Per-ABI builds also enable ABI-specific SIMD and are the only
 way the trampoline code (which is inherently architecture-specific — see
 [Architecture](architecture.md#multi-abi-hooking)) can be compiled and shipped for
 each target. arm64-v8a is the locked primary; x86_64 is fully supported; armv7
@@ -103,17 +121,16 @@ of a voice-interception tool is severe: a hook that runs when it shouldn't
 silently rewrites a user's microphone in an app they didn't authorize.
 
 - **Whitelist default-deny.** The default profile snapshot is `empty()` — empty
-  whitelist, global off. Hooking is enabled **only** when the engine is globally
-  enabled *and* the specific package/process is explicitly whitelisted `true`.
-  Absent or `false` entries mean *not hooked*. **Constraint:** before the first
-  snapshot push, on an unreadable/unparseable snapshot, or if the receiver never
-  binds, the system must not hook — so "no information" has to resolve to "deny",
+  whitelist, global off. Processing is admitted **only** when the global gates pass, the specific
+  package/process is explicitly whitelisted `true`, and its capture owner matches the consumer.
+  Absent or `false` entries leave installed hooks inert. **Constraint:** before the first
+  policy fetch, on an unreadable/unparseable snapshot, or if the receiver never
+  binds, the system must not process — so "no information" has to resolve to "deny",
   not "allow".
-- **Buffer zeroing when not allowed.** In the LSPosed path, when a capture is not
-  allowed, `AudioRecordHook` zeroes the returned buffer and forces `read()` to
-  return 0 rather than passing raw audio through. **Constraint:** a disallowed
-  hook must fail *safe* (no audio leaks through the partially-installed path), not
-  merely fail to transform.
+- **Transactional pass-through when not allowed.** LSPosed installs inert hooks so late policy can
+  activate. Denial, parse/transform failure, exception, or a concurrent revoke preserves the
+  original bytes and original `AudioRecord.read` result; transformed bytes commit only while the
+  generation permit remains current.
 - **Ed25519 plugin signing.** Third-party DSP plugins are verified with Ed25519
   (BoringSSL/OpenSSL raw-key verify, `.sig` sidecar) and verification is
   **fail-closed**: when BoringSSL is not linked, `VerifySignature` returns

@@ -61,10 +61,13 @@ the device if a Magisk/Zygisk module breaks boot.
 
 Echidna is a **native-first, root-based real-time voice changer** for Android. Instead of
 routing audio through a virtual device or a userspace app, it uses **Zygisk + LSPosed** to
-inject a native module (`libechidna.so`) directly into target processes and intercept the
-audio path at its source — AAudio, OpenSL ES, `AudioRecord`, and AudioFlinger — with layered
-fallbacks down to libc `read()`. Captured PCM is processed by a C++17 DSP engine
-(`libech_dsp.so`) and handed back to the app or system consumer with minimal added latency.
+inject processing into selected target processes. The current normal-flow native candidates are
+AAudio, OpenSL ES, and tinyalsa; the LSPosed shim covers Java `AudioRecord`. Native
+`AudioRecord` and raw libc capture are developer-contract routes, while Audio HAL and
+AudioFlinger transforms are deliberately unsupported until a safe injection boundary exists.
+An Android legacy input-preprocessor effect ABI now has a tested Phase 1 implementation, but it is
+not packaged, registered, attached to a recording session, or enabled in current releases.
+Captured PCM is processed by a C++17 DSP engine (`libech_dsp.so`) and written back in place.
 A Jetpack Compose companion app drives presets, per-app profiles, diagnostics, and safety
 controls. It targets power users and researchers on rooted devices; it is not a Play Store app.
 
@@ -94,7 +97,7 @@ Intended module failsafes are documented for users and release testers:
 
 | Area | Capabilities |
 | --- | --- |
-| **Native hooks** | AAudio callbacks, OpenSL buffer queues, `AudioRecord` JNI, AudioFlinger client intercepts, libc `read()` fallback. |
+| **Capture routes** | AAudio, OpenSL, and tinyalsa native candidates; LSPosed Java `AudioRecord` fallback; a non-shipping Phase 1 legacy preprocessor; explicit developer-only and unsupported routes. |
 | **DSP effects** | Noise gate, EQ, compressor/AGC, pitch shift, formant shift, Auto-Tune, reverb, dry/wet mix — SIMD-tuned. |
 | **Presets** | Built-in catalog (Natural Mask, Darth Vader, Helium, Radio Comms, Studio Warm, Robotizer, Cher-Tune, Anonymous) with import/export. |
 | **Per-app whitelist** | Enable Echidna per application and bind a specific preset to each app. |
@@ -120,8 +123,9 @@ docker run --rm -v "$PWD:/workspace" echidna-native
 # 2. Package the flashable Magisk module
 bash tools/build_magisk_module.sh   # -> out/echidna-magisk.zip
 
-# 3. Build the companion APK
+# 3. Build the companion APK and, if needed, the LSPosed shim
 cd android/app && ./gradlew :app:assembleDebug   # or assembleRelease with a keystore
+cd ../lsposed-shim && ./gradlew :shim:assembleRelease
 ```
 
 Then, **on a rooted device** (Magisk 24+ with Zygisk enabled, LSPosed installed):
@@ -132,13 +136,16 @@ Then, **on a rooted device** (Magisk 24+ with Zygisk enabled, LSPosed installed)
 4. Add your target apps in the **per-app whitelist** and pick a preset.
 5. Run the **compatibility wizard** and **diagnostics** before enabling hooks for production apps.
 
-> Do not run the Zygisk module and the LSPosed shim simultaneously — the profile-sync socket is
-> single-holder. See [Limitations](docs/limitations.md).
+> Policy delivery supports multiple authenticated targets: Zygisk readers use UID-scoped policy v2
+> over the service-owned abstract socket, while LSPosed uses a caller/process-scoped read-only Binder
+> provider. Do not assign the same process to both capture owners. See
+> [Limitations](docs/limitations.md).
 
 Current validation goes beyond a compile: Android instrumentation proves the in-app control service
-and native `processBlock` path on Android 13/14 emulators, and a rooted-emulator
-`AudioRecord.read` probe shows captured buffers routed through DSP (`processed=1`). Magisk module
-flashing and live LSPosed injection still need release-device validation.
+and native `processBlock` path on Android 13/14 emulators. A rooted-emulator
+`AudioRecord.read` probe also passed before the current explicit-contract route redesign; it is
+historical evidence, not proof that the current native `AudioRecord` route is reachable. Magisk
+flashing, live LSPosed injection, and every current capture route still need device validation.
 
 ## Release Files
 
@@ -157,6 +164,15 @@ Every successful `main` CI release publishes a GitHub Release with separate inst
 - `echidna-complete-<tag>.zip` - all release assets plus `RELEASE_ARTIFACTS.md`;
   useful for archiving a full release.
 - `SHA256SUMS.txt` - hashes for verifying downloaded release files.
+
+Use the newest release unless you are intentionally rolling back or already understand the
+recovery risk. Earlier releases can contain boot/module bugs that were fixed later and may be
+harder to recover from after flashing.
+
+Hosted releases are signed with a configured release certificate and fail closed if signing inputs
+are absent or invalid. An older debug-signed companion or shim cannot be upgraded in place to an APK
+signed by a different certificate; back up needed app data, uninstall the old package once, and then
+install the release-signed APK. See [Signing](docs/signing.md).
 
 For a normal install, use the companion APK plus the Magisk zip. Add the LSPosed shim only when you
 need or are testing the Java fallback path. Do not scope the same target app into both Zygisk and
@@ -181,30 +197,45 @@ need the fallback shim, whitelist target apps in the companion, then run the com
 
 Echidna has several operating paths:
 
-- **Native-first Zygisk path:** the Magisk module loads `libechidna.so` into target processes,
-  attaches native audio hooks, and routes PCM through `libech_dsp.so`.
+- **Native-first Zygisk path:** the Magisk module loads `libechidna.so` into selected target
+  processes. AAudio, OpenSL, and tinyalsa are the normal-flow capture candidates and route PCM
+  through `libech_dsp.so`; all remain device/vendor gated.
 - **LSPosed Java fallback:** the optional shim covers Java `AudioRecord` apps that never hit the
-  native hook path. It is a fallback, not a replacement for the Magisk module.
+  native hook path through a dedicated JNI bridge and DSP library. It fetches strict v2 policy from
+  an explicit read-only Binder provider that authenticates the target UID and claimed process.
+- **Legacy input preprocessor:** the standard legacy effect ABI boundary and its DSP context pass
+  host ABI/lifecycle/audio/real-time tests, but no release packages, registers, session-attaches, or
+  enables `libechidna_preproc.so` yet.
+- **Developer-contract routes:** native `AudioRecord` and raw libc `/dev/snd` capture stay disabled
+  unless an explicit sample-rate/channel/format contract is supplied by a developer.
+- **Unsupported boundaries:** Audio HAL and AudioFlinger report
+  `unsupported_injection_boundary`; current app-process Zygisk injection cannot safely own them.
 - **Compatibility mode:** the app can prefer safer fallback behavior on fragile devices or unknown
   HALs while still keeping controls available.
-- **Bypass and panic:** bypass passes audio through untouched; panic forces bypass/master-off for a
-  configured hold window so the user can recover from bad audio behavior.
+- **Bypass and panic:** bypass passes audio through untouched. Panic is an independent timed
+  admission gate that preserves the configured master/bypass state and publishes a new generation
+  when it expires.
 
 ## Architecture
 
-Echidna is four cooperating layers. The **companion app** hosts an in-process control service
-(AIDL + JNI) that manages presets and profiles and publishes a snapshot over a shared-memory
-`ProfileSyncBridge`. The **Zygisk native module** injects into target processes, discovers and
-inline-hooks the audio symbols, and streams buffers to the **DSP engine**. An **LSPosed Java
-shim** covers apps that never cross into native audio paths. Read the full walkthrough — hook
-order, IPC, and data flow — in **[docs/architecture.md](docs/architecture.md)** and the reasoning
+Echidna is four cooperating layers. The **companion app** hosts an in-process private control
+service plus an authenticated read-only policy provider. Strict, monotonic policy v2 reaches
+Zygisk through a UID-scoped service-owned abstract socket and LSPosed through process-scoped Binder.
+The **Zygisk native module** injects into selected target processes, discovers eligible audio
+symbols, and streams captured buffers to the **DSP engine**. An **LSPosed Java shim** covers Java
+`AudioRecord` paths. Read the full walkthrough — hook order, IPC, and data flow — in
+**[docs/architecture.md](docs/architecture.md)** and the reasoning
 behind each choice in **[docs/design-rationale.md](docs/design-rationale.md)**.
 
 ```
 Capture source
-    ↓ hooks (AAudio → OpenSL → AudioFlinger → AudioRecord → libc read)
-    ↓ DSP (libech_dsp.so) via echidna_process_block
-    ↓ processed PCM delivered back to the app / system consumer
+    ├─ operational candidates: AAudio / OpenSL / tinyalsa
+    ├─ LSPosed fallback: Java AudioRecord
+    ├─ Phase 1 only: legacy input preprocessor (not shipped/attached)
+    ├─ developer contract: native AudioRecord / libc read
+    └─ unsupported: Audio HAL / AudioFlinger
+                  ↓ eligible buffers
+            DSP (libech_dsp.so)
 ```
 
 **Stack:** Kotlin + Jetpack Compose (Material3) companion app · in-app control service (AIDL, JNI) ·
@@ -226,6 +257,7 @@ The full documentation site is built with MkDocs Material and published to
 | Comparison vs alternatives | [comparison.md](docs/comparison.md) |
 | Limitations | [limitations.md](docs/limitations.md) |
 | E2E verification report | [verification.md](docs/verification.md) |
+| Performance methodology | [performance-testing.md](docs/performance-testing.md) |
 | Vendor HAL analysis | [vendor-hal-analysis.md](docs/vendor-hal-analysis.md) |
 | Developer guide · Signing · Magisk release | [developer_readme.md](docs/developer_readme.md) · [signing.md](docs/signing.md) · [magisk_release.md](docs/magisk_release.md) |
 
@@ -235,7 +267,8 @@ Unlike app-level tools (RootlessJamesDSP, Voicemod-style desktop apps, Clownfish
 Magisk audio-mod modules, Echidna intercepts **inside the target process** for true real-time,
 per-app transformation. That power comes with constraints: it **requires root**, behaviour varies
 across OEM audio HALs and SELinux policies, `armeabi-v7a` hooking degrades gracefully (fails
-closed), and the profile-sync socket is single-holder. See
+closed), and HAL/AudioFlinger transformation is not implemented. Policy delivery is authenticated
+and process-scoped, but capture-owner configuration still must not assign both hook stacks. See
 **[comparison.md](docs/comparison.md)** and **[limitations.md](docs/limitations.md)** for the honest
 detail.
 

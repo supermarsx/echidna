@@ -3,15 +3,16 @@
 This page describes the **real, end-to-end architecture** of Echidna as it is
 built in this repository — the companion app, the in-app control service, the
 JNI bridge, the Zygisk native module, the DSP engine, and the LSPosed
-compatibility shim. Rooted-emulator testing now proves the service-side native
-DSP path and one live `AudioRecord.read` interception slice; broader hook
-coverage, Magisk flashing, LSPosed injection, and physical-device SELinux/HAL
-behavior are still marked as release-device validation.
+compatibility shim. Rooted-emulator testing proves the service-side native DSP
+path. A native `AudioRecord.read` interception slice passed before the current
+explicit-contract redesign and is retained as historical evidence only. Current
+capture routes, Magisk flashing, LSPosed injection, and physical-device
+SELinux/HAL behavior remain device validation.
 
 ## Component overview
 
-Echidna ships as a **single installable APK** (the companion app) plus a
-**flashable Magisk module** that carries the native libraries. There is no
+Echidna ships a primary **companion APK**, an optional **LSPosed shim APK**, and a
+**flashable Magisk module** that carries the Zygisk engine and DSP. There is no
 separate `com.echidna.control` package — the control service is hosted *inside*
 the companion app process.
 
@@ -21,11 +22,15 @@ flowchart TB
         UI["Jetpack Compose UI<br/>Dashboard · Presets · Effects · Diagnostics<br/>Compatibility · Whitelist · Settings · QS Tile"]
         REPO["ControlStateRepository<br/>(StateFlow singleton, persists presets)"]
         CLIENT["ControlServiceClient<br/>binds by ComponentName(this, EchidnaControlService)"]
-        SVC["EchidnaControlService<br/>(bound Service, exported=false)"]
-        JNI["echidna_control_jni<br/>(:service native lib, packaged in APK)"]
+        SVC["EchidnaControlService<br/>(privileged Service, exported=false)"]
+        REG[("PublishedPolicyRegistry<br/>strict policy v2 + generation")]
+        PROVIDER["PolicySnapshotService<br/>(read-only Binder, exported=true)"]
+        JNI["libechidna_control_jni.so<br/>(:service native lib, packaged in APK)"]
         UI --> REPO --> CLIENT
         CLIENT -->|"AIDL: IEchidnaControlService"| SVC
         SVC --> JNI
+        SVC --> REG
+        REG --> PROVIDER
     end
 
     subgraph MAGISK["Magisk module — id: echidna (flashable, per-ABI)"]
@@ -35,17 +40,21 @@ flowchart TB
     end
 
     subgraph TARGET["Target / media app processes (Discord, Telegram, …)"]
-        HOOKS["Audio hook chain<br/>AAudio · OpenSL · AudioFlinger · AudioRecord<br/>libc read · tinyalsa · Audio HAL"]
+        HOOKS["Normal-flow native candidates<br/>AAudio · OpenSL · tinyalsa"]
+        DEV["Developer-contract routes<br/>native AudioRecord · libc read"]
+        NO["Unsupported boundaries<br/>Audio HAL · AudioFlinger"]
         SHIM["LSPosed Java shim<br/>(AudioRecord.read, fail-closed)"]
+        SHIM_NATIVE["libechidna_shim_jni.so<br/>+ packaged libech_dsp.so"]
+        SHIM --> SHIM_NATIVE
     end
 
-    JNI -.->|"dlopen /data/adb/modules/echidna/lib/libechidna.so"| ZY
-    SVC -->|"ProfileSyncBridge: abstract AF_UNIX socket"| SNAP[("Profile/whitelist/control snapshot<br/>{profiles, whitelist, appBindings, control}")]
-    SNAP -->|"framed JSON [len][UTF-8]"| ZY
-    SNAP -->|"framed JSON [len][UTF-8]"| SHIM
+    JNI -.->|"device-gated dlopen of module-provided libechidna.so"| ZY
+    REG -->|"UID-scoped v2 over abstract AF_UNIX"| ZY
+    PROVIDER -->|"caller-UID + process-scoped v2"| SHIM
     ZY --> HOOKS
+    ZY --> DEV
+    ZY -.-> NO
     HOOKS -->|"echidna_process_block()"| DSP
-    SHIM -->|"JNI buffer handoff"| DSP
 ```
 
 ### The six runtime pieces
@@ -53,11 +62,11 @@ flowchart TB
 | Component | Artifact | Runs in | Role |
 | --- | --- | --- | --- |
 | **Companion app + UI** | `app-debug.apk` / `app-release.apk` | its own process (`com.echidna.app`) | Compose UI over a `ControlStateRepository` StateFlow singleton; binds the control service; persists presets. |
-| **Control service** | `EchidnaControlService` (in the same APK) | companion app process | Bound `Service` implementing the unified AIDL; owns profile/whitelist/control state; publishes the profile-sync snapshot. |
-| **JNI bridge** | `echidna_control_jni` (`.so` in the APK) | companion app process | App-side native glue; `dlopen`s the Magisk-delivered `libechidna.so` for status/control. |
-| **Zygisk module** | `libechidna.so` (Magisk `zygisk/<abi>.so`) | every specialized app process | Registered Zygisk module; installs the audio hook chain and routes captured PCM through the DSP. |
+| **Control service** | `EchidnaControlService` plus `PolicySnapshotService` (in the same APK) | companion app process | The private AIDL owns mutations. The exported read-only provider authenticates LSPosed callers and exposes only their scoped policy. |
+| **JNI bridge** | `libechidna_control_jni.so` (in the APK) | companion app process | App-side native glue; attempts to `dlopen` the Magisk-delivered engine for status/control and fails closed when unreachable. |
+| **Zygisk module** | `libechidna.so` (Magisk `zygisk/<abi>.so`) | every specialized app process | Registered Zygisk module; attempts eligible capture managers and routes captured PCM through the DSP. |
 | **DSP engine** | `libech_dsp.so` (Magisk `system/lib(64)`) | whichever process loaded the hooks | Real-time C++ effect chain; exposes the `echidna_process_block` C ABI. |
-| **LSPosed shim** | `shim-release.apk` (`com.echidna.lsposed`) | LSPosed-scoped app process | Optional Java `AudioRecord` fallback; reads the same profile-sync snapshot as native readers. |
+| **LSPosed shim** | `shim-release.apk` (`com.echidna.lsposed`) | LSPosed-scoped app process | Optional Java `AudioRecord` fallback; bundles only `libechidna_shim_jni.so` plus `libech_dsp.so` and fetches authenticated, process-scoped policy over Binder. |
 
 ## Control plane: app to service to native
 
@@ -84,29 +93,56 @@ installable host; that has been removed.
   `AudioStackProbe` (manufacturer, `ro.board.platform`, AAudio / low-latency /
   pro-audio features, output sample rate and frames-per-buffer). This replaced
   the previously hard-coded "Qualcomm QSSI / Enforcing" placeholder data.
+- Availability is not runtime proof. `policyToolAvailable`, `policyAppliedVerified`,
+  `nativeRouteVerified`, and `javaFallbackRecommended` are separate signals; neither Zygisk nor a
+  policy tool being present proves that a transformed buffer was observed.
+- The exported `PolicySnapshotService` is a deliberately narrow exception to the private control
+  surface. It authenticates Binder's caller UID against the claimed process and cannot mutate
+  policy. The privileged `IEchidnaControlService` remains non-exported.
 
 ## Data plane: audio capture to DSP
 
-When the Zygisk module attaches inside a target process it installs a **layered
-hook chain**. Each manager, when it captures a PCM block, calls
+When the Zygisk module attaches inside a target process it attempts every eligible
+capture manager. A manager that captures a PCM block calls
 `echidna_process_block(...)`, which lazily `dlopen`s `libech_dsp.so`, resolves the
 four DSP entrypoints, and calls `dsp.process(...)`, then writes the processed
 PCM back in place. All hooking is gated on `hooksEnabled()` **and**
 `isProcessWhitelisted()` — the module never hooks unconditionally.
 
-**Hook install order** (from the orchestrator, highest priority first):
+**Capture-route support** is a code-owned contract in
+`native/zygisk/src/hooks/capture_route_reachability.h`:
+
+| Route | Status | PCM metadata source / reason |
+| --- | --- | --- |
+| AAudio | Operational candidate | Stable AAudio stream getters. |
+| OpenSL ES | Operational candidate | Recorder sink PCM descriptor and tested wrapper lifecycle. |
+| tinyalsa | Operational candidate | `pcm_open` configuration. |
+| LSPosed Java `AudioRecord` | Operational candidate | Java sample-rate, channel-count, and format getters. |
+| Legacy input preprocessor effect ABI | Phase 1 boundary | ABI, lifecycle, audio, and real-time host tests pass; it is not packaged, registered, session-attached, or enabled. |
+| Native `AudioRecord` | Developer contract only | Requires `ECHIDNA_AR_SR`, `ECHIDNA_AR_CH`, and `ECHIDNA_AR_FORMAT`; normal app specialization does not provide them. |
+| libc raw-device read | Developer contract only | Requires `ECHIDNA_LIBC_SR`, `ECHIDNA_LIBC_CH`, and `ECHIDNA_LIBC_FORMAT`. |
+| Audio HAL | Unsupported | `unsupported_injection_boundary`; vendor stream objects live behind audioserver. |
+| AudioFlinger | Unsupported | `unsupported_injection_boundary`; no stable app-process transform ABI. |
+
+Operational means the route has a reachable code contract, not that it has passed on a physical
+device. The orchestrator reports support, metadata source, and the exact unavailable reason in hook
+telemetry.
 
 ```mermaid
-flowchart LR
-    A["AAudio<br/>(API ≥ 26)"] --> B["OpenSL ES"] --> C["AudioFlinger"] --> D["AudioRecord<br/>native bridge"] --> E["libc read<br/>(/dev/snd fallback)"] --> F["tinyalsa"] --> G["Audio HAL"]
-    G --> P["echidna_process_block()"]
+flowchart TB
+    A["AAudio"] --> P["echidna_process_block()"]
+    B["OpenSL ES"] --> P
+    C["tinyalsa"] --> P
+    J["LSPosed Java AudioRecord"] --> Q["dedicated shim JNI + packaged DSP"]
+    L["legacy input preprocessor<br/>Phase 1 boundary only"] -.-> R["not packaged or attached"]
+    D["native AudioRecord / libc<br/>developer contract"] -.-> P
+    X["Audio HAL / AudioFlinger<br/>unsupported boundary"] -.-> N["fail closed + telemetry"]
     P --> H["dlopen libech_dsp.so → dsp.process()"]
 ```
 
-The first manager that installs successfully flips internal status to `kHooked`,
-which the control service surfaces via `getModuleStatus`. The chain is a
-priority list, not mutually exclusive — several managers can be active if an app
-uses multiple audio paths.
+Any successful manager flips internal status to `kHooked`, which the control service surfaces via
+`getModuleStatus`. Managers are not mutually exclusive: several candidates can be installed when an
+app touches multiple APIs. Unsupported or unconfigured routes return false with explicit telemetry.
 
 ### Zygisk module lifecycle
 
@@ -118,33 +154,42 @@ uses multiple audio paths.
     sequenceDiagram
     participant Z as Zygisk loader (Magisk)
     participant M as EchidnaModule
-    participant S as ProfileSyncBridge
+    participant S as authenticated v2 publisher
     participant O as AudioHookOrchestrator
     participant D as libech_dsp.so
     Z->>M: onLoad(Api*, JNIEnv*)
     Note over M: stash handles and stay mapped without DLCLOSE_MODULE_LIBRARY
     Z->>M: preAppSpecialize(args)
-    Note over M: no-op (still zygote identity)
+    Note over M: cache target process and expected companion UID
     Z->>M: postAppSpecialize(args)
     M->>M: echidna_module_attach()
-    M->>S: connect ProfileSyncBridge + read latest snapshot
-    M->>O: create orchestrator (once)
-    O->>O: installHooks() — gated on hooksEnabled() && whitelisted
+    M->>S: connect, verify SO_PEERCRED, send v2 hello
+    Note over M: stay inert and reconnect if publisher/policy is unavailable
+    S-->>M: UID-scoped, monotonic v2 generation
+    M->>O: install once admitted by master/panic/whitelist/owner gates
     Note over O,D: on captured PCM → echidna_process_block → dsp.process()
 ```
 
-`postAppSpecialize` is the attach point because by then `/proc/self/cmdline`
-reflects the **target app's** process name, which the whitelist check reads. The
-module deliberately keeps itself mapped so the installed inline/PLT hooks persist
-for the process lifetime. The `AudioRecord.read` slice has rooted x86_64 emulator
-coverage through the interception probe. Full Magisk loader lifecycle, reboot
-survival, arbitrary target-app specialization, and non-`AudioRecord` hook
-managers still require release-device validation.
+`preAppSpecialize` caches the target process and resolves the companion package UID while the
+zygote-side package registry is still readable. `postAppSpecialize` starts the process-local reader
+and activation worker only after sandboxing. A cold publisher does not permanently disable an
+eligible process: it remains inert, reconnects with bounded backoff, and installs once a valid
+current generation assigns that process to the `zygisk` capture owner. Disconnect, policy revoke,
+master-off, bypass, or an active panic hold revoke processing immediately; rollback and conflicting
+same-generation payloads are rejected. The module stays mapped so installed inline/PLT hooks can
+remain resident while their processing gate is disabled. The earlier rooted x86_64 `AudioRecord.read` probe
+predates the current explicit PCM contract and does not prove the current native
+route is reachable. Full Magisk loader lifecycle, reboot survival, arbitrary
+target-app specialization, and current capture routes require device validation.
 
 ### Multi-ABI hooking
 
-The native libraries are cross-compiled **per ABI** (t2-e10) — `arm64-v8a`
-(primary), `armeabi-v7a`, `x86_64` — into `build/<abi>/lib/`. The inline-hook
+The native superbuild targets **four** shared objects per ABI — `libechidna.so`,
+`libech_dsp.so`, `libechidna_shim_jni.so`, and the Phase 1 `libechidna_preproc.so` — for
+`arm64-v8a`, `armeabi-v7a`, and `x86_64`. That is 12 generated targets. The supported delivery
+contract remains nine runtime artifacts: release tooling carries only the engine, DSP, and shim JNI
+triplet for each ABI. The preprocessor is not copied into an APK or Magisk payload, registered in an
+effects configuration, attached to a capture session, or enabled. The inline-hook
 trampoline support differs by ABI (t2-e11):
 
 - **arm64-v8a** — full trampoline (LDR X16 / BR X16 with relocation fixups); the
@@ -152,64 +197,68 @@ trampoline support differs by ABI (t2-e11):
 - **x86_64** — full trampoline implemented (14-byte absolute `jmp [rip]` patch
   with an allow-listed length decoder that relocates RIP-relative and rel32
   operands, failing closed on anything unrecognized). Verified with a host
-  decoder + end-to-end hook harness, plus the rooted-emulator `AudioRecord`
-  interception probe.
+  decoder + end-to-end hook harness. The earlier rooted-emulator `AudioRecord`
+  probe predates the current route contract.
 - **armeabi-v7a** — **graceful degrade**: it builds and loads, but `install()`
   returns `false` and emits a `hook_unsupported_abi` log signal, because Thumb-2 /
   IT-block relocation is unsafe and untested. armv7 hooking is intentionally
   non-functional rather than silently wrong.
 
-## Profile / telemetry sync: service-owned snapshot socket
+## Authenticated policy v2 delivery
 
-The control service publishes profile, whitelist, and control state to the
-native side (and to the LSPosed shim) through **`ProfileSyncBridge`**: one
-service-owned abstract `AF_UNIX` socket named `echidna_profiles`.
+`ProfileStore` persists and publishes one strict, bounded version-2 policy document. It contains
+`schemaVersion`, a service-owned monotonic `generation`, `profiles`, `defaultProfileId`,
+`appBindings`, `whitelist`, `captureOwners`, and the complete `control` object. Control covers
+master, bypass, timed panic, sidetone, gain, and engine mode. Unknown or duplicate keys, malformed
+Unicode, oversize documents, dangling defaults/bindings, invalid owners, and incomplete controls
+fail closed. Legacy storage can be migrated once; legacy readers do not receive live policy.
 
-- The snapshot JSON is `{profiles, whitelist, appBindings, control}`. `control`
-  is additive (`masterEnabled`, `bypass`, `panicUntilEpochMs`, `sidetone`);
-  readers that predate it still work.
-- Wire framing is `[4-byte big-endian length][UTF-8 JSON]`.
-- Every connecting reader receives the latest snapshot immediately and then
-  remains connected for later update frames. This lets multiple hooked app
-  processes observe the same policy without racing to own a filesystem socket.
-- The previous filesystem endpoint `/data/local/tmp/echidna_profiles.sock` is no
-  longer used by current builds.
+`PublishedPolicyRegistry` is the read-only process-local source shared by the two transports:
+
+- **Zygisk:** `ProfileSyncBridge` owns the abstract `AF_UNIX` socket `echidna_profiles`. A client
+  must send the v2 Zygisk hello. Both sides validate peer identity: the publisher scopes policy to
+  packages mapped from `SO_PEERCRED`, while the native reader accepts only the companion UID cached
+  before specialization. Frames are bounded, length-prefixed UTF-8. Multiple native readers receive
+  only their UID-scoped view; slow writers and handshake/client counts are bounded. A disconnect
+  revokes admission while retaining the generation watermark for safe reconnect.
+- **LSPosed:** `PolicySnapshotService` is an explicit, exported, read-only Binder component. It
+  validates the claimed process against `Binder.getCallingUid()` packages and returns only the
+  exact/base process view. Bounded listeners receive generation invalidations, then fetch the
+  newest scoped document. They never receive mutation authority.
+- A socket LSPosed hello is closed, and an unnegotiated legacy socket reader receives one inert
+  fail-closed document before disconnect. The old filesystem endpoint
+  `/data/local/tmp/echidna_profiles.sock` is not used.
 
 ### Shared-memory fallback and telemetry
 
 The config and telemetry helper regions use file-backed mappings under
-`/data/local/tmp/echidna` via `android_shared_memory.h`. The profile-sync socket
-is now the primary policy transport, but these regions still provide:
-
-- a fail-closed startup fallback when the service is not reachable yet; and
-- the live telemetry path that hooked apps update for diagnostics.
+`/data/local/tmp/echidna` via `android_shared_memory.h`. Versioned socket/Binder policy is
+authoritative for admission; deprecated shared-file state cannot revive a denied process. The
+telemetry region remains the transformed-buffer evidence path consumed by diagnostics.
 
 ## LSPosed shim path (Java-API apps)
 
-For apps that capture through Java `AudioRecord`, the LSPosed shim provides a
-fallback that does **not** depend on the Zygisk module being active. It resolves
-per-app policy by reading the **same ProfileSyncBridge snapshot** (t2-e8):
+For apps that capture through Java `AudioRecord`, the LSPosed shim provides a fallback that does
+**not** require an active Zygisk route. After the real target process identity is known:
 
-- `ProfileSyncReceiver` connects to the same abstract `AF_UNIX` socket and reads
-  the identical framing — it mirrors the native receiver rather than inventing a
-  new wire format.
-- `ProfileSnapshot` parses `{profiles, whitelist, appBindings, control}` and
-  exposes `isProcessAllowed(pkg, proc)`, `resolveProfile(pkg)`,
-  `isGloballyEnabled()`, and `engineMode()`.
+- `ProfileSyncReceiver` explicitly binds the companion's read-only `PolicySnapshotService`,
+  registers its listener before the first fetch, and reconnects on provider failure.
+- `ProfileSnapshot` accepts only the complete strict v2 schema. `ProfileSnapshotStore` preserves a
+  monotonic generation watermark and rejects rollback or conflicting same-generation bytes.
+- Policy resolution uses the exact process then base package, selects an app binding or the explicit
+  default profile, and requires `captureOwners` to assign the target to `lsposed`.
 - **Fail-closed by construction:** the default snapshot is `empty()` (empty
-  whitelist, global off). Before any push, or on any unreadable/unparseable
-  snapshot, resolution denies hooking. Hooking is enabled **only** when globally
-  enabled *and* the package/process is explicitly whitelisted `true`. When a
-  buffer is not allowed, `AudioRecordHook` zeroes the returned buffer and forces
-  `read()` to return 0.
+  whitelist, global off). Before any policy fetch, or on any unreadable/unparseable
+  snapshot, resolution denies processing. Processing is enabled **only** when globally
+  enabled, outside the panic hold, explicitly whitelisted `true`, and assigned to the LSPosed owner.
+  A policy change during a read invalidates the transaction so original bytes/results are preserved.
 
-### Multi-reader snapshot delivery
+### Multi-reader delivery without shared authority
 
-The previous profile-sync contract was single-holder: each hooked process bound
-the same filesystem socket, so only the last binder received pushes. The current
-contract inverts ownership. The companion service owns the publisher socket, and
-Zygisk/LSPosed readers connect to it. A reader that starts after the last profile
-mutation still receives the cached snapshot immediately.
+The previous profile-sync contract was single-holder: each hooked process tried to own one
+filesystem socket. Current delivery has one service-owned policy registry, multiple authenticated
+native socket readers, and independently authenticated Binder views for LSPosed. Late readers get
+the persisted/current generation through their transport; no target process can publish policy.
 
 ## Threading and latency
 
@@ -219,20 +268,23 @@ mutation still receives the cached snapshot immediately.
   an overrun watchdog and xrun counting; this trades latency for quality. Latency
   modes are exposed per preset (Low-Latency / Balanced / High-Quality). See
   [DSP & Effects](dsp-effects.md).
-- The snapshot is pushed on mutation and at service startup (`loadFromDisk`);
-  late readers also receive the service's cached snapshot as soon as they connect.
+- Policy is published on mutation and restored at service startup. Native readers receive scoped
+  frames; Binder listeners receive only a generation invalidation and then re-fetch their scoped
+  view. Late consumers obtain the current persisted/registry generation through their transport.
 
 ## What is verified vs device-gated
 
 - **Verified in this environment:** the single-APK topology and AIDL unification
-  build and the debug/release APKs assemble; all six per-ABI `.so` cross-compile
-  and link (arm64-v8a / armeabi-v7a / x86_64, DSP + Zygisk); host DSP tests pass;
+  build and the debug/release APKs assemble; all 12 superbuild targets cross-compile, while release
+  delivery verifies the nine engine/DSP/shim-JNI artifacts; host DSP and preprocessor tests pass;
   the x86_64 trampoline passes a host end-to-end hook harness; the app installs,
   launches crash-free, and navigates on an unrooted emulator; rooted Android
-  13/14 emulators pass app instrumentation with native `processBlock` coverage
-  and an `AudioRecord.read` interception probe with `processed=1`.
+  13/14 emulators passed app instrumentation with native `processBlock` coverage.
+  The recorded `AudioRecord.read` probe is historical, pre-redesign evidence.
 - **Still release-device validation:** Magisk flashing/reboot/module-manager load,
   live LSPosed shim injection, physical-device Zygisk lifecycle on arm64,
-  AAudio/OpenSL/AudioFlinger/tinyalsa/HAL hooks, SELinux / audio-HAL interaction,
-  and multi-process profile-sync behavior. See [Verification](verification.md)
+  AAudio/OpenSL/tinyalsa capture, SELinux interaction, and multi-process
+  profile-sync behavior. Native AudioRecord/libc need a normal-flow PCM contract;
+  Audio HAL/AudioFlinger remain unsupported rather than merely unverified. See
+  [Verification](verification.md)
   for the full matrix and a reproduce-on-device procedure.

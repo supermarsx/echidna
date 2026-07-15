@@ -19,11 +19,12 @@ flashable zip. This aligns with the deployment flow in
 > unsupported — the module ships arm64-v8a, armeabi-v7a, x86_64).
 
 > **Status.** Packaging is host-verified (layout, `bash -n`, script correctness, and Android ELF
-> contents). Rooted Android 13/14 emulators prove the native `processBlock` path and one
-> `AudioRecord.read` interception slice once the module libraries are reachable. Actual Magisk
+> contents). Rooted Android 13/14 emulators prove the native `processBlock` path. A native
+> `AudioRecord.read` interception slice passed before the current explicit-contract route redesign
+> and is historical evidence only. Actual Magisk
 > flashing remains unverified here: `magisk --install-module /sdcard/Download/echidna-magisk.zip`
 > returned `Incomplete Magisk install` on the emulator images. Treat Magisk Manager install,
-> reboot, LSPosed injection, and SELinux/socket bootstrap as release-device validation.
+> reboot, LSPosed injection, current capture routes, and SELinux behavior as device validation.
 
 ## Failsafe and recovery contract
 
@@ -56,9 +57,9 @@ pretending to prove success. The checks to surface include:
 - Presence of the matching Zygisk payload and `libech_dsp.so` for the selected ABI.
 - Incomplete install or bridge state, including missing `/data/adb/echidna` runtime directories,
   missing JNI search-path libraries, or stale shared telemetry/config files.
-- SELinux enforcing state and whether policy/bootstrap steps succeeded.
+- SELinux enforcing state and whether the narrow config/telemetry policy steps succeeded.
 - Vendor audio family and common native audio libraries (`libOpenSLES.so`, `libaudioclient.so`,
-  `libtinyalsa.so`) used as signals for AAudio/OpenSL/AudioFlinger/tinyalsa/HAL coverage.
+  `libtinyalsa.so`) used only as compatibility signals. Their presence does not prove capture.
 - Existing audio/root modules that are known or suspected to conflict.
 - Duplicate Zygisk plus LSPosed scope for the same target app.
 
@@ -69,7 +70,7 @@ they do not remove the user's responsibility for having a bootloop recovery path
 
 - **Single module id.** The previous split — a trivial `id=echidna` module plus a separate
   `id=echidna-control` module under `android/control-service/magisk/` — is unified into one
-  `id=echidna` module. The control-service SELinux/socket bootstrap scripts
+  `id=echidna` module. The control-service runtime-policy/watchdog scripts
   (`post-fs-data.sh`, `service.sh`) are reused into that single module; the old
   `echidna-control` `module.prop` is removed.
 - **Per-ABI Zygisk payload.** The engine ships as `zygisk/<abi>.so` (Zygisk's required naming),
@@ -80,11 +81,16 @@ they do not remove the user's responsibility for having a bootloop recovery path
 
 ## Inputs
 
-The packager consumes the per-ABI NDK output from `tools/build_native_ndk.sh`:
+The native superbuild produces four libraries for each of three ABIs. Release delivery transports
+nine artifacts: the Magisk packager consumes engine/DSP pairs and
+`libechidna_shim_jni.so` is reserved for the LSPosed APK. Phase 1
+`libechidna_preproc.so` is neither packaged nor registered/session-attached:
 
 ```
 build/<abi>/lib/libechidna.so   → zygisk/<abi>.so      (Zygisk engine, per ABI)
 build/<abi>/lib/libech_dsp.so   → libs/<abi>/...        (staged; placed by customize.sh)
+build/<abi>/lib/libechidna_shim_jni.so                 (LSPosed APK input; not in module)
+build/<abi>/lib/libechidna_preproc.so                   (Phase 1 only; not shipped)
 ```
 
 Build those first (see [developer_readme.md](developer_readme.md#native-per-abi-build-ndk)):
@@ -108,9 +114,10 @@ META-INF/com/google/android/update-binary
 META-INF/com/google/android/updater-script
 customize.sh                    # install-time ABI mapping + placement
 module.prop                     # id=echidna, version templated at package time
-post-fs-data.sh                 # runtime dir + socket/plugin dir bootstrap
-service.sh                      # lib install, socket perms, SELinux relaxations
-common/echidna_af_offsets.txt   # optional AudioFlinger offsets, if provided
+post-fs-data.sh                 # watchdog + region creation, labels, and narrow policy
+service.sh                      # watchdog clear + runtime library staging
+common/zygisk-status.sh         # shared, read-only Zygisk state probe
+sepolicy.rule                   # narrow config/telemetry region types and grants
 ```
 
 At install, `customize.sh` maps Magisk's `$ARCH` to the build ABI, copies the matching
@@ -119,18 +126,19 @@ At install, `customize.sh` maps Magisk's `$ARCH` to the build ABI, copies the ma
 for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib`), removes the
 `libs/` staging, and sets permissions.
 
-## Runtime bootstrap (SELinux + shared runtime files)
+## Runtime bootstrap (narrow policy + shared runtime files)
 
-- **`post-fs-data.sh`** creates `/data/adb/echidna/{lib,run}`, mirrors `libechidna.so` to the JNI
-  search path, and prepares `/data/local/tmp/echidna` (plugin dir plus shared config/telemetry
-  region files — `/dev/shm` does not exist on stock Android, so these live under `/data`). It
-  applies `chcon` contexts to the runtime dirs.
-- **`service.sh`** installs the engine into `/data/adb/echidna/lib`, stages optional AudioFlinger
-  offsets and applies SELinux relaxations via `magiskpolicy --live` (zygote dyntransition / binder).
-  If enforcement cannot be adjusted, the module logs and the app falls back to Java-only mode.
+- **`post-fs-data.sh`** arms the boot watchdog, creates `/data/adb/echidna/{lib,run}`, mirrors
+  `libechidna.so` to the JNI search path, and prepares `/data/local/tmp/echidna` (plugin directory
+  plus pre-sized config/telemetry region files). It applies dedicated region types and narrow app
+  read/write grants matching `sepolicy.rule`. It does not grant zygote transitions or binder access.
+- **`service.sh`** marks late-start as reached, clears the watchdog, recreates safe runtime
+  permissions, and stages `libechidna.so`. It does not patch service-private audio structures or
+  widen SELinux.
 
-Profile-sync itself is owned by the companion service's abstract AF_UNIX socket
-`echidna_profiles`, so there is no filesystem socket endpoint for the module scripts to create.
+Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
+`echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem
+policy socket endpoint for module scripts to create.
 See [developer_readme.md](developer_readme.md#known-limitations).
 
 ## Script usage
@@ -147,7 +155,6 @@ Environment overrides:
 - `ECHIDNA_ABIS` (default `arm64-v8a armeabi-v7a x86_64`)
 - `ECHIDNA_VERSION` (default `0.0.0`) / `ECHIDNA_VERSION_CODE` (default: digits of version, else 1)
 - `ECHIDNA_BUILD_ROOT` (default `<repo>/build`), `ECHIDNA_OUT_DIR`, `ECHIDNA_ZIP_PATH`
-- `ECHIDNA_AF_OFFSETS` (optional AudioFlinger offsets file to bundle)
 
 The `echidna/magisk-packager` docker image runs this step in a pinned environment (see
 [developer_readme.md](developer_readme.md#docker-helper-images)).
@@ -167,11 +174,16 @@ Each GitHub Release now gets a part-by-part asset set:
 | `echidna-companion-<tag>.apk` | Companion app plus in-process control service. |
 | `echidna-lsposed-shim-<tag>.apk` | Installable LSPosed/Xposed Java fallback shim. |
 | `echidna-magisk-<tag>.zip` | Flashable Magisk/Zygisk module. |
-| `echidna-native-libs-<tag>.zip` | Raw `libechidna.so` + `libech_dsp.so` for every ABI. |
+| `echidna-native-libs-<tag>.zip` | Raw engine, DSP, and dedicated shim JNI library for every ABI. |
 | `echidna-apks-<tag>.zip` | Companion APK and LSPosed shim APK together. |
 | `echidna-complete-<tag>.zip` | All release assets above plus `RELEASE_ARTIFACTS.md`. |
 | `SHA256SUMS.txt` | SHA-256 checksums for all published release files. |
 | `RELEASE_ARTIFACTS.md` | Short install/asset manifest generated by the release job. |
+
+Use the newest GitHub Release for normal installs. Do not flash an earlier release unless you are
+intentionally rolling back or already understand the recovery procedure for a broken Magisk/Zygisk
+module. Older release zips may contain boot or module bugs that newer releases fixed, so recovery
+can be harder than with the current build.
 
 Manual dispatch behavior:
 
@@ -179,8 +191,9 @@ Manual dispatch behavior:
 - Provide an explicit tag only when it matches `YY.N`; invalid tags such as `v26.1`, `2026.1`,
   `26.0`, or `26.01` are rejected before build jobs start.
 - Existing tags can be released manually only when no GitHub Release already exists for that tag.
-- If release signing secrets are absent, the APK builds keep the documented debug-signing fallback
-  and produce non-distributable release APKs.
+- Every release entry point requires a complete keystore, private-key alias/password, and expected
+  certificate SHA-256. Missing, partial, malformed, or mismatched signing inputs fail before
+  publication; hosted releases never publish Gradle's local debug-signing fallback.
 
 Automatic push behavior:
 
@@ -197,8 +210,10 @@ Automatic push behavior:
 - Package the module with `tools/build_magisk_module.sh` (set `ECHIDNA_VERSION`).
 - Build the release-signed companion and LSPosed APKs (`assembleRelease` with a real keystore — see
   [signing.md](signing.md)).
+- Verify signer continuity. A previously debug-signed APK cannot be upgraded in place to a release
+  certificate; back up needed data and perform a one-time uninstall when migrating signers.
 - **On a rooted device (Magisk 24.0+):** enable Zygisk, flash `out/echidna-magisk.zip`, reboot,
-  install the companion app, and validate hooks + SELinux/HAL via the compatibility wizard and
-  diagnostics view.
+  install the companion app, and validate supported capture candidates plus SELinux behavior via
+  the compatibility wizard and diagnostics view. Audio HAL/AudioFlinger remain unsupported.
 - Avoid scoping the same target app into both Zygisk and LSPosed unless the release test is
   explicitly validating duplicate-hook behavior.

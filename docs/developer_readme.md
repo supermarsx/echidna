@@ -8,11 +8,14 @@ after the Phase 1–3 remediation (buildable debug APK → runnable-on-device la
 scaffolding).
 
 > **Status honesty (read this first).** The host build is verified on the development host
-> (Android SDK, NDK r27, JDK 21, Gradle 8.5): the companion and shim APKs build, all six per-ABI
-> native `.so` cross-compile, the Magisk zip is packaged, and host DSP tests pass. Rooted Android 13/14
-> emulators also prove the in-app control-service native `processBlock` path and one live
-> `AudioRecord.read` interception slice. Magisk flashing, live LSPosed injection,
-> physical-device SELinux/HAL behavior, and broader hook-manager coverage are still separate
+> (Android SDK, NDK r27, JDK 21, Gradle 8.5): the companion and shim APKs build, the native
+> superbuild generates four libraries per ABI, the nine supported delivery artifacts package, and
+> host DSP/effect tests pass. The fourth target, `libechidna_preproc.so`, is Phase 1 only and is not
+> shipped, registered, session-attached, or enabled. Rooted Android
+> 13/14 emulators also prove the in-app control-service native `processBlock` path. A native
+> `AudioRecord.read` interception slice passed before the current explicit-contract redesign and
+> is historical evidence only. Magisk flashing, live LSPosed injection, current capture routes,
+> and physical-device SELinux behavior are still separate
 > release-device validation. Treat a successful build/install as artifact proof only, not as a
 > guarantee that the target phone can run Echidna safely or effectively. See
 > [Status: verified vs. needs a device](#status-verified-vs-needs-a-device).
@@ -30,8 +33,9 @@ android/
   lsposed-shim/      # Installable LSPosed/Xposed Java shim APK.
 native/
   dsp/               # libech_dsp.so — the DSP engine (host-testable).
+  effects/legacy/    # libechidna_preproc.so — unshipped Phase 1 input-effect boundary.
   zygisk/            # libechidna.so — the Zygisk module + audio hooks.
-  CMakeLists.txt     # Aggregate that configures dsp + zygisk together for the NDK build.
+  CMakeLists.txt     # Aggregate that configures DSP, preprocessor, and Zygisk targets.
 tools/
   build_native_ndk.sh    # Per-ABI NDK cross-compile driver.
   build_magisk_module.sh # Flashable Magisk zip packager.
@@ -52,21 +56,17 @@ Companion app (com.echidna.app)
    ▼
 EchidnaControlService (:service library, folded into the app build)
    │  JNI (libechidna_control_jni.so, packaged in the APK)
-   ▼
-libechidna.so  (Zygisk module, delivered by the Magisk module, dlopen'd at runtime)
+   ▼ device-gated lookup; fails closed when the module library is unreachable
+libechidna.so  (Zygisk module, delivered by the Magisk module)
    │  dlopen("libech_dsp.so") + process audio blocks
    ▼
 libech_dsp.so  (DSP engine)
 
-ProfileStore.buildSnapshotLocked() publishes a JSON snapshot
-   {profiles, whitelist, appBindings, control}
-   over the service-owned abstract AF_UNIX socket "echidna_profiles"
-   │
-   ▼
-Zygisk readers and the LSPosed shim connect and read the latest snapshot
-immediately, then stream later update frames. The shim CANNOT bind the in-app
-service — it runs with the host app's identity — so it resolves per-app hook
-policy fail-closed from whitelist + appBindings.
+ProfileStore publishes strict policy v2 into PublishedPolicyRegistry
+   {schemaVersion, generation, profiles, defaultProfileId, appBindings,
+    whitelist, captureOwners, control}
+   ├─ Zygisk: authenticated, UID-scoped abstract AF_UNIX frames
+   └─ LSPosed: authenticated, process-scoped read-only Binder snapshot
 ```
 
 Key consequences of the in-app topology:
@@ -82,9 +82,10 @@ Key consequences of the in-app topology:
   APK bundles `EchidnaControlService`, the canonical AIDL, and the `echidna_control_jni` native lib.
 - The **canonical AIDL lives only** in `android/control-service/service/src/main/aidl/`. The app's
   old divergent copy was deleted; the app compiles against the library's complete interface.
-- The LSPosed shim's per-app policy comes from the **published snapshot**, not a binder. The old
-  phantom `ServiceManager` binder (`echidna_control` / `IControlService` / `getAppConfig`) has been
-  removed entirely.
+- The old phantom `ServiceManager` binder (`echidna_control` / `IControlService` / `getAppConfig`)
+  remains removed. The current `PolicySnapshotService` is a real explicit component with a separate
+  narrow AIDL: it is exported only for read-only, caller-UID/process-authenticated LSPosed policy.
+  The privileged `EchidnaControlService` remains non-exported.
 
 ## Building
 
@@ -125,13 +126,21 @@ See [the signing model](signing.md). In short: supply keystore material via a gi
 ```sh
 cd android/app
 ./gradlew :app:assembleRelease
+```
 
-cd ../lsposed-shim
+The companion can build without the native NDK outputs. The shim intentionally cannot: first run
+the native build below, then build the APK so Gradle can package exactly the dedicated shim JNI
+bridge and DSP dependency:
+
+```sh
+cd android/lsposed-shim
 ./gradlew :shim:assembleRelease
 ```
 
-Without keystore material the release builds fall back to debug signing so CI/local builds still
-succeed (producing non-distributable APKs). Minification/resource-shrinking is intentionally
+Without keystore material, direct local Gradle release builds fall back to debug signing
+(producing non-distributable APKs). The hosted release workflow does not use that fallback: it
+validates a complete keystore/private-key entry and certificate pin before creating an automatic
+tag, then verifies every APK and bundle before publication. Minification/resource-shrinking is intentionally
 disabled for the first release (reflection-sensitive AIDL/JNI/Compose/LSPosed entry points);
 enabling R8 with a proven keep-rule set is a documented follow-up.
 
@@ -148,12 +157,17 @@ ANDROID_NDK=/path/to/android-ndk ANDROID_PLATFORM=android-26 \
 Output layout (consumed by the Magisk packager):
 
 ```
-build/arm64-v8a/lib/libech_dsp.so     build/arm64-v8a/lib/libechidna.so
-build/armeabi-v7a/lib/libech_dsp.so   build/armeabi-v7a/lib/libechidna.so
-build/x86_64/lib/libech_dsp.so        build/x86_64/lib/libechidna.so
+build/arm64-v8a/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
+build/armeabi-v7a/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
+build/x86_64/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
 ```
 
-ABI set: **arm64-v8a (primary)**, `armeabi-v7a`, `x86_64`. Environment overrides: `ECHIDNA_ABIS`,
+That is 12 generated Android shared objects across the three ABIs. Supported release transport
+still verifies exactly nine: the engine/DSP/shim-JNI triplet per ABI. The Magisk packager consumes
+the engine and DSP pairs; the LSPosed Gradle build consumes the dedicated shim JNI and DSP pairs.
+No release step copies `libechidna_preproc.so`; no effect XML registers it or capture session
+attaches it. ABI set:
+**arm64-v8a (primary)**, `armeabi-v7a`, `x86_64`. Environment overrides: `ECHIDNA_ABIS`,
 `ANDROID_PLATFORM`, `ECHIDNA_BUILD_TYPE`, `ECHIDNA_CMAKE_GENERATOR`, `ECHIDNA_CMAKE_EXTRA_ARGS`,
 `CMAKE`; the NDK path also resolves from `ANDROID_NDK_HOME` / `ANDROID_NDK_ROOT`.
 
@@ -165,8 +179,8 @@ into the repo). If none resolve, the loader stays **fail-closed** and logs a lou
 
 > **Build-hygiene note.** The FetchContent BoringSSL sub-build compiles its own large test suite
 > even with `-DBUILD_TESTING=OFF` (BoringSSL doesn't gate on the standard flag). It succeeds but
-> roughly triples native build time; restrict to the `ech_dsp`/`echidna` targets or disable the
-> sub-build's tests to speed CI.
+> roughly triples native build time; restrict to the `ech_dsp`, `echidna`, and
+> `echidna_shim_jni` targets or disable the sub-build's tests to speed CI.
 
 ### Host DSP tests
 
@@ -207,7 +221,7 @@ run individual stages or the whole pipeline:
 ```sh
 docker compose -f docker/compose.yaml build
 
-# (a) per-ABI native libs → build/<abi>/lib/{libech_dsp,libechidna}.so
+# (a) per-ABI native libs → build/<abi>/lib/{libech_dsp,libechidna,libechidna_shim_jni}.so
 docker compose -f docker/compose.yaml run --rm native-build
 # (b) debug APK (offline after the first Gradle dep fetch; cached in a volume)
 docker compose -f docker/compose.yaml run --rm android-build
@@ -222,11 +236,10 @@ docker compose -f docker/compose.yaml --profile emulator run --rm emulator
 `ci-local` and `emulator` sit behind compose profiles (`ci` / `emulator`) so they do not run by
 default.
 
-> This section describes the images authored in Phase 3 (executor t2-e16). **Image builds/runs are
-> not verified on the build host** (no Docker daemon — static-validated only). The first
-> `android-build` run needs network for Gradle dependencies, and the cmdline-tools checksum
-> (`CMDLINE_TOOLS_SHA256`) should be confirmed against Google's published value (overridable; the
-> download fails closed on mismatch). See `docker/README.md`.
+> The native-build → Magisk packager chain has run on the current Docker daemon and reproduced the
+> architecture-checked payload. The first `android-build` run still needs network for Gradle
+> dependencies. A container build is artifact evidence, not a substitute for the signed-release
+> payload/certificate verifier or a live-device capture test. See `docker/README.md`.
 
 ## Native Control API
 
@@ -261,16 +274,34 @@ entry points are:
 `libechidna.so` is a genuine Zygisk module: `native/zygisk/include/zygisk.hpp` provides the Zygisk
 API v4 contract, and `native/zygisk/src/module.cpp` defines `class EchidnaModule : public
 zygisk::ModuleBase` with `REGISTER_ZYGISK_MODULE(EchidnaModule)`. The hook lifecycle is driven from
-`postAppSpecialize` (when `/proc/self/cmdline` reflects the target app), which calls
-`echidna_module_attach()` → connects to `ProfileSyncBridge`, reads the latest snapshot, creates the
-`AudioHookOrchestrator`, then installs hooks in priority order (AAudio → OpenSL → AudioFlinger →
-AudioRecord → libc read → tinyalsa → audio HAL). Hooking stays gated on
-`hooksEnabled() && isProcessWhitelisted(process)`.
+`preAppSpecialize` caches the target process and resolves the trusted companion UID while the
+package registry remains readable. `postAppSpecialize` creates a fail-closed profile reader and
+activation worker. It verifies the socket publisher with `SO_PEERCRED`, negotiates v2, reconnects
+after cold start/disconnect, and installs hooks only after a current generation admits the target,
+assigns the `zygisk` capture owner, and passes master/bypass/panic/whitelist gates.
+
+The route contract is explicit:
+
+| Route | Current support | Metadata / unavailable reason |
+| --- | --- | --- |
+| AAudio | Operational candidate | AAudio stream getters. |
+| OpenSL ES | Operational candidate | Recorder sink PCM descriptor. |
+| tinyalsa | Operational candidate | `pcm_open` config. |
+| LSPosed Java `AudioRecord` | Operational candidate | Java stream getters and dedicated JNI. |
+| Legacy input preprocessor effect ABI | Phase 1 boundary | Tested ABI/lifecycle/audio/RT core; not packaged, registered, attached, or enabled. |
+| Native `AudioRecord` | Developer contract only | `ECHIDNA_AR_SR/CH/FORMAT`; no normal-flow producer. |
+| libc raw-device read | Developer contract only | `ECHIDNA_LIBC_SR/CH/FORMAT`; no normal-flow producer. |
+| Audio HAL | Unsupported | `unsupported_injection_boundary`. |
+| AudioFlinger | Unsupported | `unsupported_injection_boundary`. |
+
+“Operational candidate” describes a reachable code contract, not physical-device proof. Native
+AudioRecord/libc fail closed unless a developer supplies a valid PCM contract. App-process Zygisk
+does not own audioserver or a stable vendor stream ABI, so HAL and AudioFlinger do not install.
 
 **ABI support.** `arm64-v8a` is the locked primary implementation, but live arm64 Zygisk loading
 and hook installation still need physical-device proof. `x86_64` has a complete inline-hook
-trampoline and a rooted-emulator `AudioRecord.read` slice with `processed=1`; broader target-app
-injection and HAL paths are not claimed. `armeabi-v7a` builds but **gracefully degrades** —
+trampoline; its earlier rooted-emulator `AudioRecord.read` probe predates the current route
+contract. Broader target-app injection is not claimed. `armeabi-v7a` builds but **gracefully degrades** —
 `install()` returns false and emits a `hook_unsupported_abi` log signal (Thumb-2/IT-block
 relocation is not implemented). Real armv7 runtime telemetry still needs device proof.
 
@@ -307,9 +338,10 @@ Core methods:
 Control/status methods added during the topology unification:
 
 - `String getModuleStatus()` / `String refreshStatus()` → real combined status JSON
-  (`magiskModuleInstalled`, `zygiskEnabled`, `selinuxState`/`selinuxStatus`, and a live `audioStack`
-  HAL probe). This replaces the app's previously fabricated `nativeInstalled/active/Enforcing`
-  status and the compat-wizard's hardcoded "Qualcomm QSSI"/"Enforcing" fallback.
+  (`magiskModuleInstalled`, `zygiskEnabled`, `selinuxState`/`selinuxStatus`,
+  `policyToolAvailable`, `policyAppliedVerified`, `nativeRouteVerified`,
+  `javaFallbackRecommended`, and an `audioStack` capability probe). Availability and a fallback
+  recommendation are not transformed-buffer runtime proof. This replaces fabricated active state.
 - `String getWhitelistBindings()` → read-back JSON `{"whitelist":{proc:bool},"appBindings":{pkg:presetId}}`.
 - `void setMasterEnabled(boolean)`, `void setBypass(boolean)`, `void triggerPanic(long holdMs)`,
   `void setSidetone(boolean enabled, float gainDb)`, `void setEngineMode(String engineMode)`,
@@ -317,9 +349,10 @@ Control/status methods added during the topology unification:
   object. Compatibility engine mode disables native hook admission while preserving the Java shim
   fallback path.
 
-The service loads `libechidna.so` lazily via JNI (`echidna_control_jni`). If the shared library is
-missing the binder methods return `ECHIDNA_RESULT_NOT_AVAILABLE` and the status is forced to
-`ECHIDNA_STATUS_ERROR` to fail closed.
+The service attempts to load module-provided `libechidna.so` lazily via JNI
+(`echidna_control_jni`). The companion APK deliberately contains only `libechidna_control_jni.so`,
+not the full engine or DSP. If the module library is unreachable in the app namespace, binder
+methods return `ECHIDNA_RESULT_NOT_AVAILABLE` and status is forced to `ECHIDNA_STATUS_ERROR`.
 
 For broader Samsung, Qualcomm, MediaTek, and Tensor HAL work, run the read-only static analyzer:
 
@@ -364,25 +397,42 @@ processing chain immediately before the mix bus so they receive the fully condit
 
 ## Known limitations
 
-### Profile-sync is service-owned and multi-reader
+### Policy v2 is authenticated, scoped, and multi-reader
 
-The profile-sync path uses one service-owned abstract `AF_UNIX` socket named `echidna_profiles`.
-`ProfileSyncBridge` keeps the last JSON snapshot in memory. Each native or LSPosed reader connects,
-receives that latest snapshot immediately, and then keeps the connection open for later update
-frames.
+`ProfileStore` owns a complete strict v2 document and monotonic generation. Required fields include
+the explicit default profile, per-process whitelist and capture owner, bindings, and all global
+master/bypass/panic/sidetone/engine controls. Mutations persist before replay; rollback,
+same-generation conflict, malformed/duplicate keys, incomplete controls, and invalid owners fail
+closed.
 
-This fixes the earlier filesystem-socket design where every hooked process tried to bind
-`/data/local/tmp/echidna_profiles.sock` and only the last binder received profile pushes. Current
-service builds publish on the abstract socket only.
+Zygisk readers negotiate on the service-owned abstract `AF_UNIX` socket `echidna_profiles`. The
+publisher scopes each frame from the peer UID's packages, while native code accepts only the
+companion UID resolved before specialization. Disconnect revokes processing, keeps the generation
+watermark, and reconnects with bounded backoff so a late publisher can activate safely.
 
-Operational caveat: do not scope the same target app into both Zygisk and LSPosed unless you are
-explicitly testing both paths. Socket contention is gone, but duplicate hook stacks can still cause
-double processing or confusing telemetry for a Java `AudioRecord` app.
+LSPosed does not use that socket. It explicitly binds exported read-only `PolicySnapshotService`;
+the provider matches `Binder.getCallingUid()` packages to the claimed process and returns an
+exact/base scoped view. Bounded listeners carry generation invalidations only. The shim fetches the
+new snapshot, rejects rollback/conflict, and preserves original audio if policy changes in-flight.
+
+Do not assign one process to both capture owners. The policy schema permits only `zygisk` or
+`lsposed`, and each consumer requires its own owner before processing.
 
 ### armeabi-v7a hooking degrades
 
 As noted above, armv7 builds and loads but does not install hooks (graceful degrade with a telemetry
 signal). arm64 is the primary target.
+
+### Capture routes are not all operational
+
+AAudio, OpenSL ES, tinyalsa, and the LSPosed Java fallback have normal-flow metadata sources but
+remain device-gated. Native `AudioRecord` and libc reads are developer-contract-only. Audio HAL and
+AudioFlinger are explicitly unsupported (`unsupported_injection_boundary`), not hooks awaiting only
+more testing. See the route table above and [Architecture](architecture.md#data-plane-audio-capture-to-dsp).
+
+The legacy input preprocessor is an official Android effect-ABI boundary, not a private HAL hook.
+Its Phase 1 library and host tests exist, but release packaging, effects configuration registration,
+policy wiring, session attachment, device enablement, and enforced-SELinux proof are all absent.
 
 ## Status: verified vs. needs a device
 
@@ -392,8 +442,9 @@ signal). arm64 is the primary target.
   manifest carries the `<queries>` block and the in-app `EchidnaControlService` (app↔service
   topology intact).
 - LSPosed shim APK compiles as an installable `com.echidna.lsposed` package.
-- All six per-ABI native artifacts (`libech_dsp.so` + `libechidna.so` × arm64-v8a/armeabi-v7a/x86_64)
-  cross-compile and link with the correct ELF architecture.
+- The native superbuild cross-compiles 12 outputs (four libraries across three ABIs). Release
+  delivery verifies only the nine engine/DSP/shim-JNI artifacts; the preprocessor is deliberately
+  unshipped.
 - Host DSP unit tests (preset + engine) pass; the BoringSSL Android cross-build compiles the Ed25519
   verify path.
 - The C/C++ format gate is clean tree-wide.
@@ -404,8 +455,9 @@ signal). arm64 is the primary target.
   including the in-APK service bind and `processBlockAppliesPresetWhenNativeEngineIsAvailable`.
 - The native `processBlock` instrumentation test applies a real preset and asserts the output is
   finite and measurably changed when `libechidna.so` and `libech_dsp.so` are reachable.
-- `:interception-probe:connectedDebugAndroidTest` passes **1/1** on the same rooted emulators:
-  a real `AudioRecord.read` call emits current-process hook evidence with `processed=1`.
+- `:interception-probe:connectedDebugAndroidTest` passed **1/1** on the same rooted emulators before
+  the explicit native-`AudioRecord` PCM-contract redesign. It is historical regression evidence,
+  not current reachability proof.
 - Earlier stock-emulator coverage still proves install, launch, navigation, fallback UI state, and
   the in-app service/AIDL round-trip without root.
 
@@ -414,9 +466,12 @@ signal). arm64 is the primary target.
 | Requested item | Status |
 | --- | --- |
 | Live Zygisk module load + real hook install on arm64 primary | **Release-device-only / NOT verified here** |
-| LSPosed shim injection + snapshot read under SELinux | **Release-device-only / NOT verified here** |
-| SELinux enforcement + audio HAL behavior on real hardware | **Release-device-only / NOT verified here** |
-| x86_64 trampoline under real injection | **Rooted-emulator `AudioRecord` slice verified; full release injection NOT verified** |
+| LSPosed shim injection + authenticated Binder policy under SELinux | **Release-device-only / NOT verified here** |
+| Legacy input preprocessor registration/session attachment | **Not implemented; Phase 1 library only** |
+| SELinux enforcement and supported capture candidates on real hardware | **Release-device-only / NOT verified here** |
+| Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
+| Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |
+| x86_64 trampoline under real injection | **Host harness verified; full current release injection NOT verified** |
 | armv7 degrade behavior | **Build/code-path covered; real armv7 runtime NOT verified** |
 | APK install -> service bind -> live AIDL round-trip | **Emulator/rooted-emulator verified** |
 
@@ -425,10 +480,11 @@ signal). arm64 is the primary target.
 - Magisk Manager or `magisk --install-module` flashing, reboot, module-manager load, and
   magic-mount namespace behavior. The emulator `magisk --install-module` attempt returned
   `Incomplete Magisk install`.
-- Live LSPosed shim injection into target apps, LSPosed scoping, and snapshot reads under SELinux.
+- Live LSPosed shim injection into target apps, LSPosed scoping, and authenticated Binder policy
+  reads under SELinux.
 - Physical-device Zygisk lifecycle and hook installation on the arm64 primary path.
-- AAudio, OpenSL ES, AudioFlinger, tinyalsa, and HAL-level hook managers in live app processes.
-- On-device SELinux enforcement and vendor audio-HAL behavior.
+- AAudio, OpenSL ES, and tinyalsa managers in live app processes.
+- On-device SELinux enforcement and vendor audio-stack behavior for supported candidates.
 - armeabi-v7a graceful-degrade at runtime.
 
 Echidna is a root/sideload application; on-device validation is a required, separate step before any

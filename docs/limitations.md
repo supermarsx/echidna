@@ -10,9 +10,10 @@ Echidna operates in. Read them before flashing anything.
 !!! warning "Status context"
     Everything below reflects the design and the code as it stands. Where a limitation is
     *device-gated* — only observable on rooted hardware or release hardware — it is marked
-    as such. The project now has rooted-emulator proof for native `processBlock` and one
-    `AudioRecord.read` interception slice, but Magisk flashing, live LSPosed injection,
-    broader hook managers, and physical-device SELinux/HAL behavior remain open (see
+    as such. The project has rooted-emulator proof for native `processBlock`. An
+    `AudioRecord.read` interception slice passed before the current explicit-contract redesign
+    and is historical evidence only. Magisk flashing, live LSPosed injection, supported capture
+    routes, and physical-device SELinux behavior remain open (see
     [Verification](verification.md)).
 
 !!! danger "⚠️ User responsibility"
@@ -58,7 +59,7 @@ apps no way to do this. That means:
   module into audio processes. The documented install path remains Magisk + built-in
   Zygisk; standalone Zygisk providers can be detected by the compatibility probe, but
   APatch/KernelSU/Zygisk Next combinations remain device-gated until validated on the
-  target hardware. Optionally, LSPosed drives the Java-side shim / control plane.
+  target hardware. Optionally, LSPosed drives the Java-side capture shim.
 - On an **unrooted** device the companion app still runs — you can browse presets,
   configure the effect chain, and run the Compatibility Wizard — but the **engine stays
   "Not Installed"** and no audio is transformed. This is exactly what the app reports on
@@ -85,59 +86,76 @@ policy**. Echidna's native module, abstract profile-sync socket, shared telemetr
 files, and DSP library placement touch operations that a vendor's policy may or may not
 allow to the contexts Zygisk-injected code runs in.
 
-- On many devices, the Magisk module's bootstrap (`post-fs-data.sh` / `service.sh`) needs
-  to apply **`magiskpolicy` relaxations** so the hooked processes may connect to the
-  snapshot publisher, write telemetry, and load the DSP libraries. What is required
-  differs per OEM.
+- The Magisk module defines dedicated config and telemetry file types. It grants app domains
+  read-only access to config, read/write access to telemetry, and only the parent-directory
+  traversal needed to reach those files. It does not grant zygote transitions or binder access.
+  A vendor may still deny a required operation outside this narrow policy.
 - Some strict-policy devices may only allow the **weaker Java-only (LSPosed) fallback**,
-  not the full native hook path. The Compatibility Wizard reports SELinux mode and flags
-  this ("Java-only fallback") so you know which path is active.
+  not the full native hook path. Diagnostics may recommend that path; a recommendation is not
+  evidence that LSPosed injection or transformed-buffer processing is active.
+- A disposable enforcing API 33 x86_64 emulator observed on 2026-07-15 had an old installed Echidna
+  module v0.0.0, not current HEAD. Maps (`untrusted_app`) logged `avc: denied { write }` to
+  `echidna_telemetry_file` and then `Failed to create profile listener`. This is historical live
+  evidence that rebuilt current artifacts need an enforcing-SELinux rerun, not proof that the
+  current authenticated transports fail the same way.
 - **Device-gated:** the exact policy needed on any given phone can only be determined on
   that phone. This has not been validated on hardware here.
 
-## 4. Audio HAL variance across SoCs and vendors
+## 4. Capture-route coverage across SoCs and vendors
 
-There is no single "the microphone" on Android. Which native API an app uses (AAudio vs.
-OpenSL&nbsp;ES vs. `AudioRecord` vs. going straight through AudioFlinger) and how that
-routes down to the vendor **HAL** differs by app *and* by chipset — Qualcomm, MediaTek,
-Samsung/Exynos, and Google's own silicon all differ.
+There is no single "the microphone" on Android. Which API an app uses and how it routes to the
+vendor audio stack differs by app and chipset. Echidna therefore exposes a support matrix instead
+of claiming that every manager is operational:
 
-- Echidna hooks **multiple** capture APIs precisely because no single one is universal,
-  and it probes at attach time to pick a hook point (see [Architecture](architecture.md)).
+| Route | Current status |
+| --- | --- |
+| AAudio | Operational candidate; stable stream getters provide PCM metadata. |
+| OpenSL ES | Operational candidate; recorder sink provides the PCM descriptor. |
+| tinyalsa | Operational candidate; `pcm_open` config provides metadata. |
+| LSPosed Java `AudioRecord` | Operational candidate through Java getters and dedicated JNI. |
+| Legacy input preprocessor | Phase 1 ABI/lifecycle/audio/RT implementation; not shipped or attached. |
+| Native `AudioRecord` | Developer contract only (`ECHIDNA_AR_SR/CH/FORMAT`). |
+| libc raw-device read | Developer contract only (`ECHIDNA_LIBC_SR/CH/FORMAT`). |
+| Audio HAL | Unsupported (`unsupported_injection_boundary`). |
+| AudioFlinger | Unsupported (`unsupported_injection_boundary`). |
+
+- Echidna attempts every eligible normal-flow candidate because an app may touch multiple APIs
+  (see [Architecture](architecture.md)). “Operational candidate” is code reachability, not device
+  proof.
 - Even so, some apps or devices route audio through a path Echidna does not yet hook, or
   through a vendor-specific HAL variation, in which case that app's capture is **not**
   transformed (and, being fail-closed, is left untouched rather than corrupted).
-- Hook offsets and symbol/pattern matches can require **per-device tuning**. A layout that
-  works on one HAL build is not guaranteed on another. Echidna should not ship offsets
-  copied from unrelated public firmware posts unless they are tied to a model, build
-  fingerprint, library build ID/hash, and live telemetry from the same build.
+- Native `AudioRecord` and libc reads stay disabled during normal specialization because no safe
+  producer supplies their explicit PCM contracts. Audio HAL and AudioFlinger live across an
+  audioserver/vendor boundary that app-process Zygisk does not own; they fail closed instead of
+  attempting private offsets or unstable object layouts.
 - The Compatibility Wizard reports CPU family, primary ABI, Zygisk ABI, vendor family, and
   whether common native audio libraries (`libOpenSLES.so`, `libaudioclient.so`,
   `libtinyalsa.so`) are present. These checks help identify obvious install and hardware
-  mismatches, but they do **not** prove live OpenSL ES, AudioFlinger, tinyalsa, or vendor-HAL
-  hook success on their own.
+  mismatches, but they do **not** prove live AAudio, OpenSL ES, tinyalsa, or LSPosed processing.
 - **Device-gated:** which combinations work is inherently a per-device matrix and is not
   characterized on hardware in this project.
 
-## 5. Profile-sync is multi-reader, but duplicate hook scopes still matter
+## 5. Policy delivery is authenticated and transport-specific
 
 The old profile-sync channel was a filesystem AF_UNIX socket where each hooked process
 tried to bind `/data/local/tmp/echidna_profiles.sock`; only the last binder received
 profile pushes. That single-holder limitation is now removed.
 
-Current builds use a service-owned abstract AF_UNIX socket named `echidna_profiles`.
-`ProfileSyncBridge` caches the latest `{profiles, whitelist, appBindings, control}`
-snapshot and serves it immediately to every connecting Zygisk or LSPosed reader. Readers
-also stay connected for later update frames, so a process that starts after the last
-mutation no longer waits for another profile change before receiving policy.
+Current builds publish one strict v2 policy with a monotonic generation, explicit default profile,
+whitelist, `captureOwners`, bindings, and complete control state. Zygisk uses authenticated,
+UID-scoped frames over the service-owned abstract AF_UNIX socket `echidna_profiles`. LSPosed does
+not use that socket: it binds an explicit read-only Binder provider, which authenticates the caller
+UID and claimed process and returns only the exact/base scoped view.
 
 Remaining caveats:
 
-- **Device-gated socket reachability:** SELinux/OEM policy can still block injected code
-  from connecting to the service-owned endpoint. Failure remains fail-closed.
-- **Do not scope the same target app into both hook stacks unless testing.** Socket
-  contention is gone, but duplicate native + Java hooks can double-process Java
-  `AudioRecord` captures or make telemetry ambiguous.
+- **Device-gated transport reachability:** SELinux/OEM policy can still block the native socket,
+  exported Binder bind/call, or telemetry mapping. Failure remains fail-closed.
+- **One capture owner per process:** policy assigns `zygisk` or `lsposed`; consumers require their
+  own owner. Do not try to make both stacks own the same process.
+- **Late/restarted publisher:** native processing is revoked on disconnect and reconnects with
+  bounded backoff. LSPosed fails closed and rebinds. Neither uses stale policy as admission proof.
 
 ## 6. `armeabi-v7a` (32-bit ARM) hooking is disabled
 
@@ -146,7 +164,7 @@ Echidna's inline hooking is **ABI-specific**:
 | ABI | Hooking status |
 | --- | --- |
 | **arm64-v8a (aarch64)** | Primary, fully implemented. |
-| **x86_64** | Implemented (absolute-jump patch + relocating trampoline with a fail-closed length decoder); rooted-emulator `AudioRecord` slice verified, broader hook coverage still pending. |
+| **x86_64** | Implemented (absolute-jump patch + relocating trampoline with a fail-closed length decoder); host harness verified. The older rooted `AudioRecord` slice predates the current route contract. |
 | **armeabi-v7a (32-bit ARM / Thumb-2)** | **Graceful degrade — hooking disabled.** The module builds and loads, but `install()` returns `false` and emits a `hook_unsupported_abi` log signal; **no audio hooks activate.** |
 
 Why armv7 degrades instead of shipping a trampoline: correct ARM/Thumb-2 relocation must
@@ -172,12 +190,16 @@ To keep expectations honest:
 
 | Capability | Status |
 | --- | --- |
-| Build (signed APK, 6 per-ABI `.so`, flashable Magisk zip) | **Verified** on a full toolchain |
+| Build (signed APKs, 12 native targets, 9 release-delivery artifacts, Magisk zip) | **Verified** on a full toolchain |
 | Companion app: install, launch, screen navigation, in-app service bind | **Verified** on an unrooted emulator (crash-free) |
-| Native `processBlock` and `AudioRecord.read` interception slice | **Verified** on rooted Android 13/14 emulators |
-| Magisk flash + reboot, live LSPosed injection, broader hook coverage | **Device-gated** — not validated here |
-| SELinux policy interaction, per-vendor audio-HAL routing | **Device-gated** — per-device |
-| Multi-app simultaneous hooking | **Supported by profile sync; device/HAL validation still required** |
+| Native `processBlock` | **Verified** on rooted Android 13/14 emulators |
+| Historical native `AudioRecord.read` slice | Passed before current route redesign; not reachability proof |
+| AAudio/OpenSL/tinyalsa/LSPosed capture | **Device-gated** — not validated here |
+| Legacy input preprocessor | **Phase 1 only** — library/tests exist; no packaging/registration/session attachment |
+| Native AudioRecord/libc | **Developer contract only** — not a normal-flow route |
+| Audio HAL / AudioFlinger transform | **Unsupported injection boundary** |
+| SELinux interaction for supported routes | **Device-gated** — per-device |
+| Multi-app simultaneous policy delivery | **Implemented with scoped socket/Binder transports; live capture still device-gated** |
 | armv7 voice transformation | **Not available** (item 6) |
 
 See [Verification](verification.md) for the full proven-vs-device-gated matrix and a

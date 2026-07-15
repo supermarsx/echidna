@@ -30,11 +30,12 @@ The app module (`android/app/app/build.gradle.kts`) and LSPosed shim module
 
 The `keystore.properties` keys are `storeFile`, `storePassword`, `keyAlias`, `keyPassword`.
 
-## Graceful fallback
+## Direct local Gradle fallback
 
-When **no** signing material is available (local debug builds, CI without secrets), the release build
-falls back to **debug signing** so the build still succeeds. The result is a debug-signed,
-**non-distributable** APK — do not ship it. A real release requires real keystore material.
+When **no** signing material is available, a direct local Gradle release build falls back to
+**debug signing** so developers can still exercise release build types. The result is a
+debug-signed, **non-distributable** APK — do not ship it. This fallback is not the hosted release
+policy.
 
 ```sh
 cd android/app
@@ -43,6 +44,41 @@ cd android/app
 cd ../lsposed-shim
 ./gradlew :shim:assembleRelease  # same RELEASE_* environment, same fallback
 ```
+
+The shim build also requires the dedicated native JNI and DSP outputs from
+`tools/build_native_ndk.sh`; it fails rather than packaging missing or stale native inputs.
+
+## Hosted release workflow fails closed
+
+`.github/workflows/release.yml` requires all of these encrypted repository secrets:
+
+- `RELEASE_KEYSTORE_BASE64`
+- `RELEASE_STORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+- `RELEASE_CERT_SHA256`
+
+Before an automatic tag is created, `tools/check_release_signing.py` rejects missing or partial
+inputs and malformed base64/certificate values. The workflow decodes the keystore with mode `0600`
+under a restrictive umask, uses `keytool -importkeystore` to prove that the selected private-key
+entry, store password, alias, and key password are valid, masks passwords, and removes temporary
+keystores on every path.
+
+After building, `tools/verify_android_artifacts.py` requires the exact companion and shim APK
+payloads, rejects debug certificates and unexpected native libraries, checks both APKs against
+`RELEASE_CERT_SHA256`, and verifies the release bundles before upload. Missing or invalid signing
+material never falls back to a publishable debug-signed artifact.
+
+## Signing-certificate migration
+
+Android package upgrades require the new APK to use the same signing certificate as the installed
+APK. An existing debug-signed `com.echidna.app` or `com.echidna.lsposed` installation therefore
+cannot be upgraded in place to an APK signed with a new release certificate.
+
+Before the first release-signed install, back up any app data you need, uninstall the old package,
+and install the release-signed APK. This is a one-time migration for each package. Keep the release
+keystore stable and backed up afterward: losing or replacing it forces the same uninstall/data-loss
+boundary again. Do not weaken signature verification or redistribute the private key to bypass it.
 
 ## Minification
 
@@ -71,8 +107,9 @@ keytool -genkeypair -v -keystore echidna-release.jks -alias echidna \
         -keyalg RSA -keysize 4096 -validity 10000
 ```
 
-Keep the keystore and passwords out of the repository. In CI, provide them as encrypted secrets via
-the `RELEASE_*` environment variables rather than a checked-in file.
+Keep the keystore and passwords out of the repository. Back up the keystore securely and record its
+certificate SHA-256 separately. In CI, provide signing values as encrypted secrets rather than a
+checked-in file.
 
 ## Native / Magisk signing
 

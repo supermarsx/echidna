@@ -18,7 +18,7 @@ guarantee that capture hooks will work on the target phone.
 | -------- | ----------- | ---------- |
 | `app-debug.apk` / `app-release.apk` | Gradle | The companion app (UI + in-app control service + `libechidna_control_jni.so`). |
 | `shim-release.apk` | Gradle | The optional LSPosed/Xposed Java fallback shim APK. |
-| Six per-ABI `.so` | `tools/build_native_ndk.sh` | `libech_dsp.so` + `libechidna.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`. |
+| Native `.so` outputs | Native superbuild | Four libraries per ABI; release delivery uses only engine, DSP, and shim JNI. The legacy preprocessor is Phase 1 and unshipped. |
 | `out/echidna-magisk.zip` | `tools/build_magisk_module.sh` | The flashable Magisk module that delivers the native libraries system-side. |
 
 There are two supported build paths: a **host toolchain** path and a **Docker** path.
@@ -27,10 +27,12 @@ container-verified against. Pick whichever matches your setup — the outputs ar
 
 !!! info "Honesty about what is verified"
     Everything on this page up to *installing* is host-/container-verified: the companion and
-    LSPosed APKs build, all six `.so` cross-compile with the correct ELF architecture, and the
-    flashable zip is produced with the correct layout. Rooted-emulator validation also proves native
-    `processBlock` and one `AudioRecord.read` interception slice. Full Magisk flashing,
-    LSPosed injection, and broad device/HAL hook coverage are still marked below and
+    LSPosed APKs build, all 12 native targets cross-compile with the correct ELF architecture, and
+    the nine supported delivery artifacts produce the flashable/APK layout. Rooted-emulator
+    validation also proves
+    native `processBlock`. An `AudioRecord.read` slice passed before the current explicit-contract
+    redesign and is historical evidence only. Full Magisk flashing, LSPosed injection, and current
+    capture-route coverage are still marked below and
     covered in depth in [Verification](verification.md).
 
 !!! danger "⚠️ Root and module install risk"
@@ -92,25 +94,14 @@ cd android/app
 ```
 
 Supply keystore material through a git-ignored `keystore.properties` or the `RELEASE_*`
-environment variables. Without a keystore the release build **falls back to debug signing**
-so CI and local builds still succeed (producing a non-distributable APK). The full model —
-property/env resolution order, the fallback, and why minification is disabled for v1 — is in
+environment variables. Without a keystore, this direct local Gradle build **falls back to debug
+signing** and produces a non-distributable APK. The hosted release workflow does not: it fails
+before tag creation when signing inputs or the private-key entry are invalid, pins the expected
+certificate, and verifies every publishable APK/bundle. The full model — property/env resolution
+order, local fallback, hosted checks, and why minification is disabled for v1 — is in
 [the signing guide](signing.md).
 
-### 2. Build the LSPosed shim APK
-
-The shim is an installable APK used only for the Java/`AudioRecord` fallback path:
-
-```sh
-cd android/lsposed-shim
-./gradlew :shim:assembleRelease
-# -> android/lsposed-shim/shim/build/outputs/apk/release/shim-release.apk
-```
-
-The shim uses the same `RELEASE_*` signing environment as the companion app and falls back to debug
-signing when no release key is present. See [the signing guide](signing.md).
-
-### 3. Build the native libraries (per ABI)
+### 2. Build the native libraries (per ABI)
 
 `tools/build_native_ndk.sh` configures the `native/` aggregate once per ABI with the NDK
 toolchain file. Point `ANDROID_NDK` at your r27 install:
@@ -125,16 +116,19 @@ ANDROID_NDK="C:/android-sdk/ndk/27.0.12077973" ANDROID_PLATFORM=android-26 \
   bash tools/build_native_ndk.sh
 ```
 
-The NDK path also resolves from `ANDROID_NDK_HOME` / `ANDROID_NDK_ROOT`. Output layout —
-this is exactly what the Magisk packager consumes:
+The NDK path also resolves from `ANDROID_NDK_HOME` / `ANDROID_NDK_ROOT`. Output layout:
 
 ```
-build/arm64-v8a/lib/libech_dsp.so     build/arm64-v8a/lib/libechidna.so
-build/armeabi-v7a/lib/libech_dsp.so   build/armeabi-v7a/lib/libechidna.so
-build/x86_64/lib/libech_dsp.so        build/x86_64/lib/libechidna.so
+build/arm64-v8a/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
+build/armeabi-v7a/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
+build/x86_64/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
 ```
 
-ABI set: **`arm64-v8a` (primary)**, `armeabi-v7a`, `x86_64`. Overrides: `ECHIDNA_ABIS`,
+That is 12 generated native outputs. Release tooling verifies/transports nine: the Magisk module
+consumes engine/DSP pairs and the LSPosed shim consumes dedicated JNI/DSP pairs.
+`libechidna_preproc.so` is not copied, registered, session-attached, or enabled. ABI set:
+**`arm64-v8a` (primary)**,
+`armeabi-v7a`, `x86_64`. Overrides: `ECHIDNA_ABIS`,
 `ANDROID_PLATFORM`, `ECHIDNA_BUILD_TYPE`, `ECHIDNA_CMAKE_GENERATOR`,
 `ECHIDNA_CMAKE_EXTRA_ARGS`, `CMAKE`.
 
@@ -148,13 +142,30 @@ never silently off on device: (1) a prebuilt BoringSSL via `-DECHIDNA_BORINGSSL_
 (2) a toolchain/system `libcrypto`; (3) FetchContent BoringSSL (Android-only, default on,
 pinned tag `0.20240913.0`, nothing vendored). If none resolve, the loader stays fail-closed.
 
+### 3. Build the LSPosed shim APK
+
+The shim is an installable APK used only for the Java/`AudioRecord` fallback path. Its Gradle
+pre-build requires the native outputs from step 2 and packages exactly
+`libechidna_shim_jni.so` + `libech_dsp.so` for the three supported ABIs. It rejects missing inputs
+and never packages the full Zygisk `libechidna.so`:
+
+```sh
+cd android/lsposed-shim
+./gradlew :shim:assembleRelease
+# -> android/lsposed-shim/shim/build/outputs/apk/release/shim-release.apk
+```
+
+The shim uses the same `RELEASE_*` signing environment as the companion app. A direct local build
+falls back to debug signing when no release key is present; hosted publication fails closed. See
+[the signing guide](signing.md).
+
 ### 4. Build the flashable Magisk module
 
-With the six per-ABI `.so` present under `build/<abi>/lib/`:
+With the native outputs present under `build/<abi>/lib/`:
 
 ```sh
 ECHIDNA_VERSION=25.1 bash tools/build_magisk_module.sh
-# → out/echidna-magisk.zip   (21 entries)
+# → out/echidna-magisk.zip
 ```
 
 The packaged zip has a single module id (`echidna`) and this layout:
@@ -167,7 +178,7 @@ libs/<abi>/libech_dsp.so   <- staged; customize.sh places it into system/lib(64)
 META-INF/com/google/android/{update-binary,updater-script}
 module.prop                (id=echidna, minMagisk=24000)
 customize.sh               (ABI-selects the DSP + JNI engine, aborts on API<26 or Magisk<24)
-post-fs-data.sh / service.sh (socket/plugin dirs + SELinux bootstrap)
+post-fs-data.sh / service.sh (narrow runtime labels/permissions + boot watchdog/library staging)
 ```
 
 The script fails loudly if any per-ABI `libechidna.so` / `libech_dsp.so` is missing. It is
@@ -186,6 +197,12 @@ Magisk zip; add the LSPosed shim only when you need the Java fallback.
 - `echidna-complete-<tag>.zip`
 - `SHA256SUMS.txt` and `RELEASE_ARTIFACTS.md`
 
+!!! warning "Use current releases"
+
+    Avoid installing an earlier GitHub release unless you are intentionally rolling back or
+    already know how to recover from module/boot failures. Older releases may contain bugs fixed
+    in newer builds and can be harder to recover from after the Magisk/Zygisk module is flashed.
+
 ---
 
 ## Docker path (reproducible)
@@ -197,7 +214,7 @@ rebuild.
 
 | Image | Purpose |
 | ----- | ------- |
-| `echidna/native-build` | Temurin JDK 17 + CMake 3.30.5 / Ninja 1.13.0 + NDK r27; runs `build_native_ndk.sh` → the six per-ABI `.so`. |
+| `echidna/native-build` | Temurin JDK 17 + CMake 3.30.5 / Ninja 1.13.0 + NDK r27; builds the per-ABI native graph. |
 | `echidna/android-build` | Temurin JDK 17 + SDK platform-34 / build-tools 34.0.0 + Gradle 8.5; builds the APK offline (regenerates the wrapper jar if absent). |
 | `echidna/magisk-packager` | Alpine + `zip`; consumes the per-ABI libs and runs `build_magisk_module.sh`. |
 | `echidna/ci-local` | Orchestrates native-build → magisk-packager → android-build against the host Docker daemon (profile `ci`). |
@@ -208,7 +225,7 @@ Build the images, then run stages:
 ```sh
 docker compose -f docker/compose.yaml build
 
-# (a) per-ABI native libs → build/<abi>/lib/{libech_dsp,libechidna}.so
+# (a) per-ABI native libs → build/<abi>/lib/
 docker compose -f docker/compose.yaml run --rm native-build
 # (b) debug APK (offline after the first Gradle dep fetch; cached in a volume)
 docker compose -f docker/compose.yaml run --rm android-build
@@ -218,30 +235,30 @@ docker compose -f docker/compose.yaml run --rm magisk-packager
 ECHIDNA_REPO="$PWD" docker compose -f docker/compose.yaml --profile ci run --rm ci-local
 ```
 
-The native → Magisk chain was run container-to-container end-to-end: `native-build` produced
-all six architecture-correct `.so`, and `magisk-packager` consumed them into a correct
-`out/echidna-magisk.zip`. See [Verification](verification.md) for the recorded results.
+The native → Magisk chain was run container-to-container end-to-end. `magisk-packager` consumed only
+the engine/DSP pairs into `out/echidna-magisk.zip`; the Phase 1 preprocessor is deliberately absent.
+See [Verification](verification.md) for the recorded results.
 
 !!! note "Ninja pin"
     `docker/native-build` pins **Ninja 1.13.0**. An earlier `1.12.1` pin was a version that
     was never published to PyPI and broke the image build; `1.13.0` ships the `manylinux`
     wheel the base image needs.
 
-!!! warning "Not built on the maintainer's Windows host"
-    The Docker images are authored and static-validated, and the native → Magisk pipeline was
-    run on a live daemon. The first `android-build` run needs network for Gradle dependencies,
-    and the cmdline-tools checksum (`CMDLINE_TOOLS_SHA256`) should be confirmed against
-    Google's published value (overridable; the download fails closed on mismatch). See
-    `docker/README.md`.
+!!! note "Docker validation scope"
+    The native → Magisk pipeline has run on a live daemon and reproduced the checked payload. The
+    first `android-build` run needs network for Gradle dependencies. Container success remains
+    artifact evidence; the hosted signed-release verifier and live-device capture tests are
+    separate gates. See `docker/README.md`.
 
 ---
 
 ## Install & activate on a device
 
 Steps 1 and 2 (APK install, launch, screen navigation) are verified on an unrooted emulator.
-The app/service native `processBlock` path and one `AudioRecord.read` hook probe are verified on
-rooted Android 13/14 emulators. Magisk flashing, LSPosed activation, and broader device/HAL hook
-coverage are still **device-gated**.
+The app/service native `processBlock` path is verified on rooted Android 13/14 emulators. The
+recorded native `AudioRecord.read` hook probe predates the current explicit-contract route and is
+not current reachability proof. Magisk flashing, LSPosed activation, and current supported capture
+routes are still **device-gated**.
 
 !!! danger "⚠️ Know the boot failsafes before flashing"
     Do not proceed unless you can disable the module without a normal Android
@@ -266,6 +283,12 @@ coverage are still **device-gated**.
     Installing the companion APK only proves that Android accepted the app package. It does
     not prove Zygisk loading, LSPosed injection, SELinux access, or vendor audio-HAL capture
     interception on this phone. Expect many devices to remain unsupported.
+
+!!! warning "Signing-certificate migration"
+    Android only accepts `adb install -r` when the installed package and replacement share the same
+    signing certificate. If an older companion or shim is debug-signed and the new release uses a
+    real release certificate, back up any needed app data, uninstall the old package once, and then
+    install the release APK. Do not work around a signer mismatch by weakening release verification.
 
 ```sh
 adb install -r android/app/app/build/outputs/apk/debug/app-debug.apk
@@ -301,15 +324,25 @@ both whitelisted and hooks are enabled.
 
 ### 5. Verify
 
-Use the app's **Diagnostics** screen and **Compatibility Wizard** to confirm the native engine
-is Active and the audio stack was probed. For a live check, place a call in a whitelisted app
-with a lab counterpart and confirm the processed voice.
+Use **Diagnostics** and **Compatibility Wizard** to inspect availability, policy, and route evidence.
+Installed/Zygisk/tool availability does not prove transformation; require recent transformed-buffer
+telemetry plus a route-matched call with a lab counterpart.
 
-!!! warning "Do not scope the same app into both hook stacks"
-    Profile sync is multi-reader now, so Zygisk and LSPosed no longer contend for the same
-    socket. Still avoid enabling both hook paths for the same target app unless you are
-    explicitly testing them, because Java `AudioRecord` captures can be processed twice or
-    produce ambiguous telemetry.
+Current route expectations:
+
+- AAudio, OpenSL ES, and tinyalsa are normal-flow native candidates; the LSPosed Java
+  `AudioRecord` path is the compatibility candidate. All require live-device proof.
+- Native `AudioRecord` and libc raw-device reads are developer-contract-only and stay disabled
+  unless explicit sample-rate/channel/format metadata is supplied.
+- Audio HAL and AudioFlinger fail closed as `unsupported_injection_boundary`; Diagnostics must not
+  be interpreted as proof that those routes transform audio.
+- The legacy input preprocessor passes Phase 1 library tests but is not in any release payload or
+  effects configuration and cannot be selected or session-attached.
+
+!!! warning "Assign one capture owner per process"
+    Zygisk receives UID-scoped v2 policy over an authenticated socket; LSPosed receives
+    process-scoped policy over authenticated read-only Binder. Each consumer requires its own
+    `captureOwners` value. Do not configure both stacks to own the same target.
 
 ---
 
@@ -318,17 +351,20 @@ with a lab counterpart and confirm the processed voice.
 | Step | Status |
 | ---- | ------ |
 | APK build (debug + signed release) | Host-verified |
-| Six per-ABI `.so` cross-compile + link | Host- and container-verified |
+| 12 native targets cross-compile; 9 release artifacts transport | Host- and container-verified |
 | Flashable `echidna-magisk.zip` layout | Verified (correct arch, single id) |
 | Docker native → Magisk pipeline | Container-verified end-to-end |
 | APK install + launch + screen nav | Emulator-verified (unrooted) |
 | Native `processBlock` via in-app service | Rooted-emulator verified (Android 13/14) |
-| `AudioRecord.read` interception + DSP routing | Rooted-emulator verified (Android 13/14) |
+| Historical native `AudioRecord.read` interception | Passed before explicit-contract redesign; not current reachability proof |
 | APK install -> service bind -> live AIDL round-trip | Emulator/rooted-emulator verified |
 | Live Zygisk module load + real hook install on arm64 primary | **Device-gated / NOT verified here** |
-| LSPosed shim injection + snapshot read under SELinux | **Device-gated / NOT verified here** |
-| SELinux enforcement + audio HAL behavior on real hardware | **Device-gated / NOT verified here** |
-| x86_64 trampoline under real injection | Rooted-emulator `AudioRecord` slice verified; full release injection NOT verified |
+| LSPosed shim injection + authenticated Binder policy under SELinux | **Device-gated / NOT verified here** |
+| Legacy preprocessor packaging/registration/session attachment | **Not implemented; Phase 1 only** |
+| SELinux enforcement + supported capture candidates on real hardware | **Device-gated / NOT verified here** |
+| Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
+| Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |
+| x86_64 trampoline under real injection | Host harness verified; full current release injection NOT verified |
 | armv7 degrade behavior | Build/code-path covered; real armv7 runtime NOT verified |
 
 The full matrix and a step-by-step reproduce-on-real-device procedure are in

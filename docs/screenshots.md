@@ -26,7 +26,8 @@ split in [spec section 20][spec-20].
     not installed / Zygisk disabled / `su` permission denied**, the Quick Settings
     tile shows **Unavailable**, and the audio meters rest at **-120 dBFS**.
     Rooted-emulator runtime proof lives in [Verification](verification.md): native
-    `processBlock` and one `AudioRecord.read` interception slice pass there. These
+    `processBlock` passes there. The recorded `AudioRecord.read` slice predates the current
+    explicit-contract route and is historical evidence only. These
     screenshots remain UI/state captures, not evidence of Magisk flashing or LSPosed
     injection.
 
@@ -93,7 +94,7 @@ the expected state, not a fault.
 A real on-device probe reached via **Settings -> Run Compatibility Wizard**:
 SELinux Enforcing, AAudio **Supported**, low-latency/pro-audio Unsupported,
 vendor HAL **Google (goldfish_x86_64)**, 48000 Hz / 1088 frames. It reports
-**Magisk not installed**, **Zygisk disabled**, Java fallback active, and
+**Magisk not installed**, **Zygisk disabled**, Java fallback recommended (not proven active), and
 **"Cannot run program 'su': Permission denied"**, which is expected on a device
 without root.
 

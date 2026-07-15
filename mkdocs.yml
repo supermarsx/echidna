@@ -91,6 +91,7 @@ nav:
   - Using Echidna:
       - Build & Install: build-install.md
       - DSP & Effects: dsp-effects.md
+      - Performance Testing: performance-testing.md
       - Screenshots: screenshots.md
   - Reference:
       - Comparison: comparison.md

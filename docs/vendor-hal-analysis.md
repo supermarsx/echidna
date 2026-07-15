@@ -5,14 +5,15 @@ HALs. It is driven by the repository `spec.md`, especially the native-first audi
 stack requirements and the compatibility-wizard requirement to report HAL vendor
 facts honestly.
 
-The important boundary: static firmware analysis can identify likely hook surfaces,
-but it cannot prove that a live app is routed through them. A release claim still
-needs rooted-device telemetry from a scoped target app or audio service.
+The important boundary: static firmware analysis can identify likely audio surfaces,
+but it cannot prove that a live app is routed through them. Current Audio HAL and
+AudioFlinger managers return `unsupported_injection_boundary`; this analyzer does not
+turn them into supported routes.
 
 ## Goal
 
-Broaden Echidna's vendor-HAL coverage without guessing from one emulator or one
-phone. The first supported path is a read-only analyzer that can consume extracted
+Research future vendor-HAL coverage without guessing from one emulator or one
+phone. The current supported tool is a read-only analyzer that can consume extracted
 firmware, vendor partitions, or adb-collected snapshots and produce a JSON report.
 
 The analyzer does not patch a device, change SELinux, flash modules, or generate
@@ -35,8 +36,9 @@ to run next.
    audio-service proof.
 5. **Device validation.** Use the JSON report to pick target apps, target processes,
    and logs to collect. Confirm live hook attempts through Echidna telemetry.
-6. **Profile hardening.** Only after repeated device evidence should the native
-   hook managers gain new per-vendor symbol lists or offset profiles.
+6. **Design review.** Only after repeated device evidence should a separate service-side design be
+   proposed. It must own injection, stable PCM metadata, stream lifecycle, and vendor tests; do not
+   add private offsets to the current app-process manager.
 7. **Documentation and release gating.** Each confirmed vendor path must update
    verification docs with the device model, SoC, Android version, Magisk version,
    target app, hook surface, and pass/fail evidence.
@@ -105,19 +107,19 @@ per-build offsets are considered:
   data callback is a registered function pointer, not a public exported symbol.
 - OpenSL ES: hook recorder callback registration / buffer queue paths when the
   target process maps `libOpenSLES.so`.
-- Native AudioRecord: hook exported JNI bridge names or C++ `AudioRecord::read`
-  symbols only when present in the process map for that build.
+- Native AudioRecord: exported JNI/C++ symbols are research candidates only. The current manager is
+  developer-contract-only until a normal-flow PCM metadata source exists.
 - tinyalsa: hook `pcm_read` and `pcm_mmap_read` byte-count APIs; hook
   `pcm_readi` only as a frame-count API when the vendor tinyalsa exposes it.
-- Legacy HAL: `audio_stream_in.read` is a function pointer inside a HAL stream,
-  so static evidence is useful but needs live service/process proof.
+- Legacy HAL: `audio_stream_in.read` is a function pointer inside an audioserver/vendor stream.
+  Static evidence is useful for research, but the current route is unsupported.
 
 Offsets from the internet are not portable support. MediaTek HyperOS/MTK, Samsung
 Exynos, Qualcomm-derived Samsung builds, OnePlus/Oppo, and Tensor images must be
 treated as separate build fingerprints. Add an offset profile only when it is tied
 to a device model, SoC, Android build fingerprint, library build ID/hash, and live
-Echidna telemetry proving the hook path. Otherwise prefer runtime symbol discovery
-and report the result as exploratory.
+Echidna telemetry proving a separately reviewed injection design. The current module must not load
+or apply such offsets; report analyzer results as exploratory.
 
 ## Samsung Workflow
 
@@ -198,9 +200,9 @@ This helps identify ALSA card names, PCM endpoints, codec topology, and whether
 the vendor path probably uses tinyalsa. It does not tell Echidna where to patch
 `AudioRecord`, OpenSL ES, AudioFlinger, or HAL read functions.
 
-## Live Validation
+## Live research collection
 
-After static analysis, validate on the rooted device:
+After static analysis, collect read-only evidence on the rooted device:
 
 ```sh
 adb shell getprop > getprop.txt
@@ -237,9 +239,9 @@ process or audio service under test.
 Static `high` confidence means the dump contains strong symbols or paths. It does
 not mean Echidna is known to hook that path live.
 
-## Release Evidence Rules
+## Research evidence rules
 
-To mark a vendor path as validated, record:
+To make a vendor path reviewable for a future design, record:
 
 - device model and SoC family
 - Android version and API level
@@ -251,5 +253,6 @@ To mark a vendor path as validated, record:
 - callback count and DSP routing evidence
 - any SELinux denials or policy changes observed
 
-If any of those are missing, document the result as a signal or partial validation,
-not as full vendor-HAL support.
+Even with all fields present, document the result as a research signal until a separately reviewed
+audioserver/vendor injection boundary passes tests. Do not describe the current HAL/AudioFlinger
+route as supported.

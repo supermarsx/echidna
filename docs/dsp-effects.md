@@ -71,6 +71,9 @@ the parameter reference in `spec.md`. "Default" is the value the parameter struc
 ### 1. Noise Gate
 
 Attenuates signal below a threshold with soft attack/release and hysteresis to avoid chatter.
+The gate opens only after the smoothed envelope reaches `threshold + hysteresis` and closes after it
+falls to `threshold - hysteresis`. Envelope, open/closed state, and gain persist across callbacks, so
+release continues to silence instead of being reset at each block boundary.
 
 | Parameter | Range | Default | Unit |
 | --------- | ----- | ------- | ---- |
@@ -151,6 +154,13 @@ pitch-shifts to the target and blends by snap strength.
 
 Retune under ~10 ms sounds robotic (the "FX" region); slow retune is more natural. The
 Diagnostics **Tuner View** shows detected vs. target note in real time.
+
+Detection uses a rolling, per-channel analysis history and updates on a sample-rate-derived hop, so
+64–2048-frame callbacks do not need to contain a complete pitch period. Correction is applied by a
+stateful realtime pitch shifter whose delay/phase history survives block boundaries. Retune smoothing
+uses the callback's frame duration, keeping the control response consistent at 44.1, 48, and 96 kHz.
+Silence, low-correlation input, invalid buffers, and callbacks larger than prepared realtime capacity
+fail closed without allocating on the audio thread.
 
 ### 7. Reverb
 
