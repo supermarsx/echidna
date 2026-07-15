@@ -9,9 +9,10 @@ scaffolding).
 
 > **Status honesty (read this first).** The host build is verified on the development host
 > (Android SDK, NDK r27, JDK 21, Gradle 8.5): the companion and shim APKs build, the native
-> superbuild generates four libraries per ABI, the nine supported delivery artifacts package, and
-> host DSP/effect tests pass. The fourth target, `libechidna_preproc.so`, is Phase 1 only and is not
-> shipped, registered, session-attached, or enabled. Rooted Android
+> superbuild generates four libraries per ABI, all 12 native outputs have a release transport, and
+> host DSP/effect tests pass. `libechidna_preproc.so` is packaged for three ABIs and can be registered
+> for the next boot on proven legacy-HIDL system/vendor configurations. It remains default-off and is
+> not session-attached or enabled. Rooted Android
 > 13/14 emulators also prove the in-app control-service native `processBlock` path. A native
 > `AudioRecord.read` interception slice passed before the current explicit-contract redesign and
 > is historical evidence only. Magisk flashing, live LSPosed injection, current capture routes,
@@ -33,7 +34,7 @@ android/
   lsposed-shim/      # Installable LSPosed/Xposed Java shim APK.
 native/
   dsp/               # libech_dsp.so — the DSP engine (host-testable).
-  effects/legacy/    # libechidna_preproc.so — unshipped Phase 1 input-effect boundary.
+  effects/legacy/    # libechidna_preproc.so — default-off legacy input-effect boundary.
   zygisk/            # libechidna.so — the Zygisk module + audio hooks.
   CMakeLists.txt     # Aggregate that configures DSP, preprocessor, and Zygisk targets.
 tools/
@@ -294,7 +295,7 @@ The route contract is explicit:
 | OpenSL ES | Operational candidate | Recorder sink PCM descriptor. |
 | tinyalsa | Operational candidate | `pcm_open` config. |
 | LSPosed Java `AudioRecord` | Operational candidate | Java stream getters and dedicated JNI. |
-| Legacy input preprocessor effect ABI | Phase 1 boundary | Tested ABI/lifecycle/audio/RT core; not packaged, registered, attached, or enabled. |
+| Legacy input preprocessor effect ABI | Registered boundary | Packaged and next-boot registered only for proven legacy-HIDL system/vendor configs; never auto-applied or session-attached. |
 | Native `AudioRecord` | Developer contract only | `ECHIDNA_AR_SR/CH/FORMAT`; no normal-flow producer. |
 | libc raw-device read | Developer contract only | `ECHIDNA_LIBC_SR/CH/FORMAT`; no normal-flow producer. |
 | Audio HAL | Unsupported | `unsupported_injection_boundary`. |
@@ -437,8 +438,10 @@ AudioFlinger are explicitly unsupported (`unsupported_injection_boundary`), not 
 more testing. See the route table above and [Architecture](architecture.md#data-plane-audio-capture-to-dsp).
 
 The legacy input preprocessor is an official Android effect-ABI boundary, not a private HAL hook.
-Its Phase 1 library and host tests exist, but release packaging, effects configuration registration,
-policy wiring, session attachment, device enablement, and enforced-SELinux proof are all absent.
+The module ships it in inert per-ABI staging and can create a same-partition system/vendor registry
+overlay after signer, factory, config, ABI, ELF, and source-hash checks. Stable-AIDL-only and active
+ODM configurations fail closed. Registration adds no `preprocess`/`pre_processing` application;
+session attachment, device enablement, linker/label proof, and enforced-SELinux audio proof remain.
 
 ## Status: verified vs. needs a device
 
@@ -449,8 +452,7 @@ policy wiring, session attachment, device enablement, and enforced-SELinux proof
   topology intact).
 - LSPosed shim APK compiles as an installable `com.echidna.lsposed` package.
 - The native superbuild cross-compiles 12 outputs (four libraries across three ABIs). Release
-  delivery verifies only the nine engine/DSP/shim-JNI artifacts; the preprocessor is deliberately
-  unshipped.
+  delivery verifies all four library families; the preprocessor is staged only in the Magisk module.
 - Host DSP unit tests (preset + engine) pass; the BoringSSL Android cross-build compiles the Ed25519
   verify path.
 - The C/C++ format gate is clean tree-wide.
@@ -473,7 +475,8 @@ policy wiring, session attachment, device enablement, and enforced-SELinux proof
 | --- | --- |
 | Live Zygisk module load + real hook install on arm64 primary | **Release-device-only / NOT verified here** |
 | LSPosed shim injection + authenticated Binder policy under SELinux | **Release-device-only / NOT verified here** |
-| Legacy input preprocessor registration/session attachment | **Not implemented; Phase 1 library only** |
+| Legacy input preprocessor registration | **Implemented for proven legacy-HIDL system/vendor configs; device load proof pending** |
+| Legacy input preprocessor session attachment/enablement | **Not implemented; default-off** |
 | SELinux enforcement and supported capture candidates on real hardware | **Release-device-only / NOT verified here** |
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |

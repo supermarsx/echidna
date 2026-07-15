@@ -90,10 +90,11 @@ metadata, and no symlink. It atomically writes the exact bytes root-owned and re
 module's inert `trust/next-boot/` directory. Existing pending or active bytes must match; silent key
 rotation is refused.
 
-This concern does not register or ship the legacy effect. A later packaging concern must bind the
-pinned file to `/system/etc/echidna/preprocessor_controller_p256.spki`. The late service never
-hot-replaces that active path and never restarts audioserver. Any trust error leaves the
-preprocessor in identity bypass and records recovery details under
+The packaging concern ships the effect inertly and, only after an eligible legacy-HIDL registry is
+proved, copies the verified pending key into the module overlay at
+`/system/etc/echidna/preprocessor_controller_p256.spki` for the next boot. The late service never
+restarts audioserver or silently rotates an active key. Any trust or registration error leaves the
+preprocessor unregistered or identity-bypassed and records recovery details under
 `/data/adb/echidna/trust/status.txt`.
 
 ## Signing-certificate migration

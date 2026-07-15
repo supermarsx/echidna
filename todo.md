@@ -18,7 +18,7 @@ The route contract is defined in
 | OpenSL ES | [~] Operational candidate | PCM descriptor, queue FIFO, rollback, callback, and destroy lifecycle have host coverage; prove live recorder capture. |
 | tinyalsa | [~] Operational candidate | `pcm_open` config and read lifetimes exist; prove a real target/vendor route. |
 | LSPosed Java `AudioRecord` | [~] Operational candidate | Dedicated JNI + DSP packaging and transactional Java reads exist; prove LSPosed injection, policy snapshot, and transform under enforcing SELinux. |
-| Legacy input preprocessor | [~] Phase 1 boundary | ABI/lifecycle/audio/RT tests and per-ABI library exist; package, register, policy-wire, session-attach, and prove it before enablement. |
+| Legacy input preprocessor | [~] Registered boundary | ABI/lifecycle/audio/RT tests plus per-ABI packaging and conditional next-boot registration exist; session-attach and prove it before enablement. |
 | Native `AudioRecord` | [ ] Developer contract only | Replace `ECHIDNA_AR_SR/CH/FORMAT` with a safe normal-flow PCM metadata/lifecycle source, then prove exact-ABI capture. |
 | libc raw-device read | [ ] Developer contract only | Replace `ECHIDNA_LIBC_SR/CH/FORMAT` with safely derived metadata or retain and document it as a developer-only diagnostic route. |
 | Audio HAL | [ ] Unsupported | Current result is `unsupported_injection_boundary`. A new design must own audioserver injection, stable per-stream metadata, and vendor lifecycle tests. |
@@ -65,10 +65,11 @@ installed or active in telemetry.
 
 - [x] Companion packages exactly `libechidna_control_jni.so` for four ABIs; no engine, DSP, or shim
   JNI leakage.
-- [x] Native superbuild produces 12 outputs: engine, DSP, shim JNI, and Phase 1 preprocessor across
-  three ABIs. Release delivery verifies/transports only the nine engine/DSP/shim-JNI artifacts.
-- [ ] Package/register/session-attach `libechidna_preproc.so`; it is currently disabled and absent
-  from APK/Magisk payloads and effects configuration.
+- [x] Native superbuild produces and release delivery verifies/transports 12 outputs: engine, DSP,
+  shim JNI, and default-off preprocessor across three ABIs.
+- [x] Package `libechidna_preproc.so` and conditionally stage exact legacy-HIDL registration for the
+  next boot without auto-apply.
+- [ ] Session-attach and enable `libechidna_preproc.so`, then prove device audio/latency/SELinux.
 - [x] LSPosed APK requires the native build and packages exactly dedicated shim JNI + DSP for three
   ABIs; it never packages the Zygisk engine.
 - [x] Flashable Magisk package has one module id, per-ABI Zygisk/DSP payloads, recovery markers,

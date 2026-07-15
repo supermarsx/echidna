@@ -14,6 +14,7 @@ TMP_DIR="/data/local/tmp/echidna"
 CONFIG_BIN="$TMP_DIR/echidna_config.bin"
 TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
 TRUST_BOOTSTRAP="$MODDIR/common/trust-bootstrap.sh"
+EFFECT_REGISTRATION="$MODDIR/common/effect-registration.sh"
 
 log() {
     echo "[echidna][service] $1"
@@ -99,6 +100,16 @@ bootstrap_preprocessor_trust() {
     fi
 }
 
+stage_preprocessor_registration() {
+    if [ ! -x "$EFFECT_REGISTRATION" ]; then
+        log "Effect registration helper missing; legacy preprocessor remains unregistered"
+        return 0
+    fi
+    if ! "$EFFECT_REGISTRATION" "$MODDIR"; then
+        log "Effect registration is ineligible or failed; default-off boot continues"
+    fi
+}
+
 marker="$(manual_disable_marker 2>/dev/null || true)"
 if [ -n "$marker" ]; then
     engage_failsafe "manual disable marker present at $marker"
@@ -107,3 +118,4 @@ clear_boot_watchdog
 prepare_runtime_dir
 install_library
 bootstrap_preprocessor_trust
+stage_preprocessor_registration

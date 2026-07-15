@@ -55,7 +55,7 @@ public final class TrustBootstrapMain {
     private static Inspection inspect(Options options) throws Exception {
         int sdk = Build.VERSION.SDK_INT;
         if (sdk < SignerPolicy.MIN_SDK || sdk > SignerPolicy.MAX_SDK) {
-            throw new IllegalArgumentException("unsupported Android SDK " + sdk + "; expected 26..33");
+            throw new IllegalArgumentException("unsupported Android SDK " + sdk + "; expected 26..34");
         }
         boolean developmentMode = "development".equals(options.mode);
         String expectedDigest = readExpectedDigest(options.expectedFile);

@@ -9,7 +9,7 @@ import java.util.Set;
 /** Pure signer policy shared by the host fixtures and the app_process entry point. */
 public final class SignerPolicy {
     public static final int MIN_SDK = 26;
-    public static final int MAX_SDK = 33;
+    public static final int MAX_SDK = 34;
     private static final int MAX_CERTIFICATE_BYTES = 64 * 1024;
     private static final int MAX_LINEAGE_CERTIFICATES = 8;
     private static final String KNOWN_DEBUG_CERTIFICATE =
@@ -25,7 +25,7 @@ public final class SignerPolicy {
             String expectedDigest,
             boolean developmentMode) {
         if (sdk < MIN_SDK || sdk > MAX_SDK) {
-            throw new IllegalArgumentException("unsupported Android SDK " + sdk + "; expected 26..33");
+            throw new IllegalArgumentException("unsupported Android SDK " + sdk + "; expected 26..34");
         }
         String normalizedExpected = requireNormalizedDigest(expectedDigest);
         if (!developmentMode && KNOWN_DEBUG_CERTIFICATE.equals(normalizedExpected)) {

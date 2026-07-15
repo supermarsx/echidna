@@ -104,10 +104,10 @@ arm64-v8a, armeabi-v7a, and x86_64; zero were being produced correctly.
 
 **Decision:** cross-compile **per ABI** with the NDK toolchain
 (`tools/build_native_ndk.sh` loops the ABI set into `build/<abi>/lib/`). This
- produces four Android targets per ABI. Release delivery transports nine artifacts
- (`libechidna.so`, `libech_dsp.so`, and `libechidna_shim_jni.so` × three ABIs); the Phase 1
- `libechidna_preproc.so` is built/tested but not shipped, registered, or session-attached. The
- Magisk module consumes engine/DSP pairs and the LSPosed APK consumes dedicated JNI/DSP pairs.
+ produces four Android targets per ABI. Release delivery transports all four families. The Magisk
+ module consumes engine/DSP pairs plus inert per-ABI `libechidna_preproc.so` staging, while the
+ LSPosed APK consumes dedicated JNI/DSP pairs. Eligible legacy-HIDL system/vendor devices can stage
+ an exact next-boot registry overlay; no automatic application or session attachment is added.
  Per-ABI builds also enable ABI-specific SIMD and are the only
 way the trampoline code (which is inherently architecture-specific — see
 [Architecture](architecture.md#multi-abi-hooking)) can be compiled and shipped for

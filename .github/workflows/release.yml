@@ -290,6 +290,9 @@ jobs:
       - name: Build flashable Magisk module
         run: bash tools/build_magisk_module.sh
 
+      - name: Verify Magisk module and legacy effect payloads
+        run: python3 tools/verify_magisk_module.py --zip out/echidna-magisk.zip
+
       - name: Collect native release packages
         run: |
           set -euo pipefail
@@ -304,6 +307,8 @@ jobs:
               "artifacts/native/package/native-libs/${abi}/libechidna.so"
             cp "build/${abi}/lib/libechidna_shim_jni.so" \
               "artifacts/native/package/native-libs/${abi}/libechidna_shim_jni.so"
+            cp "build/${abi}/lib/libechidna_preproc.so" \
+              "artifacts/native/package/native-libs/${abi}/libechidna_preproc.so"
             cp "build/${abi}/lib/libech_dsp.so" \
               "artifacts/android-runtime-libs/${abi}/lib/libech_dsp.so"
             cp "build/${abi}/lib/libechidna_shim_jni.so" \
@@ -317,6 +322,7 @@ jobs:
           - libechidna.so: Zygisk/native hook engine
           - libech_dsp.so: DSP engine library
           - libechidna_shim_jni.so: standalone LSPosed AudioRecord JNI bridge
+          - libechidna_preproc.so: default-off legacy input-effect library packaged by Magisk
 
           End users normally install echidna-magisk-${VERSION}.zip instead. These
           raw libraries are attached for inspection, debugging, and integrators.

@@ -169,8 +169,8 @@ across devices:
   plugin directories, create narrowly labelled config/telemetry regions, and **fail loudly** if a
   per-ABI library is missing.
 
-Getting 12 cross-compiled native targets built, transporting only the nine supported engine/DSP/
-shim-JNI artifacts, and keeping the Phase 1 preprocessor out until it is registered and attached —
+Getting 12 cross-compiled native targets built, transporting each through its correct consumer,
+and keeping the packaged preprocessor inert unless a legacy-HIDL registry is safely staged —
 while doing it reproducibly (the
 project builds this both on the host toolchain and in a Docker `magisk-packager`) — is its
 own layer of difficulty on top of everything above. See [Build & Install](build-install.md).

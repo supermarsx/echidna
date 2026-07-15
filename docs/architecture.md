@@ -118,7 +118,7 @@ PCM back in place. All hooking is gated on `hooksEnabled()` **and**
 | OpenSL ES | Operational candidate | Recorder sink PCM descriptor and tested wrapper lifecycle. |
 | tinyalsa | Operational candidate | `pcm_open` configuration. |
 | LSPosed Java `AudioRecord` | Operational candidate | Java sample-rate, channel-count, and format getters. |
-| Legacy input preprocessor effect ABI | Phase 1 boundary | ABI, lifecycle, audio, and real-time host tests pass; it is not packaged, registered, session-attached, or enabled. |
+| Legacy input preprocessor effect ABI | Registered boundary | ABI/lifecycle/audio/RT tests pass; packaged and next-boot registered only for eligible system/vendor HIDL configs; default-off and unattached. |
 | Native `AudioRecord` | Developer contract only | Requires `ECHIDNA_AR_SR`, `ECHIDNA_AR_CH`, and `ECHIDNA_AR_FORMAT`; normal app specialization does not provide them. |
 | libc raw-device read | Developer contract only | Requires `ECHIDNA_LIBC_SR`, `ECHIDNA_LIBC_CH`, and `ECHIDNA_LIBC_FORMAT`. |
 | Audio HAL | Unsupported | `unsupported_injection_boundary`; vendor stream objects live behind audioserver. |
@@ -134,7 +134,7 @@ flowchart TB
     B["OpenSL ES"] --> P
     C["tinyalsa"] --> P
     J["LSPosed Java AudioRecord"] --> Q["dedicated shim JNI + packaged DSP"]
-    L["legacy input preprocessor<br/>Phase 1 boundary only"] -.-> R["not packaged or attached"]
+    L["legacy input preprocessor<br/>default-off registry"] -.-> R["not session-attached"]
     D["native AudioRecord / libc<br/>developer contract"] -.-> P
     X["Audio HAL / AudioFlinger<br/>unsupported boundary"] -.-> N["fail closed + telemetry"]
     P --> H["dlopen libech_dsp.so → dsp.process()"]
@@ -185,11 +185,12 @@ target-app specialization, and current capture routes require device validation.
 ### Multi-ABI hooking
 
 The native superbuild targets **four** shared objects per ABI — `libechidna.so`,
-`libech_dsp.so`, `libechidna_shim_jni.so`, and the Phase 1 `libechidna_preproc.so` — for
-`arm64-v8a`, `armeabi-v7a`, and `x86_64`. That is 12 generated targets. The supported delivery
-contract remains nine runtime artifacts: release tooling carries only the engine, DSP, and shim JNI
-triplet for each ABI. The preprocessor is not copied into an APK or Magisk payload, registered in an
-effects configuration, attached to a capture session, or enabled. The inline-hook
+`libech_dsp.so`, `libechidna_shim_jni.so`, and `libechidna_preproc.so` — for `arm64-v8a`,
+`armeabi-v7a`, and `x86_64`. That is 12 generated targets. Release tooling carries the engine,
+DSP, and preprocessor through the Magisk module and shim JNI/DSP through the LSPosed APK. The
+preprocessor remains in inert ABI staging until runtime evidence proves a legacy-HIDL system/vendor
+registry; the generated next-boot overlay adds only library/effect registration and never attaches
+or enables it on a capture session. The inline-hook
 trampoline support differs by ABI (t2-e11):
 
 - **arm64-v8a** — full trampoline (LDR X16 / BR X16 with relocation fixups); the

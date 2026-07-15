@@ -47,8 +47,11 @@ public final class TrustPolicyFixtureTest {
                 false,
                 expected,
                 false));
+        require(SignerPolicy.verify(
+                        34, new byte[][] {current}, new byte[][] {current}, false, expected, false)
+                .currentDigest.equals(expected));
         rejects(() -> SignerPolicy.verify(
-                34, new byte[][] {current}, new byte[][] {current}, false, expected, false));
+                35, new byte[][] {current}, new byte[][] {current}, false, expected, false));
         rejects(() -> SignerPolicy.verify(
                 26, new byte[][] {current}, new byte[0][], false, "*", false));
         rejects(() -> SignerPolicy.verify(
@@ -71,7 +74,7 @@ public final class TrustPolicyFixtureTest {
         rejects(() -> SpkiPolicy.verifyP256(new byte[0]));
         rejects(() -> SpkiPolicy.verifyP256(new byte[SpkiPolicy.MAX_SPKI_BYTES + 1]));
 
-        System.out.println("trust policy fixtures: API26/API28/API33/P-256 PASS");
+        System.out.println("trust policy fixtures: API26/API28/API33/API34/P-256 PASS");
     }
 
     private static void require(boolean condition) {

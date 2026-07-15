@@ -18,7 +18,7 @@ guarantee that capture hooks will work on the target phone.
 | -------- | ----------- | ---------- |
 | `app-debug.apk` / `app-release.apk` | Gradle | The companion app (UI + in-app control service + `libechidna_control_jni.so`). |
 | `shim-release.apk` | Gradle | The optional LSPosed/Xposed Java fallback shim APK. |
-| Native `.so` outputs | Native superbuild | Four libraries per ABI; release delivery uses only engine, DSP, and shim JNI. The legacy preprocessor is Phase 1 and unshipped. |
+| Native `.so` outputs | Native superbuild | Four libraries per ABI; release delivery verifies engine, DSP, shim JNI, and default-off legacy preprocessor artifacts. |
 | `out/echidna-magisk.zip` | `tools/build_magisk_module.sh` | The flashable Magisk module that delivers the native libraries system-side. |
 
 There are two supported build paths: a **host toolchain** path and a **Docker** path.
@@ -28,7 +28,7 @@ container-verified against. Pick whichever matches your setup — the outputs ar
 !!! info "Honesty about what is verified"
     Everything on this page up to *installing* is host-/container-verified: the companion and
     LSPosed APKs build, all 12 native targets cross-compile with the correct ELF architecture, and
-    the nine supported delivery artifacts produce the flashable/APK layout. Rooted-emulator
+    all four native library families produce the verified flashable/APK layout. Rooted-emulator
     validation also proves
     native `processBlock`. An `AudioRecord.read` slice passed before the current explicit-contract
     redesign and is historical evidence only. Full Magisk flashing, LSPosed injection, and current
@@ -124,9 +124,11 @@ build/armeabi-v7a/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libech
 build/x86_64/lib/{libech_dsp.so,libechidna.so,libechidna_shim_jni.so,libechidna_preproc.so}
 ```
 
-That is 12 generated native outputs. Release tooling verifies/transports nine: the Magisk module
-consumes engine/DSP pairs and the LSPosed shim consumes dedicated JNI/DSP pairs.
-`libechidna_preproc.so` is not copied, registered, session-attached, or enabled. ABI set:
+That is 12 generated native outputs. Release tooling verifies/transports all four families: the
+Magisk module consumes engine/DSP/preprocessor triplets and the LSPosed shim consumes dedicated
+JNI/DSP pairs. `libechidna_preproc.so` remains inert until the late service proves a legacy-HIDL
+system/vendor registry and stages registration for the next boot. It is never automatically applied,
+session-attached, or enabled. ABI set:
 **`arm64-v8a` (primary)**,
 `armeabi-v7a`, `x86_64`. Overrides: `ECHIDNA_ABIS`,
 `ANDROID_PLATFORM`, `ECHIDNA_BUILD_TYPE`, `ECHIDNA_CMAKE_GENERATOR`,
@@ -245,8 +247,8 @@ docker compose -f docker/compose.yaml run --rm magisk-packager
 ECHIDNA_REPO="$PWD" docker compose -f docker/compose.yaml --profile ci run --rm ci-local
 ```
 
-The native → Magisk chain was run container-to-container end-to-end. `magisk-packager` consumed only
-the engine/DSP pairs into `out/echidna-magisk.zip`; the Phase 1 preprocessor is deliberately absent.
+The native → Magisk chain was run container-to-container end-to-end. `magisk-packager` consumes the
+engine/DSP pairs plus all three inert preprocessor ABIs into `out/echidna-magisk.zip`.
 See [Verification](verification.md) for the recorded results.
 
 !!! note "Ninja pin"
@@ -346,8 +348,8 @@ Current route expectations:
   unless explicit sample-rate/channel/format metadata is supplied.
 - Audio HAL and AudioFlinger fail closed as `unsupported_injection_boundary`; Diagnostics must not
   be interpreted as proof that those routes transform audio.
-- The legacy input preprocessor passes Phase 1 library tests but is not in any release payload or
-  effects configuration and cannot be selected or session-attached.
+- The legacy input preprocessor is packaged and may be registered for the next boot on a proven
+  legacy-HIDL system/vendor registry. It cannot yet be selected or session-attached by the app.
 
 !!! warning "Assign one capture owner per process"
     Zygisk receives UID-scoped v2 policy over an authenticated socket; LSPosed receives
@@ -370,7 +372,8 @@ Current route expectations:
 | APK install -> service bind -> live AIDL round-trip | Emulator/rooted-emulator verified |
 | Live Zygisk module load + real hook install on arm64 primary | **Device-gated / NOT verified here** |
 | LSPosed shim injection + authenticated Binder policy under SELinux | **Device-gated / NOT verified here** |
-| Legacy preprocessor packaging/registration/session attachment | **Not implemented; Phase 1 only** |
+| Legacy preprocessor packaging/registration | **Implemented for eligible system/vendor HIDL devices; device load proof pending** |
+| Legacy preprocessor session attachment/enablement | **Not implemented; default-off** |
 | SELinux enforcement + supported capture candidates on real hardware | **Device-gated / NOT verified here** |
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |

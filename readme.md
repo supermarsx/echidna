@@ -65,8 +65,9 @@ inject processing into selected target processes. The current normal-flow native
 AAudio, OpenSL ES, and tinyalsa; the LSPosed shim covers Java `AudioRecord`. Native
 `AudioRecord` and raw libc capture are developer-contract routes, while Audio HAL and
 AudioFlinger transforms are deliberately unsupported until a safe injection boundary exists.
-An Android legacy input-preprocessor effect ABI now has a tested Phase 1 implementation, but it is
-not packaged, registered, attached to a recording session, or enabled in current releases.
+An Android legacy input-preprocessor effect ABI is packaged and can be registered for the next boot
+on proven legacy-HIDL system/vendor configurations. It remains default-off, is never auto-applied,
+and is not attached to a recording session or enabled in current releases.
 Captured PCM is processed by a C++17 DSP engine (`libech_dsp.so`) and written back in place.
 A Jetpack Compose companion app drives presets, per-app profiles, diagnostics, and safety
 controls. It targets power users and researchers on rooted devices; it is not a Play Store app.
@@ -231,7 +232,7 @@ behind each choice in **[docs/design-rationale.md](docs/design-rationale.md)**.
 Capture source
     ├─ operational candidates: AAudio / OpenSL / tinyalsa
     ├─ LSPosed fallback: Java AudioRecord
-    ├─ Phase 1 only: legacy input preprocessor (not shipped/attached)
+    ├─ device-gated: legacy input preprocessor (registered only; not attached)
     ├─ developer contract: native AudioRecord / libc read
     └─ unsupported: Audio HAL / AudioFlinger
                   ↓ eligible buffers

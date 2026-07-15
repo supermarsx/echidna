@@ -11,6 +11,9 @@
 #                              loads the ABI matching each hooked process.
 #   libs/<abi>/libech_dsp.so   Per-ABI DSP engine, staged; the correct arch is
 #                              placed into system/lib(64) below then staging removed.
+#   preproc/<abi>/libechidna_preproc.so
+#                              Default-off legacy AELI library. Late service stages
+#                              an eligible same-partition registration for next boot.
 #   lib/libechidna.so          Populated here with the device-primary-ABI engine so
 #                              the in-app control service JNI can dlopen it from
 #                              /data/adb/modules/echidna/lib (see echidna_control_jni.cpp).
@@ -29,6 +32,7 @@ ui_print "! ⚠️  Do not continue unless you can disable Magisk modules from r
 WARNINGS=0
 ZYGISK_STATUS_HELPER="$MODPATH/common/zygisk-status.sh"
 TRUST_BOOTSTRAP_HELPER="$MODPATH/common/trust-bootstrap.sh"
+EFFECT_REGISTRATION_HELPER="$MODPATH/common/effect-registration.sh"
 TRUST_DEX_HELPER="$MODPATH/common/echidna-trust-helper.jar"
 TRUST_DIGEST="$MODPATH/common/release-cert-sha256"
 TRUST_MODE="$MODPATH/common/trust-mode"
@@ -247,13 +251,16 @@ require_payload "$MODPATH/post-fs-data.sh"
 require_payload "$MODPATH/service.sh"
 require_payload "$ZYGISK_STATUS_HELPER"
 require_payload "$TRUST_BOOTSTRAP_HELPER"
+require_payload "$EFFECT_REGISTRATION_HELPER"
 require_payload "$TRUST_DEX_HELPER"
 require_payload "$TRUST_DIGEST"
 require_payload "$TRUST_MODE"
+require_payload "$MODPATH/preproc/$PRIMARY_ABI/libechidna_preproc.so"
 optional_payload "$MODPATH/sepolicy.rule"
 if [ "$IS64BIT" = "true" ] && [ -n "$SECONDARY32_ABI" ]; then
   optional_payload "$MODPATH/zygisk/$SECONDARY32_ABI.so"
   optional_payload "$MODPATH/libs/$SECONDARY32_ABI/libech_dsp.so"
+  optional_payload "$MODPATH/preproc/$SECONDARY32_ABI/libechidna_preproc.so"
 fi
 
 . "$ZYGISK_STATUS_HELPER"
@@ -301,6 +308,7 @@ set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$TRUST_BOOTSTRAP_HELPER" 0 0 0755
+set_perm "$EFFECT_REGISTRATION_HELPER" 0 0 0755
 set_perm "$TRUST_DEX_HELPER" 0 0 0644
 set_perm "$TRUST_DIGEST" 0 0 0444
 set_perm "$TRUST_MODE" 0 0 0444

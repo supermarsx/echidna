@@ -61,7 +61,6 @@ class DocumentationContractTest(unittest.TestCase):
             with self.subTest(path=path):
                 text = self.status[path].lower()
                 self.assertRegex(text, r"\b12\b")
-                self.assertRegex(text, r"(?:\bnine\b|\b9\b)")
                 self.assertRegex(text, r"(?:release|deliver|transport|support)")
                 self.assertIn("preproc", text)
 
@@ -79,6 +78,8 @@ class DocumentationContractTest(unittest.TestCase):
             r"six\s+real\s+android\s+\.so",
             r"signed\s+apk,\s*6\s+per-abi",
             r"native (?:build|superbuild) produces (?:exactly )?nine outputs",
+            r"only the nine engine/dsp/shim",
+            r"nine supported delivery artifacts",
         )
         for pattern in stale_patterns:
             with self.subTest(pattern=pattern):
@@ -117,8 +118,42 @@ class DocumentationContractTest(unittest.TestCase):
 
         self.assertIn("tools/check_release_signing.py", workflow)
         self.assertIn("tools/verify_android_artifacts.py", workflow)
+        self.assertIn("tools/verify_magisk_module.py", workflow)
         self.assertIn("RELEASE_CERT_SHA256", workflow)
         self.assertNotIn("debug-signing fallback", workflow)
+
+    def test_legacy_effect_registration_stays_default_off(self) -> None:
+        packager = read("tools/build_magisk_module.sh")
+        registration = read("magisk/common/effect-registration.sh")
+        merger = read(
+            "android/control-service/trust-helper/src/main/java/com/echidna/magisk/"
+            "EffectConfigMerger.java"
+        )
+        workflow = read(".github/workflows/release.yml")
+
+        for abi in ("arm64-v8a", "armeabi-v7a", "x86_64"):
+            self.assertIn(abi, packager)
+        self.assertIn("libechidna_preproc.so", packager)
+        self.assertIn("tools/verify_magisk_module.py", workflow)
+        self.assertIn("Stable-AIDL-only", registration)
+        self.assertIn("auto_apply=false", registration)
+        self.assertIn("$MODDIR/system/vendor", registration)
+        self.assertIn("auto-apply refused", merger)
+        self.assertNotIn("killall audioserver", registration)
+        self.assertNotIn("setprop ctl.restart", registration)
+        for path in (
+            "readme.md",
+            "docs/architecture.md",
+            "docs/build-install.md",
+            "docs/developer_readme.md",
+            "docs/limitations.md",
+            "docs/magisk_release.md",
+            "docs/verification.md",
+            "todo.md",
+        ):
+            with self.subTest(path=path):
+                text = self.status[path].lower()
+                self.assertRegex(text, r"default-off|not session-attached|not attached")
 
     def test_capture_route_status_matches_native_contract(self) -> None:
         contract = read("native/zygisk/src/hooks/capture_route_reachability.h")

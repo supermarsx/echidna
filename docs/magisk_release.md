@@ -85,16 +85,15 @@ they do not remove the user's responsibility for having a bootloop recovery path
 
 ## Inputs
 
-The native superbuild produces four libraries for each of three ABIs. Release delivery transports
-nine artifacts: the Magisk packager consumes engine/DSP pairs and
-`libechidna_shim_jni.so` is reserved for the LSPosed APK. Phase 1
-`libechidna_preproc.so` is neither packaged nor registered/session-attached:
+The native superbuild produces four libraries for each of three ABIs. The Magisk packager consumes
+engine/DSP pairs plus inert preprocessor staging, while `libechidna_shim_jni.so` is reserved for the
+LSPosed APK. Preprocessor registration remains default-off and device-generated:
 
 ```
 build/<abi>/lib/libechidna.so   → zygisk/<abi>.so      (Zygisk engine, per ABI)
 build/<abi>/lib/libech_dsp.so   → libs/<abi>/...        (staged; placed by customize.sh)
 build/<abi>/lib/libechidna_shim_jni.so                 (LSPosed APK input; not in module)
-build/<abi>/lib/libechidna_preproc.so                   (Phase 1 only; not shipped)
+build/<abi>/lib/libechidna_preproc.so → preproc/<abi>/  (inert next-boot source)
 ```
 
 Build those first (see [developer_readme.md](developer_readme.md#native-per-abi-build-ndk)):
@@ -141,14 +140,51 @@ for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib
   plus pre-sized config/telemetry region files). It applies dedicated region types and narrow app
   read/write grants matching `sepolicy.rule`. It does not grant zygote transitions or binder access.
 - **`service.sh`** marks late-start as reached, clears the watchdog, recreates safe runtime
-  permissions, stages `libechidna.so`, and invokes the trust bootstrap nonfatally. Trust failure
-  leaves the legacy preprocessor identity-bypassed; it never blocks boot, widens SELinux, replaces a
-  live key, or restarts audioserver.
+  permissions, stages `libechidna.so`, and invokes trust then effect registration nonfatally. Failure
+  leaves the legacy preprocessor unregistered or identity-bypassed; it never blocks boot, widens
+  SELinux, replaces a live key, or restarts audioserver.
 
 The helper supports API 26–33 only. It verifies the current PackageManager signer, user-0
 UID/dataDir, and app-owned P-256 SPKI before staging a root-owned read-only copy under
-`trust/next-boot/`. A new pin is inert until reboot and a separate effect-packaging concern binds it
-to `/system/etc/echidna/preprocessor_controller_p256.spki`.
+`trust/next-boot/`. After effect eligibility and the registry merge succeed, the registration helper
+copies the same verified key to the module overlay for
+`/system/etc/echidna/preprocessor_controller_p256.spki`; both registry and key are next-boot inputs.
+
+## Default-off legacy effect registration
+
+`common/effect-registration.sh` does not use the SDK level as an eligibility shortcut. It requires
+runtime evidence for a legacy HIDL `IEffectsFactory/default`, rejects Stable-AIDL-only factories and
+ambiguous HIDL+AIDL discovery, and proves the factory host bitness/ABI. Android 14 is eligible when
+it still exposes that legacy HIDL factory. A Stable-AIDL-only Android 14 device is not.
+
+The config search follows the platform order: ODM, API 30+ vendor-SKU, vendor, then system XML;
+legacy vendor/system `.conf` is used only when no XML is readable. An active ODM config is rejected
+without falling through because Magisk documents vendor overlays through `system/vendor` but no
+equivalent supported ODM module path. The selected system/vendor source is merged semantically:
+
+- the exact `echidna_preproc` library and implementation UUID are inserted once;
+- the type UUID remains library-descriptor evidence, as required by the legacy effect ABI;
+- every existing vendor registry/processing entry is retained;
+- malformed, duplicate, conflicting, or ambiguous input is rejected;
+- no XML `preprocess` or legacy `pre_processing` application is created.
+
+The module-owned Dex helper validates root ownership/no-follow reads, strict UTF-8, ELF class and
+machine, the AELI marker, and P-256 SPKI. It then atomically stages the registry, matching
+`lib(64)/soundfx` library, and exact system key overlay before committing metadata. Metadata records
+source/overlay/library/key SHA-256 values, source path, format, partition, ABI/bitness, build
+fingerprint, both UUIDs, and `auto_apply=false`. Repeated staging must match every tracked output.
+Fingerprint or source drift exits separately and places the module `disable` marker for the next
+boot without deleting or rewriting the suspect overlay in the running boot.
+
+The release ZIP itself contains no active `audio_effects.xml`, `audio_effects.conf`, or controller
+SPKI. `tools/verify_magisk_module.py` checks all three preprocessor ELFs for ABI, SONAME, AELI export,
+exact DT_NEEDED set, archive modes/layout, exact registration constants, and the absence of
+auto-apply or hot audioserver restart tokens.
+
+This is still device-gated. The repository has not yet proved a real device's active HIDL host and
+config, magic-mount file labels/linker namespace, factory descriptor, process maps, AVC-free load,
+or rollback observation. No session attachment or effect enablement exists, so registration alone
+does not transform capture audio.
 
 Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
 `echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem
