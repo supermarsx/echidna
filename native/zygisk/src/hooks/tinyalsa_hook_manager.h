@@ -38,6 +38,8 @@ namespace echidna
             runtime::InlineHook hook_read_;
             runtime::InlineHook hook_readi_;
             runtime::InlineHook hook_mmap_read_;
+            runtime::InlineHook hook_open_;
+            runtime::InlineHook hook_close_;
             HookInstallInfo last_info_;
         };
 

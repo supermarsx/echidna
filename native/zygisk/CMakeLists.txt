@@ -16,9 +16,11 @@ endif()
 add_library(echidna SHARED
     src/api.cpp
     src/module.cpp
+    src/audio/pcm_buffer_processor.cpp
     src/state/shared_state.cpp
     src/runtime/inline_hook.cpp
     src/hooks/hook_manager.cpp
+    src/hooks/aaudio_callback_registry.cpp
     src/hooks/aaudio_hook_manager.cpp
     src/hooks/capture_buffer_router.cpp
     src/hooks/opensl_hook_manager.cpp
@@ -31,11 +33,11 @@ add_library(echidna SHARED
     src/utils/proc_maps_scanner.cpp
     src/utils/plt_resolver.cpp
     src/utils/api_level_probe.cpp
-    src/utils/offset_probe.cpp
     src/utils/config_shared_memory.cpp
     src/utils/telemetry_shared_memory.cpp
     src/utils/process_utils.cpp
     src/jni/audio_bridge.cpp
+    src/jni/native_bridge_runtime_zygisk.cpp
     src/runtime/profile_sync_server.cpp)
 
 set_target_properties(echidna PROPERTIES
@@ -79,9 +81,11 @@ endif()
 # (e.g. a Windows dev host without a JDK) configuration still succeeds, and the
 # missing header only surfaces at compile time — CI installs a JDK (t2-e4) so the
 # include path resolves there.
+set(ECHIDNA_JNI_FOUND ${ANDROID})
 if(NOT ANDROID)
     find_package(JNI QUIET)
     if(JNI_FOUND)
+        set(ECHIDNA_JNI_FOUND ON)
         target_include_directories(echidna PRIVATE ${JNI_INCLUDE_DIRS})
     else()
         message(WARNING
@@ -90,8 +94,44 @@ if(NOT ANDROID)
     endif()
 endif()
 
+# LSPosed loads a dedicated JNI bridge, not the Zygisk module. Keeping this
+# target separate prevents Zygisk registration/lifecycle globals and hook state
+# from being duplicated in arbitrary target applications. It links the sibling
+# DSP library directly, so the Android loader records an explicit
+# DT_NEEDED=libech_dsp.so dependency and fails before JNI initialization when
+# the matching per-ABI DSP artifact is absent.
+if(TARGET ech_dsp AND ECHIDNA_JNI_FOUND)
+    add_library(echidna_shim_jni SHARED
+        src/audio/pcm_buffer_processor.cpp
+        src/jni/audio_bridge.cpp
+        src/jni/native_bridge_runtime_standalone.cpp)
+    set_target_properties(echidna_shim_jni PROPERTIES
+        OUTPUT_NAME echidna_shim_jni
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+    target_include_directories(echidna_shim_jni
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/../include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../dsp/include
+            ${JNI_INCLUDE_DIRS})
+    target_link_libraries(echidna_shim_jni PRIVATE ech_dsp)
+    if(LOG_LIB)
+        target_link_libraries(echidna_shim_jni PRIVATE ${LOG_LIB})
+    endif()
+    if(ANDROID AND DEFINED ANDROID_ABI)
+        target_compile_definitions(echidna_shim_jni
+            PRIVATE ECHIDNA_TARGET_ABI="${ANDROID_ABI}")
+        message(STATUS
+            "Echidna shim JNI: Android ABI ${ANDROID_ABI} -> "
+            "${CMAKE_BINARY_DIR}/lib/libechidna_shim_jni.so")
+    endif()
+endif()
+
 install(TARGETS echidna
     LIBRARY DESTINATION lib)
+if(TARGET echidna_shim_jni)
+    install(TARGETS echidna_shim_jni LIBRARY DESTINATION lib)
+endif()
 install(DIRECTORY include/ DESTINATION include)
 
 # Host-only smoke tests: the DSP-routing harness exercises the audio path on the

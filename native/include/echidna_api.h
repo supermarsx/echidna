@@ -14,7 +14,7 @@ extern "C"
      */
 
 #define ECHIDNA_API_VERSION_MAJOR 1U
-#define ECHIDNA_API_VERSION_MINOR 1U
+#define ECHIDNA_API_VERSION_MINOR 2U
 #define ECHIDNA_API_VERSION_PATCH 0U
 
 #define ECHIDNA_API_VERSION                                                 \
@@ -64,10 +64,19 @@ extern "C"
     echidna_result_t echidna_set_profile(const char *profile_json, size_t length);
 
     /**
+     * @brief Loads, configures, and preallocates DSP state for one PCM stream.
+     *
+     * This may allocate and perform dynamic linking. Call it from stream-open or
+     * hook-install lifecycle code, never from an audio callback.
+     */
+    echidna_result_t echidna_prepare_stream(uint32_t sample_rate,
+                                            uint32_t channel_count);
+
+    /**
      * @brief Processes an interleaved float audio block through the DSP engine.
      *
-     * If output is null or aliases input, a temporary buffer is used. The DSP is
-     * lazily initialised using the first provided sample rate/channel count.
+     * The stream must first be prepared with echidna_prepare_stream(). If output
+     * is null or aliases input, lifecycle-preallocated scratch is used.
      *
      * @param input Non-null interleaved float samples.
      * @param output Optional output buffer (same length as input).

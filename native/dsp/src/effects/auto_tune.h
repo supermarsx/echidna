@@ -68,6 +68,8 @@ namespace echidna::dsp::effects
         void prepare(uint32_t sample_rate, uint32_t channels) override;
         /** Reset filter and tracking state. */
         void reset() override;
+        /** Reserve callback scratch outside the audio thread. */
+        void prepare_realtime(size_t max_frames);
         /** Perform pitch detection + correction across `ctx.frames`. */
         void process(ProcessContext &ctx) override;
 

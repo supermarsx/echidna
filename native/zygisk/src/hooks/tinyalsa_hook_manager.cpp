@@ -2,8 +2,7 @@
 
 /**
  * @file tinyalsa_hook_manager.cpp
- * @brief Interpose tinyalsa PCM read functions and route buffers through the
- * DSP pipeline.
+ * @brief Track exact tinyalsa input contracts from pcm_open through pcm_close.
  */
 
 #ifdef __ANDROID__
@@ -14,307 +13,337 @@
 #endif
 
 #include <algorithm>
-#include <cstdlib>
-#include <cstring>
-#include <dlfcn.h>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <time.h>
 
 #include "echidna/api.h"
 #include "hooks/capture_buffer_router.h"
+#include "hooks/tinyalsa_contract.h"
 #include "state/shared_state.h"
-#include "utils/process_utils.h"
 #include "utils/telemetry_shared_memory.h"
 
-namespace echidna
+namespace echidna::hooks
 {
-    namespace hooks
+    namespace
     {
+        using PcmReadFn = int (*)(void *, void *, unsigned int);
+        using PcmOpenFn = void *(*)(unsigned int,
+                                    unsigned int,
+                                    unsigned int,
+                                    TinyAlsaConfigPrefix *);
+        using PcmCloseFn = int (*)(void *);
 
-        namespace
+        PcmReadFn gOriginalRead = nullptr;
+        PcmReadFn gOriginalReadi = nullptr;
+        PcmReadFn gOriginalMmapRead = nullptr;
+        PcmOpenFn gOriginalOpen = nullptr;
+        PcmCloseFn gOriginalClose = nullptr;
+
+        struct alignas(64) PcmContext
         {
-            using PcmReadFn = int (*)(void *, void *, unsigned int);
-            using PcmGetUnsignedFn = unsigned int (*)(void *);
-            using PcmGetFormatFn = int (*)(void *);
-            using PcmFramesToBytesFn = unsigned int (*)(void *, unsigned int);
-            using PcmFormatToBitsFn = unsigned int (*)(int);
-            PcmReadFn gOriginalRead = nullptr;
-            PcmReadFn gOriginalReadi = nullptr;
-            PcmReadFn gOriginalMmapRead = nullptr;
+            std::atomic<bool> claimed{false};
+            std::atomic<bool> active{false};
+            void *pcm{nullptr};
+            TinyAlsaPcmContract contract{};
+        };
 
-            struct LegacyPcmConfig
-            {
-                unsigned int channels{0};
-                unsigned int rate{0};
-                unsigned int period_size{0};
-                unsigned int period_count{0};
-                int format{0};
-            };
-            using LegacyPcmGetConfigFn = int (*)(void *, LegacyPcmConfig *);
+        constexpr size_t kMaxPcmLifetimes = 1024;
+        std::array<PcmContext, kMaxPcmLifetimes> gPcmContexts;
+        thread_local uint32_t gReadDepth = 0;
 
-            struct PcmContext
+        PcmContext *FindPcm(void *pcm)
+        {
+            if (!pcm)
             {
-                uint32_t sample_rate{48000};
-                uint32_t channels{2};
-                uint32_t bits_per_sample{16};
-                PcmFramesToBytesFn frames_to_bytes{nullptr};
-            };
-
-            template <typename Fn>
-            Fn ResolveTinyAlsaSymbol(const char *name)
-            {
-                return reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, name));
+                return nullptr;
             }
-
-            uint32_t ResolveFormatBits(int format)
+            for (auto &context : gPcmContexts)
             {
-                static auto format_to_bits =
-                    ResolveTinyAlsaSymbol<PcmFormatToBitsFn>("pcm_format_to_bits");
-                if (format_to_bits)
+                if (context.active.load(std::memory_order_acquire) && context.pcm == pcm)
                 {
-                    const unsigned int bits = format_to_bits(format);
-                    if (bits == 8 || bits == 16 || bits == 24 || bits == 32)
-                    {
-                        return bits;
-                    }
+                    return &context;
                 }
-                return format == 0 ? 16u : 0u;
             }
+            return nullptr;
+        }
 
-            PcmContext ResolvePcmContext(void *pcm)
+        void RegisterPcm(void *pcm, const TinyAlsaPcmContract &contract)
+        {
+            if (!pcm)
             {
-                PcmContext ctx;
-                static auto get_channels =
-                    ResolveTinyAlsaSymbol<PcmGetUnsignedFn>("pcm_get_channels");
-                static auto get_rate =
-                    ResolveTinyAlsaSymbol<PcmGetUnsignedFn>("pcm_get_rate");
-                static auto get_format =
-                    ResolveTinyAlsaSymbol<PcmGetFormatFn>("pcm_get_format");
-                static auto get_legacy_config =
-                    ResolveTinyAlsaSymbol<LegacyPcmGetConfigFn>("pcm_get_config");
-                static auto frames_to_bytes =
-                    ResolveTinyAlsaSymbol<PcmFramesToBytesFn>("pcm_frames_to_bytes");
-
-                ctx.frames_to_bytes = frames_to_bytes;
-                if (pcm && get_channels && get_rate)
-                {
-                    const unsigned int channels = get_channels(pcm);
-                    const unsigned int rate = get_rate(pcm);
-                    if (channels >= 1 && channels <= 8)
-                    {
-                        ctx.channels = channels;
-                    }
-                    if (rate > 8000 && rate < 192000)
-                    {
-                        ctx.sample_rate = rate;
-                    }
-                    if (get_format)
-                    {
-                        const uint32_t bits = ResolveFormatBits(get_format(pcm));
-                        if (bits != 0)
-                        {
-                            ctx.bits_per_sample = bits;
-                        }
-                    }
-                }
-                else if (pcm && get_legacy_config)
-                {
-                    LegacyPcmConfig config{};
-                    if (get_legacy_config(pcm, &config) == 0)
-                    {
-                        if (config.channels >= 1 && config.channels <= 8)
-                        {
-                            ctx.channels = config.channels;
-                        }
-                        if (config.rate > 8000 && config.rate < 192000)
-                        {
-                            ctx.sample_rate = config.rate;
-                        }
-                        const uint32_t bits = ResolveFormatBits(config.format);
-                        if (bits != 0)
-                        {
-                            ctx.bits_per_sample = bits;
-                        }
-                    }
-                }
-                if (const char *env = std::getenv("ECHIDNA_PCM_SR"))
-                {
-                    const int sr = std::atoi(env);
-                    if (sr > 8000 && sr < 192000)
-                    {
-                        ctx.sample_rate = static_cast<uint32_t>(sr);
-                    }
-                }
-                if (const char *env = std::getenv("ECHIDNA_PCM_CH"))
-                {
-                    const int ch = std::atoi(env);
-                    if (ch >= 1 && ch <= 8)
-                    {
-                        ctx.channels = static_cast<uint32_t>(ch);
-                    }
-                }
-                return ctx;
+                return;
             }
-
-            size_t BytesForFrames(void *pcm, unsigned int frames, const PcmContext &ctx)
+            for (auto &context : gPcmContexts)
             {
-                if (ctx.frames_to_bytes)
+                if (context.active.load(std::memory_order_acquire) && context.pcm == pcm)
                 {
-                    const unsigned int bytes = ctx.frames_to_bytes(pcm, frames);
-                    if (bytes != 0)
-                    {
-                        return bytes;
-                    }
+                    context.active.store(false, std::memory_order_release);
                 }
-                return static_cast<size_t>(frames) * ctx.channels * (ctx.bits_per_sample / 8);
             }
-
-            bool ProcessBuffer(void *data, size_t bytes, const PcmContext &ctx)
+            for (auto &context : gPcmContexts)
             {
-                if (!data || bytes == 0 || ctx.channels == 0 || ctx.bits_per_sample != 16)
+                bool expected = false;
+                if (!context.claimed.compare_exchange_strong(expected,
+                                                             true,
+                                                             std::memory_order_acq_rel,
+                                                             std::memory_order_relaxed))
                 {
-                    return false;
+                    continue;
                 }
-                const size_t frame_bytes = static_cast<size_t>(ctx.channels) * sizeof(int16_t);
-                if (frame_bytes == 0 || bytes % frame_bytes != 0)
-                {
-                    return false;
-                }
-                return RouteInt16CaptureBufferInPlace(data,
-                                                      bytes,
-                                                      ctx.sample_rate,
-                                                      ctx.channels,
-                                                      echidna_process_block);
+                context.pcm = pcm;
+                context.contract = contract;
+                context.active.store(true, std::memory_order_release);
+                return;
             }
+        }
 
-            int ForwardReadBytes(void *pcm, void *data, unsigned int bytes, PcmReadFn original)
+        void RetirePcm(void *pcm)
+        {
+            for (auto &context : gPcmContexts)
             {
-                auto &state = state::SharedState::instance();
-                const std::string &process = utils::CachedProcessName();
-                if (!state.hooksEnabled() || !state.isProcessWhitelisted(process))
+                if (context.active.load(std::memory_order_acquire) && context.pcm == pcm)
                 {
-                    return original ? original(pcm, data, bytes) : -1;
+                    context.active.store(false, std::memory_order_release);
                 }
+            }
+        }
 
-                const PcmContext ctx = ResolvePcmContext(pcm);
-                if (bytes == 0 || !data)
-                {
-                    return original ? original(pcm, data, bytes) : -1;
-                }
+        class ReadDepthGuard
+        {
+        public:
+            ReadDepthGuard() : outermost_(gReadDepth++ == 0) {}
+            ~ReadDepthGuard() { --gReadDepth; }
+            bool outermost() const { return outermost_; }
 
-                const int result = original ? original(pcm, data, bytes) : -1;
-                if (result < 0)
-                {
-                    return result;
-                }
+        private:
+            bool outermost_;
+        };
 
-                const size_t processed_bytes =
-                    result > 0 ? std::min(static_cast<size_t>(result),
-                                          static_cast<size_t>(bytes))
-                               : static_cast<size_t>(bytes);
-                ProcessBuffer(data, processed_bytes, ctx);
+        bool ProcessingAllowed()
+        {
+            return state::SharedState::instance().audioProcessingAllowed();
+        }
+
+        bool ProcessBuffer(void *data,
+                           size_t bytes,
+                           const TinyAlsaPcmContract &contract)
+        {
+            return RouteCaptureBufferInPlace(data,
+                                             bytes,
+                                             contract.format,
+                                             contract.sample_rate,
+                                             contract.channels,
+                                             echidna_process_block);
+        }
+
+        void RecordProcessing(const timespec &wall_start,
+                              const timespec &cpu_start,
+                              bool processed)
+        {
+            timespec wall_end{};
+            timespec cpu_end{};
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
+            clock_gettime(CLOCK_MONOTONIC, &wall_end);
+            const int64_t wall_ns =
+                (static_cast<int64_t>(wall_end.tv_sec) - wall_start.tv_sec) * 1000000000ll +
+                (static_cast<int64_t>(wall_end.tv_nsec) - wall_start.tv_nsec);
+            const int64_t cpu_ns =
+                (static_cast<int64_t>(cpu_end.tv_sec) - cpu_start.tv_sec) * 1000000000ll +
+                (static_cast<int64_t>(cpu_end.tv_nsec) - cpu_start.tv_nsec);
+            const uint64_t timestamp_ns =
+                static_cast<uint64_t>(wall_end.tv_sec) * 1000000000ull +
+                static_cast<uint64_t>(wall_end.tv_nsec);
+            auto &shared_state = state::SharedState::instance();
+            shared_state.telemetry().recordCallback(
+                timestamp_ns,
+                static_cast<uint32_t>(std::max<int64_t>(wall_ns, 0) / 1000),
+                static_cast<uint32_t>(std::max<int64_t>(cpu_ns, 0) / 1000),
+                utils::kTelemetryFlagCallback |
+                    (processed ? utils::kTelemetryFlagDsp
+                               : utils::kTelemetryFlagError),
+                0);
+            shared_state.setStatus(state::InternalStatus::kHooked);
+        }
+
+        int ForwardReadBytes(void *pcm,
+                             void *data,
+                             unsigned int bytes,
+                             PcmReadFn original)
+        {
+            ReadDepthGuard depth;
+            const int result = original ? original(pcm, data, bytes) : -1;
+            // pcm_read and pcm_mmap_read are documented to return zero only
+            // after filling the requested byte count. A nested pcm_readi call
+            // is processed by the outer wrapper exactly once.
+            if (!depth.outermost() || result != 0 || !data || bytes == 0 ||
+                !ProcessingAllowed())
+            {
                 return result;
             }
-
-            int ForwardReadFrames(void *pcm, void *data, unsigned int frames, PcmReadFn original)
+            PcmContext *context = FindPcm(pcm);
+            if (!context)
             {
-                auto &state = state::SharedState::instance();
-                const std::string &process = utils::CachedProcessName();
-                if (!state.hooksEnabled() || !state.isProcessWhitelisted(process))
-                {
-                    return original ? original(pcm, data, frames) : -1;
-                }
-
-                if (frames == 0 || !data)
-                {
-                    return original ? original(pcm, data, frames) : -1;
-                }
-
-                const int result = original ? original(pcm, data, frames) : -1;
-                if (result <= 0)
-                {
-                    return result;
-                }
-
-                const PcmContext ctx = ResolvePcmContext(pcm);
-                const unsigned int frames_read =
-                    std::min(static_cast<unsigned int>(result), frames);
-                const size_t bytes = BytesForFrames(pcm, frames_read, ctx);
-                ProcessBuffer(data, bytes, ctx);
                 return result;
             }
+            timespec wall_start{};
+            timespec cpu_start{};
+            clock_gettime(CLOCK_MONOTONIC, &wall_start);
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
+            const bool processed = ProcessBuffer(data, bytes, context->contract);
+            RecordProcessing(wall_start, cpu_start, processed);
+            return result;
+        }
 
-        } // namespace
-
-        TinyAlsaHookManager::TinyAlsaHookManager(utils::PltResolver &resolver)
-            : resolver_(resolver) {}
-
-        bool TinyAlsaHookManager::install()
+        int ForwardReadFrames(void *pcm,
+                              void *data,
+                              unsigned int requested_frames,
+                              PcmReadFn original)
         {
-            last_info_ = {};
-            const char *library = "libtinyalsa.so";
-            void *read_target = resolver_.findSymbol(library, "pcm_read");
-            if (read_target)
+            ReadDepthGuard depth;
+            const int result = original ? original(pcm, data, requested_frames) : -1;
+            if (!depth.outermost() || result <= 0 || !data || !ProcessingAllowed())
             {
-                hook_read_.install(read_target,
-                                   reinterpret_cast<void *>(&ReplacementRead),
-                                   reinterpret_cast<void **>(&gOriginalRead));
+                return result;
             }
-            void *readi_target = resolver_.findSymbol(library, "pcm_readi");
-            if (readi_target)
+            PcmContext *context = FindPcm(pcm);
+            if (!context)
             {
-                hook_readi_.install(readi_target,
-                                    reinterpret_cast<void *>(&ReplacementReadi),
-                                    reinterpret_cast<void **>(&gOriginalReadi));
+                return result;
             }
-            void *mmap_read_target = resolver_.findSymbol(library, "pcm_mmap_read");
-            if (mmap_read_target)
+            const uint32_t frames = std::min<uint32_t>(
+                static_cast<uint32_t>(result), requested_frames);
+            const auto bytes = TinyAlsaBytesForFrames(context->contract, frames);
+            if (!bytes)
             {
-                hook_mmap_read_.install(mmap_read_target,
-                                        reinterpret_cast<void *>(&ReplacementMmapRead),
-                                        reinterpret_cast<void **>(&gOriginalMmapRead));
+                return result;
             }
-            if (gOriginalRead)
+            timespec wall_start{};
+            timespec cpu_start{};
+            clock_gettime(CLOCK_MONOTONIC, &wall_start);
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_start);
+            const bool processed = ProcessBuffer(data, *bytes, context->contract);
+            RecordProcessing(wall_start, cpu_start, processed);
+            return result;
+        }
+
+        void *ForwardOpen(unsigned int card,
+                          unsigned int device,
+                          unsigned int flags,
+                          TinyAlsaConfigPrefix *config)
+        {
+            void *pcm = gOriginalOpen ? gOriginalOpen(card, device, flags, config) : nullptr;
+            const auto contract = ParseTinyAlsaContract(flags, config);
+            if (pcm && contract &&
+                echidna_prepare_stream(contract->sample_rate, contract->channels) ==
+                    ECHIDNA_RESULT_OK)
             {
-                last_info_.success = true;
-                last_info_.library = library;
-                last_info_.symbol = "pcm_read";
-                last_info_.reason.clear();
-                return true;
+                RegisterPcm(pcm, *contract);
             }
-            if (gOriginalReadi)
+            return pcm;
+        }
+
+        int ForwardClose(void *pcm)
+        {
+            const int result = gOriginalClose ? gOriginalClose(pcm) : -1;
+            if (result == 0)
             {
-                last_info_.success = true;
-                last_info_.library = library;
-                last_info_.symbol = "pcm_readi";
-                last_info_.reason.clear();
-                return true;
+                RetirePcm(pcm);
             }
-            if (gOriginalMmapRead)
-            {
-                last_info_.success = true;
-                last_info_.library = library;
-                last_info_.symbol = "pcm_mmap_read";
-                last_info_.reason.clear();
-                return true;
-            }
-            last_info_.reason = "symbol_not_found";
+            return result;
+        }
+    } // namespace
+
+    TinyAlsaHookManager::TinyAlsaHookManager(utils::PltResolver &resolver)
+        : resolver_(resolver) {}
+
+    bool TinyAlsaHookManager::install()
+    {
+        last_info_ = {};
+        constexpr const char *kLibrary = "libtinyalsa.so";
+        void *open = resolver_.findSymbol(kLibrary, "pcm_open");
+        void *close = resolver_.findSymbol(kLibrary, "pcm_close");
+        if (!open || !close)
+        {
+            last_info_.reason = "lifecycle_symbols_not_found";
+            return false;
+        }
+        const bool open_installed = hook_open_.install(
+            open,
+            reinterpret_cast<void *>(&ForwardOpen),
+            reinterpret_cast<void **>(&gOriginalOpen));
+        const bool close_installed = hook_close_.install(
+            close,
+            reinterpret_cast<void *>(&ForwardClose),
+            reinterpret_cast<void **>(&gOriginalClose));
+        if (!open_installed || !close_installed)
+        {
+            last_info_.reason = "lifecycle_hook_failed";
             return false;
         }
 
-        int TinyAlsaHookManager::ReplacementRead(void *pcm, void *data, unsigned int count)
+        struct ReadCandidate
         {
-            return ForwardReadBytes(pcm, data, count, gOriginalRead);
-        }
-
-        int TinyAlsaHookManager::ReplacementReadi(void *pcm, void *data, unsigned int frames)
+            const char *symbol;
+            runtime::InlineHook *hook;
+            void *replacement;
+            PcmReadFn *original;
+        };
+        ReadCandidate candidates[] = {
+            {"pcm_read", &hook_read_, reinterpret_cast<void *>(&ReplacementRead), &gOriginalRead},
+            {"pcm_readi", &hook_readi_, reinterpret_cast<void *>(&ReplacementReadi), &gOriginalReadi},
+            {"pcm_mmap_read", &hook_mmap_read_, reinterpret_cast<void *>(&ReplacementMmapRead), &gOriginalMmapRead},
+        };
+        bool installed = false;
+        bool failed = false;
+        for (auto &candidate : candidates)
         {
-            return ForwardReadFrames(pcm, data, frames, gOriginalReadi);
+            void *target = resolver_.findSymbol(kLibrary, candidate.symbol);
+            if (!target)
+            {
+                continue;
+            }
+            const bool success = candidate.hook->install(
+                target,
+                candidate.replacement,
+                reinterpret_cast<void **>(candidate.original));
+            if (success && !installed)
+            {
+                last_info_.symbol = candidate.symbol;
+            }
+            installed = installed || success;
+            failed = failed || !success;
         }
-
-        int TinyAlsaHookManager::ReplacementMmapRead(void *pcm, void *data, unsigned int count)
+        if (!installed)
         {
-            return ForwardReadBytes(pcm, data, count, gOriginalMmapRead);
+            last_info_.reason = failed ? "read_hook_failed" : "read_symbols_not_found";
+            return false;
         }
+        last_info_.success = true;
+        last_info_.library = kLibrary;
+        __android_log_print(ANDROID_LOG_INFO,
+                            "echidna",
+                            "tinyalsa input lifecycle and read hooks installed");
+        return true;
+    }
 
-    } // namespace hooks
-} // namespace echidna
+    int TinyAlsaHookManager::ReplacementRead(void *pcm, void *data, unsigned int count)
+    {
+        return ForwardReadBytes(pcm, data, count, gOriginalRead);
+    }
+
+    int TinyAlsaHookManager::ReplacementReadi(void *pcm, void *data, unsigned int frames)
+    {
+        return ForwardReadFrames(pcm, data, frames, gOriginalReadi);
+    }
+
+    int TinyAlsaHookManager::ReplacementMmapRead(void *pcm,
+                                                 void *data,
+                                                 unsigned int count)
+    {
+        return ForwardReadBytes(pcm, data, count, gOriginalMmapRead);
+    }
+} // namespace echidna::hooks

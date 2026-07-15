@@ -49,6 +49,11 @@ namespace echidna::dsp
 extern "C"
 {
 
+    uint32_t ech_dsp_api_get_version(void)
+    {
+        return ECH_DSP_API_VERSION;
+    }
+
     /**
      * @brief Initialize a global DSP engine instance.
      *
@@ -124,6 +129,24 @@ extern "C"
         }
     }
 
+    ech_dsp_status_t ech_dsp_prepare_realtime(size_t max_frames)
+    {
+        if (max_frames == 0)
+        {
+            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+        }
+        std::shared_ptr<echidna::dsp::DspEngine> engine;
+        {
+            std::lock_guard<std::mutex> lock(g_engine_mutex);
+            engine = g_engine;
+        }
+        if (!engine)
+        {
+            return ECH_DSP_STATUS_NOT_INITIALISED;
+        }
+        return engine->PrepareRealtime(max_frames);
+    }
+
     /**
      * @brief Process a single block through the global engine instance.
      */
@@ -137,7 +160,11 @@ extern "C"
         }
         std::shared_ptr<echidna::dsp::DspEngine> engine;
         {
-            std::lock_guard<std::mutex> lock(g_engine_mutex);
+            std::unique_lock lock(g_engine_mutex, std::try_to_lock);
+            if (!lock.owns_lock())
+            {
+                return ECH_DSP_STATUS_ERROR;
+            }
             engine = g_engine;
         }
         if (!engine)

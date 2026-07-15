@@ -484,6 +484,12 @@ namespace echidna::dsp::config
     PresetLoadResult LoadPresetFromJson(std::string_view json)
     {
         PresetLoadResult result;
+        if (json.size() > 512 * 1024)
+        {
+            result.ok = false;
+            result.error = "Preset too large";
+            return result;
+        }
         try
         {
             JsonParser parser(json);
@@ -494,19 +500,6 @@ namespace echidna::dsp::config
                 result.error = "Preset root must be an object";
                 return result;
             }
-            if (json.size() > 512 * 1024)
-            {
-                result.ok = false;
-                result.error = "Preset too large";
-                return result;
-            }
-            if (json.size() > 512 * 1024)
-            {
-                result.ok = false;
-                result.error = "Preset too large";
-                return result;
-            }
-
             if (auto name = GetString(root, "name"))
             {
                 result.preset.name = *name;

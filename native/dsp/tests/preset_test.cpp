@@ -56,5 +56,13 @@ int main()
     too_many_modules += "]}";
     auto flood_result = echidna::dsp::config::LoadPresetFromJson(too_many_modules);
     assert(!flood_result.ok);
+
+    // Reject oversized input before parsing it. This bounds parser CPU/memory
+    // consumption and covers the size check that used to be duplicated after
+    // JsonParser::parse().
+    std::string oversized(512 * 1024 + 1, ' ');
+    auto oversized_result = echidna::dsp::config::LoadPresetFromJson(oversized);
+    assert(!oversized_result.ok);
+    assert(oversized_result.error == "Preset too large");
     return 0;
 }

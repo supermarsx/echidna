@@ -37,6 +37,7 @@ target_compile_features(zygisk_dsp_smoke_test PRIVATE cxx_std_20)
 
 add_executable(capture_buffer_router_test
     capture_buffer_router_test.cpp
+    ../src/audio/pcm_buffer_processor.cpp
     ../src/hooks/capture_buffer_router.cpp)
 target_link_libraries(capture_buffer_router_test PRIVATE ech_dsp)
 target_include_directories(capture_buffer_router_test
@@ -46,6 +47,46 @@ target_include_directories(capture_buffer_router_test
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_features(capture_buffer_router_test PRIVATE cxx_std_20)
+
+add_executable(aarch64_instruction_test aarch64_instruction_test.cpp)
+target_include_directories(aarch64_instruction_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(aarch64_instruction_test PRIVATE cxx_std_20)
+
+add_executable(audiohal_contract_test audiohal_contract_test.cpp)
+target_include_directories(audiohal_contract_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(audiohal_contract_test PRIVATE cxx_std_20)
+
+add_executable(aaudio_callback_registry_test
+    aaudio_callback_registry_test.cpp
+    ../src/hooks/aaudio_callback_registry.cpp)
+target_include_directories(aaudio_callback_registry_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(aaudio_callback_registry_test PRIVATE cxx_std_20)
+
+add_executable(opensl_pcm_contract_test opensl_pcm_contract_test.cpp)
+target_include_directories(opensl_pcm_contract_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(opensl_pcm_contract_test PRIVATE cxx_std_20)
+
+add_executable(opensl_buffer_fifo_test opensl_buffer_fifo_test.cpp)
+target_include_directories(opensl_buffer_fifo_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(opensl_buffer_fifo_test PRIVATE cxx_std_20)
+
+add_executable(tinyalsa_contract_test tinyalsa_contract_test.cpp)
+target_include_directories(tinyalsa_contract_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(tinyalsa_contract_test PRIVATE cxx_std_20)
 
 if(NOT WIN32)
   add_executable(config_shared_memory_test
@@ -63,7 +104,13 @@ endif()
 # invocation from CI finds it next to the other native test binaries.
 set(ECHIDNA_ZYGISK_TEST_TARGETS
     zygisk_dsp_smoke_test
-    capture_buffer_router_test)
+    capture_buffer_router_test
+    aarch64_instruction_test
+    audiohal_contract_test
+    aaudio_callback_registry_test
+    opensl_pcm_contract_test
+    opensl_buffer_fifo_test
+    tinyalsa_contract_test)
 if(NOT WIN32)
   list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS config_shared_memory_test)
 endif()
@@ -74,6 +121,12 @@ set_target_properties(${ECHIDNA_ZYGISK_TEST_TARGETS} PROPERTIES
 enable_testing()
 add_test(NAME zygisk_dsp_smoke_test COMMAND zygisk_dsp_smoke_test)
 add_test(NAME capture_buffer_router_test COMMAND capture_buffer_router_test)
+add_test(NAME aarch64_instruction_test COMMAND aarch64_instruction_test)
+add_test(NAME audiohal_contract_test COMMAND audiohal_contract_test)
+add_test(NAME aaudio_callback_registry_test COMMAND aaudio_callback_registry_test)
+add_test(NAME opensl_pcm_contract_test COMMAND opensl_pcm_contract_test)
+add_test(NAME opensl_buffer_fifo_test COMMAND opensl_buffer_fifo_test)
+add_test(NAME tinyalsa_contract_test COMMAND tinyalsa_contract_test)
 if(NOT WIN32)
   add_test(NAME config_shared_memory_test COMMAND config_shared_memory_test)
 endif()

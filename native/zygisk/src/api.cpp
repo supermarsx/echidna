@@ -36,17 +36,22 @@ namespace
     constexpr uint32_t kDefaultOverrunUs = 30000;
     constexpr uint32_t kDefaultOverrunCount = 6;
     constexpr uint32_t kDefaultBypassMs = 180000;
+    constexpr size_t kMaxRealtimeSamples = 32768;
 
     struct DspBridge
     {
         using InitFn = ech_dsp_status_t (*)(uint32_t, uint32_t, ech_dsp_quality_mode_t);
+        using VersionFn = uint32_t (*)(void);
         using UpdateFn = ech_dsp_status_t (*)(const char *, size_t);
+        using PrepareFn = ech_dsp_status_t (*)(size_t);
         using ProcessFn = ech_dsp_status_t (*)(const float *, float *, size_t);
         using ShutdownFn = void (*)(void);
 
         void *handle{nullptr};
+        VersionFn version{nullptr};
         InitFn init{nullptr};
         UpdateFn update{nullptr};
+        PrepareFn prepare{nullptr};
         ProcessFn process{nullptr};
         ShutdownFn shutdown{nullptr};
         uint32_t sample_rate{0};
@@ -282,7 +287,8 @@ namespace
     {
         if (dsp.handle)
         {
-            return dsp.init && dsp.update && dsp.process && dsp.shutdown;
+            return dsp.version && dsp.init && dsp.update && dsp.prepare && dsp.process &&
+                   dsp.shutdown;
         }
         const char *candidates[] = {
             "libech_dsp.so",
@@ -317,18 +323,25 @@ namespace
             LogWarn("Failed to load libech_dsp.so: %s", last_error ? last_error : "unknown");
             return false;
         }
+        dsp.version =
+            reinterpret_cast<DspBridge::VersionFn>(dlsym(dsp.handle, "ech_dsp_api_get_version"));
         dsp.init = reinterpret_cast<DspBridge::InitFn>(dlsym(dsp.handle, "ech_dsp_initialize"));
         dsp.update =
             reinterpret_cast<DspBridge::UpdateFn>(dlsym(dsp.handle, "ech_dsp_update_config"));
+        dsp.prepare = reinterpret_cast<DspBridge::PrepareFn>(
+            dlsym(dsp.handle, "ech_dsp_prepare_realtime"));
         dsp.process =
             reinterpret_cast<DspBridge::ProcessFn>(dlsym(dsp.handle, "ech_dsp_process_block"));
         dsp.shutdown = reinterpret_cast<DspBridge::ShutdownFn>(dlsym(dsp.handle, "ech_dsp_shutdown"));
-        if (!dsp.init || !dsp.update || !dsp.process || !dsp.shutdown)
+        if (!dsp.version || dsp.version() != ECH_DSP_API_VERSION || !dsp.init || !dsp.update ||
+            !dsp.prepare || !dsp.process || !dsp.shutdown)
         {
             dlclose(dsp.handle);
             dsp.handle = nullptr;
+            dsp.version = nullptr;
             dsp.init = nullptr;
             dsp.update = nullptr;
+            dsp.prepare = nullptr;
             dsp.process = nullptr;
             dsp.shutdown = nullptr;
             return false;
@@ -395,6 +408,22 @@ namespace
                 return ToEchidnaResult(update_status);
             }
         }
+        const size_t max_frames = kMaxRealtimeSamples / channels;
+        if (max_frames == 0 || dsp.prepare(max_frames) != ECH_DSP_STATUS_OK)
+        {
+            dsp.initialised = false;
+            return ECHIDNA_RESULT_ERROR;
+        }
+        try
+        {
+            dsp.scratch_output.resize(kMaxRealtimeSamples);
+        }
+        catch (...)
+        {
+            dsp.initialised = false;
+            return ECHIDNA_RESULT_ERROR;
+        }
+        (void)GetWatchdogConfig();
         return ECHIDNA_RESULT_OK;
     }
 
@@ -503,6 +532,17 @@ echidna_result_t echidna_set_profile(const char *profile_json, size_t length)
     return result;
 }
 
+echidna_result_t echidna_prepare_stream(uint32_t sample_rate, uint32_t channel_count)
+{
+    if (sample_rate < 8000 || sample_rate > 384000 ||
+        channel_count == 0 || channel_count > 8)
+    {
+        return ECHIDNA_RESULT_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(DspMutex());
+    return EnsureInitialisedLocked(GetDspBridge(), sample_rate, channel_count);
+}
+
 echidna_result_t echidna_process_block(const float *input,
                                        float *output,
                                        uint32_t frames,
@@ -511,7 +551,8 @@ echidna_result_t echidna_process_block(const float *input,
 {
     auto &state = SharedState::instance();
     size_t sample_count = 0;
-    if (!input || sample_rate == 0 || !ComputeSampleCount(frames, channel_count, &sample_count))
+    if (!input || sample_rate == 0 || !ComputeSampleCount(frames, channel_count, &sample_count) ||
+        sample_count > kMaxRealtimeSamples)
     {
         state.setStatus(echidna::state::InternalStatus::kError);
         state.telemetry().recordCallback(0, 0, 0, echidna::utils::kTelemetryFlagError, 0);
@@ -546,9 +587,16 @@ echidna_result_t echidna_process_block(const float *input,
     }
     else
     {
-        std::lock_guard<std::mutex> lock(DspMutex());
+        std::unique_lock lock(DspMutex(), std::try_to_lock);
+        if (!lock.owns_lock())
+        {
+            return ECHIDNA_RESULT_NOT_AVAILABLE;
+        }
         auto &dsp = GetDspBridge();
-        result = EnsureInitialisedLocked(dsp, sample_rate, channel_count);
+        result = dsp.initialised && dsp.sample_rate == sample_rate &&
+                         dsp.channels == channel_count
+                     ? ECHIDNA_RESULT_OK
+                     : ECHIDNA_RESULT_NOT_INITIALISED;
         if (result != ECHIDNA_RESULT_OK)
         {
             flags |= echidna::utils::kTelemetryFlagError;
@@ -559,17 +607,9 @@ echidna_result_t echidna_process_block(const float *input,
             float *process_output = output;
             if (!output || output == input)
             {
-                try
-                {
-                    dsp.scratch_output.resize(samples);
-                    process_output = dsp.scratch_output.data();
-                }
-                catch (...)
-                {
-                    process_output = nullptr;
-                    result = ECHIDNA_RESULT_ERROR;
-                    flags |= echidna::utils::kTelemetryFlagError;
-                }
+                process_output = dsp.scratch_output.size() >= samples
+                                     ? dsp.scratch_output.data()
+                                     : nullptr;
             }
             if (process_output)
             {

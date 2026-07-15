@@ -298,6 +298,11 @@ namespace echidna::dsp::effects
         }
     }
 
+    void PitchShifter::prepare_realtime(size_t max_frames)
+    {
+        scratch_.reserve(max_frames * static_cast<size_t>(channels_));
+    }
+
     /** Compute the current semitone ratio applied by the pitch shifter. */
     float PitchShifter::ratio() const
     {

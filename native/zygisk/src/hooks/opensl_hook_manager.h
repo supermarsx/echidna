@@ -2,54 +2,27 @@
 
 /**
  * @file opensl_hook_manager.h
- * @brief Hook manager for OpenSL ES buffer queue callbacks used in some
- * audio capture paths.
+ * @brief Hook the stable OpenSL engine entrypoint and wrap recorder interfaces.
  */
-
-#include <cstdint>
-#include <string>
-
-#ifdef __ANDROID__
-#include <SLES/OpenSLES.h>
-#else
-using SLresult = int;
-constexpr SLresult SL_RESULT_SUCCESS = 0;
-#endif
 
 #include "hooks/hook_manager.h"
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
 
-namespace echidna
+namespace echidna::hooks
 {
-    namespace hooks
+    class OpenSLHookManager : public HookManager
     {
+    public:
+        explicit OpenSLHookManager(utils::PltResolver &resolver);
 
-        class OpenSLHookManager : public HookManager
-        {
-        public:
-            explicit OpenSLHookManager(utils::PltResolver &resolver);
+        bool install() override;
+        const char *name() const override { return "OpenSL"; }
+        const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
-            bool install() override;
-            const char *name() const override { return "OpenSL"; }
-            const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
-
-        private:
-            using OpenSlCallback = void (*)(void *, void *);
-
-            static SLresult ReplacementEnqueue(void *queue,
-                                               const void *buffer,
-                                               uint32_t size);
-            static SLresult ReplacementRegisterCallback(void *queue,
-                                                        OpenSlCallback callback,
-                                                        void *context);
-
-            utils::PltResolver &resolver_;
-            runtime::InlineHook hook_enqueue_;
-            runtime::InlineHook hook_register_;
-            std::string active_symbol_;
-            HookInstallInfo last_info_;
-        };
-
-    } // namespace hooks
-} // namespace echidna
+    private:
+        utils::PltResolver &resolver_;
+        runtime::InlineHook hook_create_engine_;
+        HookInstallInfo last_info_;
+    };
+} // namespace echidna::hooks

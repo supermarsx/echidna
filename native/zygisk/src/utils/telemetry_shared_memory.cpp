@@ -137,7 +137,11 @@ namespace echidna
                                                    uint32_t flags,
                                                    uint32_t xruns)
         {
-            std::scoped_lock lock(mutex_);
+            std::unique_lock lock(mutex_, std::try_to_lock);
+            if (!lock.owns_lock())
+            {
+                return;
+            }
             if (!layout_ || !writable_)
             {
                 return;
@@ -207,7 +211,11 @@ namespace echidna
                                                       float formant_width,
                                                       uint32_t xruns)
         {
-            std::scoped_lock lock(mutex_);
+            std::unique_lock lock(mutex_, std::try_to_lock);
+            if (!lock.owns_lock())
+            {
+                return;
+            }
             if (!layout_ || !writable_)
             {
                 return;
@@ -298,7 +306,11 @@ namespace echidna
 
         void TelemetrySharedMemory::setWarningFlags(uint32_t flags)
         {
-            std::scoped_lock lock(mutex_);
+            std::unique_lock lock(mutex_, std::try_to_lock);
+            if (!lock.owns_lock())
+            {
+                return;
+            }
             if (!layout_ || !writable_)
             {
                 return;

@@ -2,44 +2,27 @@
 
 /**
  * @file audiorecord_hook_manager.h
- * @brief Hook manager for intercepting AudioRecord native read paths and
- * forwarding samples for processing/telemetry.
+ * @brief Exact-ABI native AudioRecord synchronous-read hook manager.
  */
-
-#include <cstdint>
-#include <string>
-#include <sys/types.h>
 
 #include "hooks/hook_manager.h"
 #include "runtime/inline_hook.h"
 #include "utils/plt_resolver.h"
 
-namespace echidna
+namespace echidna::hooks
 {
-    namespace hooks
+    class AudioRecordHookManager : public HookManager
     {
+    public:
+        explicit AudioRecordHookManager(utils::PltResolver &resolver);
 
-        class AudioRecordHookManager : public HookManager
-        {
-        public:
-            explicit AudioRecordHookManager(utils::PltResolver &resolver);
+        bool install() override;
+        const char *name() const override { return "AudioRecord"; }
+        const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
 
-            /**
-             * @brief Installs AudioRecord::read hooks (native bridge).
-             */
-            bool install() override;
-            const char *name() const override { return "AudioRecord"; }
-            const HookInstallInfo &lastInstallInfo() const override { return last_info_; }
-
-        private:
-            /** Replacement shim wrapping the original read behaviour. */
-            static ssize_t Replacement(void *instance, void *buffer, size_t bytes, bool blocking);
-
-            utils::PltResolver &resolver_;
-            runtime::InlineHook hook_;
-            std::string active_symbol_;
-            HookInstallInfo last_info_;
-        };
-
-    } // namespace hooks
-} // namespace echidna
+    private:
+        utils::PltResolver &resolver_;
+        runtime::InlineHook hook_;
+        HookInstallInfo last_info_;
+    };
+} // namespace echidna::hooks

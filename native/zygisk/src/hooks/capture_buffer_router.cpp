@@ -1,12 +1,59 @@
 #include "hooks/capture_buffer_router.h"
 
-#include <algorithm>
-#include <vector>
+#include <array>
+#include <atomic>
 
 namespace echidna
 {
     namespace hooks
     {
+        namespace
+        {
+            constexpr size_t kScratchSlotCount = 4;
+
+            struct alignas(64) ScratchSlot
+            {
+                std::atomic_flag in_use = ATOMIC_FLAG_INIT;
+                std::array<float, kMaxRealtimeCaptureSamples> input{};
+                std::array<float, kMaxRealtimeCaptureSamples> output{};
+            };
+
+            std::array<ScratchSlot, kScratchSlotCount> gScratchSlots;
+
+            class ScratchLease
+            {
+            public:
+                ScratchLease()
+                {
+                    for (auto &slot : gScratchSlots)
+                    {
+                        if (!slot.in_use.test_and_set(std::memory_order_acquire))
+                        {
+                            slot_ = &slot;
+                            break;
+                        }
+                    }
+                }
+
+                ~ScratchLease()
+                {
+                    if (slot_)
+                    {
+                        slot_->in_use.clear(std::memory_order_release);
+                    }
+                }
+
+                ScratchLease(const ScratchLease &) = delete;
+                ScratchLease &operator=(const ScratchLease &) = delete;
+
+                explicit operator bool() const { return slot_ != nullptr; }
+                float *input() const { return slot_ ? slot_->input.data() : nullptr; }
+                float *output() const { return slot_ ? slot_->output.data() : nullptr; }
+
+            private:
+                ScratchSlot *slot_{nullptr};
+            };
+        } // namespace
 
         uint32_t ResolveInt16ChannelsForByteCount(size_t byte_count,
                                                   uint32_t preferred_channels)
@@ -16,19 +63,12 @@ namespace echidna
                 return 0;
             }
             const size_t total_samples = byte_count / sizeof(int16_t);
-            if (preferred_channels >= 1 && preferred_channels <= 8 &&
-                (total_samples % preferred_channels) == 0)
+            if (preferred_channels < 1 || preferred_channels > 8 ||
+                (total_samples % preferred_channels) != 0)
             {
-                return preferred_channels;
+                return 0;
             }
-            for (uint32_t channels = 1; channels <= 8; ++channels)
-            {
-                if ((total_samples % channels) == 0)
-                {
-                    return channels;
-                }
-            }
-            return 0;
+            return preferred_channels;
         }
 
         bool RouteInt16CaptureBufferInPlace(void *buffer,
@@ -47,37 +87,36 @@ namespace echidna
             {
                 return false;
             }
-            const size_t samples = byte_count / sizeof(int16_t);
-            const size_t frames = samples / channels;
-            if (frames == 0 || frames > UINT32_MAX)
-            {
-                return false;
-            }
+            return RouteCaptureBufferInPlace(buffer,
+                                             byte_count,
+                                             audio::PcmFormat::kSigned16,
+                                             sample_rate,
+                                             channels,
+                                             process_block);
+        }
 
-            std::vector<float> input(samples);
-            const int16_t *pcm_in = static_cast<const int16_t *>(buffer);
-            for (size_t i = 0; i < samples; ++i)
-            {
-                input[i] = static_cast<float>(pcm_in[i]) / 32768.0f;
-            }
-            std::vector<float> output(samples);
-            const echidna_result_t result =
-                process_block(input.data(),
-                              output.data(),
-                              static_cast<uint32_t>(frames),
-                              sample_rate,
-                              channels);
-            if (result != ECHIDNA_RESULT_OK)
+        bool RouteCaptureBufferInPlace(void *buffer,
+                                       size_t byte_count,
+                                       audio::PcmFormat format,
+                                       uint32_t sample_rate,
+                                       uint32_t channels,
+                                       ProcessBlockFn process_block)
+        {
+            ScratchLease scratch;
+            if (!scratch)
             {
                 return false;
             }
-            int16_t *pcm_out = static_cast<int16_t *>(buffer);
-            for (size_t i = 0; i < samples; ++i)
-            {
-                const float clamped = std::clamp(output[i], -1.0f, 1.0f);
-                pcm_out[i] = static_cast<int16_t>(clamped * 32767.0f);
-            }
-            return true;
+            return audio::ProcessPcmBufferInPlace(buffer,
+                                                  byte_count,
+                                                  format,
+                                                  sample_rate,
+                                                  channels,
+                                                  scratch.input(),
+                                                  scratch.output(),
+                                                  kMaxRealtimeCaptureSamples,
+                                                  process_block) ==
+                   audio::BufferProcessResult::kProcessed;
         }
 
         bool RouteFloatCaptureBufferInPlace(void *buffer,
@@ -86,27 +125,22 @@ namespace echidna
                                             uint32_t channels,
                                             ProcessBlockFn process_block)
         {
-            if (!buffer || frames == 0 || sample_rate == 0 || channels == 0 || !process_block)
+            if (!buffer || frames == 0 || sample_rate == 0 || channels == 0 || channels > 8 ||
+                !process_block)
             {
                 return false;
             }
             const size_t samples = static_cast<size_t>(frames) * channels;
-            if (samples == 0)
+            if (samples == 0 || samples > SIZE_MAX / sizeof(float))
             {
                 return false;
             }
-
-            const float *input = static_cast<const float *>(buffer);
-            std::vector<float> output(samples);
-            const echidna_result_t result =
-                process_block(input, output.data(), frames, sample_rate, channels);
-            if (result != ECHIDNA_RESULT_OK)
-            {
-                return false;
-            }
-            float *pcm_out = static_cast<float *>(buffer);
-            std::copy(output.begin(), output.end(), pcm_out);
-            return true;
+            return RouteCaptureBufferInPlace(buffer,
+                                             samples * sizeof(float),
+                                             audio::PcmFormat::kFloat32,
+                                             sample_rate,
+                                             channels,
+                                             process_block);
         }
 
     } // namespace hooks

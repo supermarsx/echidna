@@ -62,6 +62,11 @@ namespace echidna::dsp::effects
     /** Reset last pitch tracking state to defaults. */
     void AutoTune::reset() { std::fill(last_pitch_.begin(), last_pitch_.end(), 1.0f); }
 
+    void AutoTune::prepare_realtime(size_t max_frames)
+    {
+        scratch_.reserve(max_frames);
+    }
+
     /** Estimate the fundamental frequency from the provided mono samples. */
     float AutoTune::detect_pitch(const float *samples, size_t frames, uint32_t channel)
     {

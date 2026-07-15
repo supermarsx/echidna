@@ -120,7 +120,7 @@ namespace echidna
                     return std::nullopt;
                 }
                 const auto *ident = reinterpret_cast<const unsigned char *>(base);
-                if (!ident || std::memcmp(ident, ELFMAG, SELFMAG) != 0)
+                if (std::memcmp(ident, ELFMAG, SELFMAG) != 0)
                 {
                     return std::nullopt;
                 }

@@ -72,7 +72,7 @@ namespace echidna::dsp
      */
     ech_dsp_status_t DspEngine::UpdatePreset(const config::PresetDefinition &preset)
     {
-        std::lock_guard<std::mutex> lock(preset_mutex_);
+        std::scoped_lock lock(preset_mutex_, process_mutex_);
         preset_ = preset;
 
         if (preset.processing_mode == config::ProcessingMode::kHybrid &&
@@ -129,6 +129,30 @@ namespace echidna::dsp
         return ECH_DSP_STATUS_OK;
     }
 
+    ech_dsp_status_t DspEngine::PrepareRealtime(size_t max_frames)
+    {
+        size_t samples = 0;
+        if (!ComputeSampleCount(max_frames, channels_, &samples))
+        {
+            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+        }
+        try
+        {
+            std::scoped_lock lock(preset_mutex_, process_mutex_);
+            dry_buffer_.resize(samples);
+            wet_buffer_.resize(samples);
+            pitch_.prepare_realtime(max_frames);
+            autotune_.prepare_realtime(max_frames);
+            realtime_max_frames_ = max_frames;
+            return ECH_DSP_STATUS_OK;
+        }
+        catch (...)
+        {
+            realtime_max_frames_ = 0;
+            return ECH_DSP_STATUS_ERROR;
+        }
+    }
+
     /**
      * @brief Public block processing API.
      *
@@ -151,9 +175,21 @@ namespace echidna::dsp
         config::ProcessingMode mode;
         uint32_t block_timeout_ms;
         {
-            std::lock_guard<std::mutex> lock(preset_mutex_);
+            std::unique_lock lock(preset_mutex_, std::try_to_lock);
+            if (!lock.owns_lock())
+            {
+                return ECH_DSP_STATUS_ERROR;
+            }
             mode = processing_mode_;
             block_timeout_ms = preset_.block_ms;
+            if (realtime_max_frames_ != 0)
+            {
+                if (frames > realtime_max_frames_)
+                {
+                    return ECH_DSP_STATUS_INVALID_ARGUMENT;
+                }
+                mode = config::ProcessingMode::kSynchronous;
+            }
         }
 
         if (mode == config::ProcessingMode::kSynchronous)
@@ -210,7 +246,15 @@ namespace echidna::dsp
         {
             return ECH_DSP_STATUS_INVALID_ARGUMENT;
         }
-        std::lock_guard<std::mutex> lock(process_mutex_);
+        std::unique_lock lock(process_mutex_, std::try_to_lock);
+        if (!lock.owns_lock())
+        {
+            return ECH_DSP_STATUS_ERROR;
+        }
+        if (realtime_max_frames_ != 0 && frames > realtime_max_frames_)
+        {
+            return ECH_DSP_STATUS_INVALID_ARGUMENT;
+        }
         try
         {
             EnsureBuffers(frames);

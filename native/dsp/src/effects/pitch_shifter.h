@@ -67,6 +67,8 @@ namespace echidna::dsp::effects
         void prepare(uint32_t sample_rate, uint32_t channels) override;
         /** Reset backend state. */
         void reset() override;
+        /** Reserve callback scratch outside the audio thread. */
+        void prepare_realtime(size_t max_frames);
         /** Execute processing with the active backend. */
         void process(ProcessContext &ctx) override;
 

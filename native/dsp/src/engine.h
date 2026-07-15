@@ -70,6 +70,8 @@ namespace echidna::dsp
          * @return ECH_DSP_STATUS_OK on success, error code on failure.
          */
         ech_dsp_status_t UpdatePreset(const config::PresetDefinition &preset);
+        /** Preallocate all core callback-path scratch for max_frames. */
+        ech_dsp_status_t PrepareRealtime(size_t max_frames);
         /**
          * @brief Process a single audio block.
          *
@@ -143,6 +145,7 @@ namespace echidna::dsp
 
         std::vector<float> dry_buffer_;
         std::vector<float> wet_buffer_;
+        size_t realtime_max_frames_{0};
 
         config::ProcessingMode processing_mode_{config::ProcessingMode::kSynchronous};
         std::mutex preset_mutex_;

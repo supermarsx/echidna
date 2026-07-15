@@ -1,4 +1,5 @@
 #include "runtime/inline_hook.h"
+#include "runtime/aarch64_instruction.h"
 
 /**
  * @file inline_hook.cpp
@@ -294,16 +295,17 @@ namespace echidna
                     return true;
                 }
 
-                if ((opcode & 0x7C000000) == 0x14000000)
-                { // B
+                const auto branch_kind = aarch64::ClassifyUnconditionalBranch(opcode);
+                if (branch_kind == aarch64::UnconditionalBranchKind::kBranch)
+                {
                     int32_t imm26 = SignExtend(static_cast<int32_t>(opcode & 0x03FFFFFF), 26);
                     uint64_t target = pc + (static_cast<int64_t>(imm26) << 2);
                     AppendBranchTo(result, target, false);
                     return true;
                 }
 
-                if ((opcode & 0x7C000000) == 0x94000000)
-                { // BL
+                if (branch_kind == aarch64::UnconditionalBranchKind::kBranchWithLink)
+                {
                     int32_t imm26 = SignExtend(static_cast<int32_t>(opcode & 0x03FFFFFF), 26);
                     uint64_t target = pc + (static_cast<int64_t>(imm26) << 2);
                     AppendBranchTo(result, target, true);
@@ -424,18 +426,13 @@ namespace echidna
                                               instr_index * kAArch64InstructionSize;
                     uintptr_t literal_address = reinterpret_cast<uintptr_t>(base) +
                                                 literal_base_offset + literal_index * sizeof(uint64_t);
-                    int64_t delta = static_cast<int64_t>(literal_address) -
-                                    static_cast<int64_t>(instr_address + 4);
-                    if ((delta & 0x3) != 0)
+                    const auto imm19 =
+                        aarch64::EncodePcRelativeImmediate(instr_address, literal_address, 19);
+                    if (!imm19.has_value())
                     {
                         return std::nullopt;
                     }
-                    int64_t imm19 = delta >> 2;
-                    if (imm19 < -(1 << 18) || imm19 > ((1 << 18) - 1))
-                    {
-                        return std::nullopt;
-                    }
-                    return EncodeLiteralLoad(rt, static_cast<int32_t>(imm19));
+                    return EncodeLiteralLoad(rt, imm19.value());
                 };
 
                 for (const auto &fixup : result.literal_fixups)
@@ -456,18 +453,13 @@ namespace echidna
                                                fixup.instruction_index * kAArch64InstructionSize;
                     uintptr_t target_address = reinterpret_cast<uintptr_t>(base) +
                                                fixup.target_instruction_index * kAArch64InstructionSize;
-                    int64_t delta = static_cast<int64_t>(target_address) -
-                                    static_cast<int64_t>(branch_address + 4);
-                    if ((delta & 0x3) != 0)
+                    const auto imm19 =
+                        aarch64::EncodePcRelativeImmediate(branch_address, target_address, 19);
+                    if (!imm19.has_value())
                     {
                         return false;
                     }
-                    int64_t imm19 = delta >> 2;
-                    if (imm19 < -(1 << 18) || imm19 > ((1 << 18) - 1))
-                    {
-                        return false;
-                    }
-                    uint32_t encoded = EncodeConditionalBranch(fixup.original, static_cast<int32_t>(imm19));
+                    uint32_t encoded = EncodeConditionalBranch(fixup.original, imm19.value());
                     std::memcpy(base + fixup.instruction_index * kAArch64InstructionSize, &encoded,
                                 sizeof(uint32_t));
                     return true;
@@ -479,19 +471,14 @@ namespace echidna
                                                fixup.instruction_index * kAArch64InstructionSize;
                     uintptr_t target_address = reinterpret_cast<uintptr_t>(base) +
                                                fixup.target_instruction_index * kAArch64InstructionSize;
-                    int64_t delta = static_cast<int64_t>(target_address) -
-                                    static_cast<int64_t>(branch_address + 4);
-                    if ((delta & 0x3) != 0)
-                    {
-                        return false;
-                    }
-                    int64_t imm19 = delta >> 2;
-                    if (imm19 < -(1 << 18) || imm19 > ((1 << 18) - 1))
+                    const auto imm19 =
+                        aarch64::EncodePcRelativeImmediate(branch_address, target_address, 19);
+                    if (!imm19.has_value())
                     {
                         return false;
                     }
                     uint32_t encoded =
-                        EncodeCompareBranch(fixup.original, static_cast<int32_t>(imm19));
+                        EncodeCompareBranch(fixup.original, imm19.value());
                     std::memcpy(base + fixup.instruction_index * kAArch64InstructionSize, &encoded,
                                 sizeof(uint32_t));
                     return true;
@@ -503,18 +490,13 @@ namespace echidna
                                                fixup.instruction_index * kAArch64InstructionSize;
                     uintptr_t target_address = reinterpret_cast<uintptr_t>(base) +
                                                fixup.target_instruction_index * kAArch64InstructionSize;
-                    int64_t delta = static_cast<int64_t>(target_address) -
-                                    static_cast<int64_t>(branch_address + 4);
-                    if ((delta & 0x3) != 0)
+                    const auto imm14 =
+                        aarch64::EncodePcRelativeImmediate(branch_address, target_address, 14);
+                    if (!imm14.has_value())
                     {
                         return false;
                     }
-                    int64_t imm14 = delta >> 2;
-                    if (imm14 < -(1 << 13) || imm14 > ((1 << 13) - 1))
-                    {
-                        return false;
-                    }
-                    uint32_t encoded = EncodeTestBranch(fixup.original, static_cast<int32_t>(imm14));
+                    uint32_t encoded = EncodeTestBranch(fixup.original, imm14.value());
                     std::memcpy(base + fixup.instruction_index * kAArch64InstructionSize, &encoded,
                                 sizeof(uint32_t));
                     return true;

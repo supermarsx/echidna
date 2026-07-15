@@ -60,6 +60,16 @@ namespace echidna
              */
             bool isProcessWhitelisted(const std::string &process) const;
             /**
+             * @brief Caches the current process name for lock-free audio-thread admission.
+             *
+             * Call this from hook installation or another non-realtime lifecycle path.
+             */
+            void prepareProcessAdmission(const std::string &process);
+            /**
+             * @brief Returns the cached hooks-enabled + whitelist decision without locking.
+             */
+            bool audioProcessingAllowed() const;
+            /**
              * @brief Returns whether hooks are globally enabled.
              */
             bool hooksEnabled() const;
@@ -95,10 +105,13 @@ namespace echidna
             SharedState();
 
             mutable std::mutex mutex_;
-            InternalStatus status_;
+            std::atomic<InternalStatus> status_;
             std::string profile_;
-            bool bypass_enabled_;
-            uint64_t bypass_until_ns_;
+            std::string current_process_;
+            std::atomic<bool> hooks_enabled_{false};
+            std::atomic<bool> audio_processing_allowed_{false};
+            std::atomic<bool> bypass_enabled_;
+            std::atomic<uint64_t> bypass_until_ns_;
             utils::ConfigSharedMemory shared_memory_;
             utils::ConfigurationSnapshot cached_snapshot_;
             utils::TelemetrySharedMemory telemetry_memory_;

@@ -307,10 +307,6 @@ namespace echidna::dsp::plugins
         }
         while (auto *entry = readdir(dir))
         {
-            if (!entry->d_name)
-            {
-                continue;
-            }
             std::string name(entry->d_name);
             if (name == "." || name == "..")
             {
@@ -446,7 +442,11 @@ namespace echidna::dsp::plugins
      */
     void PluginLoader::ProcessAll(effects::ProcessContext &ctx)
     {
-        std::scoped_lock lock(mutex_);
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        if (!lock.owns_lock())
+        {
+            return;
+        }
         for (auto &module : modules_)
         {
             for (auto &effect : module.effects)
