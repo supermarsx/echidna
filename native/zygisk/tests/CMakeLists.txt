@@ -80,6 +80,18 @@ target_include_directories(opensl_buffer_fifo_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(opensl_buffer_fifo_test PRIVATE cxx_std_20)
 
+add_executable(opensl_lifecycle_test
+    opensl_lifecycle_test.cpp
+    ../src/audio/pcm_buffer_processor.cpp
+    ../src/hooks/capture_buffer_router.cpp)
+target_include_directories(opensl_lifecycle_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/fake_sles
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(opensl_lifecycle_test PRIVATE cxx_std_20)
+
 add_executable(tinyalsa_contract_test tinyalsa_contract_test.cpp)
 target_include_directories(tinyalsa_contract_test
     PRIVATE
@@ -110,6 +122,7 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     aaudio_callback_registry_test
     opensl_pcm_contract_test
     opensl_buffer_fifo_test
+    opensl_lifecycle_test
     tinyalsa_contract_test)
 if(NOT WIN32)
   list(APPEND ECHIDNA_ZYGISK_TEST_TARGETS config_shared_memory_test)
@@ -126,6 +139,7 @@ add_test(NAME audiohal_contract_test COMMAND audiohal_contract_test)
 add_test(NAME aaudio_callback_registry_test COMMAND aaudio_callback_registry_test)
 add_test(NAME opensl_pcm_contract_test COMMAND opensl_pcm_contract_test)
 add_test(NAME opensl_buffer_fifo_test COMMAND opensl_buffer_fifo_test)
+add_test(NAME opensl_lifecycle_test COMMAND opensl_lifecycle_test)
 add_test(NAME tinyalsa_contract_test COMMAND tinyalsa_contract_test)
 if(NOT WIN32)
   add_test(NAME config_shared_memory_test COMMAND config_shared_memory_test)

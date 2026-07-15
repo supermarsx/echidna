@@ -5,9 +5,11 @@
  * @brief Wrap OpenSL recorder buffer-queue vtables from slCreateEngine.
  */
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ECHIDNA_OPENSL_TESTING)
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
+#endif
+#ifdef __ANDROID__
 #include <android/log.h>
 #else
 #define __android_log_print(...) ((void)0)
@@ -33,7 +35,7 @@
 
 namespace echidna::hooks
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ECHIDNA_OPENSL_TESTING)
     namespace
     {
         constexpr size_t kMaxObjects = 128;
@@ -107,6 +109,12 @@ namespace echidna::hooks
         std::array<EngineContext, kMaxEngines> gEngines;
         std::array<QueueContext, kMaxQueues> gQueues;
         std::array<CallbackToken, kMaxCallbackTokens> gCallbackTokens;
+
+#ifdef ECHIDNA_OPENSL_TESTING
+        using PrepareStreamFn = echidna_result_t (*)(uint32_t, uint32_t);
+        PrepareStreamFn gTestPrepareStream = nullptr;
+        ProcessBlockFn gTestProcessBlock = nullptr;
+#endif
 
         static_assert(std::atomic<void *>::is_always_lock_free,
                       "OpenSL capture requires lock-free pointer atomics");
@@ -227,7 +235,11 @@ namespace echidna::hooks
 
         bool ProcessingAllowed()
         {
+#ifdef ECHIDNA_OPENSL_TESTING
+            return true;
+#else
             return state::SharedState::instance().audioProcessingAllowed();
+#endif
         }
 
         bool ProcessBuffer(const QueueContext &queue, const OpenSlQueuedBuffer &buffer)
@@ -244,7 +256,11 @@ namespace echidna::hooks
                                              queue.contract.format,
                                              queue.contract.sample_rate,
                                              queue.contract.channels,
+#ifdef ECHIDNA_OPENSL_TESTING
+                                             gTestProcessBlock);
+#else
                                              echidna_process_block);
+#endif
         }
 
         struct TimingStart
@@ -263,6 +279,10 @@ namespace echidna::hooks
 
         void RecordHookCall(const TimingStart &start, bool processed)
         {
+#ifdef ECHIDNA_OPENSL_TESTING
+            (void)start;
+            (void)processed;
+#else
             timespec wall_end{};
             timespec cpu_end{};
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_end);
@@ -286,6 +306,18 @@ namespace echidna::hooks
                                : utils::kTelemetryFlagError),
                 0);
             shared_state.setStatus(state::InternalStatus::kHooked);
+#endif
+        }
+
+        echidna_result_t PrepareStream(uint32_t sample_rate, uint32_t channels)
+        {
+#ifdef ECHIDNA_OPENSL_TESTING
+            return gTestPrepareStream
+                       ? gTestPrepareStream(sample_rate, channels)
+                       : ECHIDNA_RESULT_NOT_AVAILABLE;
+#else
+            return echidna_prepare_stream(sample_rate, channels);
+#endif
         }
 
         void QueueCallbackProxy(SLAndroidSimpleBufferQueueItf caller, void *opaque)
@@ -577,7 +609,7 @@ namespace echidna::hooks
                                                                           required);
             if (result == SL_RESULT_SUCCESS && recorder && *recorder && contract)
             {
-                if (echidna_prepare_stream(contract->sample_rate, contract->channels) ==
+                if (PrepareStream(contract->sample_rate, contract->channels) ==
                     ECHIDNA_RESULT_OK)
                 {
                     (void)WrapObject(*recorder, ObjectKind::kRecorder, *contract);
@@ -672,6 +704,7 @@ namespace echidna::hooks
     } // namespace
 #endif
 
+#ifndef ECHIDNA_OPENSL_TESTING
     OpenSLHookManager::OpenSLHookManager(utils::PltResolver &resolver)
         : resolver_(resolver) {}
 
@@ -724,4 +757,5 @@ namespace echidna::hooks
         return true;
 #endif
     }
+#endif
 } // namespace echidna::hooks
