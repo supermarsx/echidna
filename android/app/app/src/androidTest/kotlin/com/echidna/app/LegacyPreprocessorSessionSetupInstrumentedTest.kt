@@ -4,6 +4,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.IBinder
 import android.os.Process
 import android.system.Os
@@ -23,6 +25,7 @@ import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -32,6 +35,10 @@ class LegacyPreprocessorSessionSetupInstrumentedTest {
     @Test
     fun publishesPolicyAndAppOwnedTrustMaterial() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        assumeTrue(
+            "standalone session proof requires the installed LSPosed shim",
+            isShimInstalled(context),
+        )
         val keyFile = prepareTelemetryKey(context)
 
         val controlConnection = Binding<IEchidnaControlService> {
@@ -95,6 +102,21 @@ class LegacyPreprocessorSessionSetupInstrumentedTest {
 
         context.unbindService(providerConnection)
         context.unbindService(controlConnection)
+    }
+
+    private fun isShimInstalled(context: Context): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getApplicationInfo(
+                SHIM_PACKAGE,
+                PackageManager.ApplicationInfoFlags.of(0L),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getApplicationInfo(SHIM_PACKAGE, 0)
+        }
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
     }
 
     private fun prepareTelemetryKey(context: Context): File {
