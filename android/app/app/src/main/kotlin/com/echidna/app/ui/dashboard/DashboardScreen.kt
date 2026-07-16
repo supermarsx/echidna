@@ -19,9 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -35,6 +33,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,8 +46,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.echidna.app.ui.components.AlertSeverity
 import com.echidna.app.ui.components.AudioMetersCard
 import com.echidna.app.ui.components.EngineStatusCard
+import com.echidna.app.ui.components.PersistentDismissibleAlert
+import com.echidna.app.ui.components.rememberDismissedAlertsStore
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.Preset
 import kotlin.math.roundToInt
@@ -76,7 +78,10 @@ fun DashboardScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        InstallRiskWarningCard(onOpenInstall = onOpenInstall)
+        InstallRiskWarningCard(
+            nativeInstalled = engineStatus.nativeInstalled,
+            onOpenInstall = onOpenInstall
+        )
         MasterControlCard(
             enabled = masterEnabled,
             onToggle = { checked ->
@@ -127,60 +132,33 @@ fun DashboardScreen(
     }
 }
 
+/**
+ * The dashboard's install-risk warning, now a dismissible alert. It is safety/recovery-relevant, so
+ * a permanent "Don't remind" is honored but scoped to the current install state: a MATERIAL change
+ * (native module installed <-> not installed) surfaces the recovery warning once more. The plain
+ * "Dismiss" is reconciled against the same state key. The action button opens the guided installer,
+ * which honestly detects root/Magisk before offering to install the bundled engine module.
+ */
 @Composable
-private fun InstallRiskWarningCard(onOpenInstall: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.size(22.dp)
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "Root module / install risk",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Text(
-                        text = "Echidna's Android capture-path interception and Magisk/Zygisk module " +
-                            "install path are very hard and will likely not work on many phones. " +
-                            "Do not flash or rely on the module unless you can recover the device.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
-            // CTA: opens the guided installer, which honestly detects root/Magisk before offering
-            // to install the bundled engine module (replacing the former manual-flash-only advice).
-            Button(
-                onClick = onOpenInstall,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.onErrorContainer,
-                    contentColor = MaterialTheme.colorScheme.errorContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(imageVector = Icons.Filled.Download, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "Set up / install engine", fontWeight = FontWeight.SemiBold)
-            }
-        }
+private fun InstallRiskWarningCard(nativeInstalled: Boolean, onOpenInstall: () -> Unit) {
+    val store = rememberDismissedAlertsStore()
+    val stateKey = if (nativeInstalled) "installed" else "not_installed"
+    val key = "dashboard.install_risk:$stateKey"
+    LaunchedEffect(key) {
+        store.reconcileActive(setOf(key), "dashboard.install_risk:")
     }
+    PersistentDismissibleAlert(
+        alertKey = key,
+        permanentAlertKey = key,
+        store = store,
+        title = "Root module / install risk",
+        message = "Echidna's Android capture-path interception and Magisk/Zygisk module install " +
+            "path are very hard and will likely not work on many phones. Do not flash or rely on " +
+            "the module unless you can recover the device.",
+        severity = AlertSeverity.ERROR,
+        actionLabel = "Set up / install engine",
+        onAction = onOpenInstall,
+    )
 }
 
 /**
