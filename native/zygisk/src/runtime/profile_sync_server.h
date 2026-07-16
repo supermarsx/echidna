@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -23,6 +24,13 @@ namespace echidna
 {
     namespace runtime
     {
+        namespace detail
+        {
+            constexpr uint32_t NextNonzeroTelemetrySequence(uint32_t current) noexcept
+            {
+                return current == std::numeric_limits<uint32_t>::max() ? 1U : current + 1U;
+            }
+        } // namespace detail
 
         class ProfileSyncServer
         {

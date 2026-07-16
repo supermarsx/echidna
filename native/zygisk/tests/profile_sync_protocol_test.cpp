@@ -143,7 +143,7 @@ namespace
         CHECK(!snapshot.global_hooks_enabled, "compatibility mode must disable native hooks");
     }
 
-    void ExpectRejected(std::string payload, std::string_view expected_error)
+    void ExpectRejected(std::string_view payload, std::string_view expected_error)
     {
         echidna::runtime::DecodedProfileSnapshot snapshot;
         std::string error;
@@ -170,13 +170,13 @@ namespace
 
         std::string invalid_utf8 = Envelope();
         invalid_utf8.insert(1, 1, static_cast<char>(0xc0));
-        ExpectRejected(std::move(invalid_utf8), "UTF-8");
+        ExpectRejected(invalid_utf8, "UTF-8");
 
         std::string invalid_surrogate = Envelope();
         invalid_surrogate.replace(invalid_surrogate.find("default"),
                                   std::string("default").size(),
                                   "bad\\uD800");
-        ExpectRejected(std::move(invalid_surrogate), "surrogate");
+        ExpectRejected(invalid_surrogate, "surrogate");
     }
 
     void TestReferenceAndTypeRejection()
@@ -186,43 +186,43 @@ namespace
         dangling_default.replace(default_value,
                                  std::string("\"defaultProfileId\":\"default\"").size(),
                                  "\"defaultProfileId\":\"missing\"");
-        ExpectRejected(std::move(dangling_default), "defaultProfileId");
+        ExpectRejected(dangling_default, "defaultProfileId");
 
         std::string dangling_binding = Envelope();
         const size_t bound_value = dangling_binding.find("\"com.example.app\":\"bound\"");
         dangling_binding.replace(bound_value,
                                  std::string("\"com.example.app\":\"bound\"").size(),
                                  "\"com.example.app\":\"missing\"");
-        ExpectRejected(std::move(dangling_binding), "appBinding");
+        ExpectRejected(dangling_binding, "appBinding");
 
         std::string bad_owner = Envelope();
         bad_owner.replace(bad_owner.find("\"zygisk\""),
                           std::string("\"zygisk\"").size(),
                           "\"both\"");
-        ExpectRejected(std::move(bad_owner), "capture owner");
+        ExpectRejected(bad_owner, "capture owner");
 
         std::string fractional_generation = Envelope();
         fractional_generation.replace(fractional_generation.find("\"generation\":7"),
                                       std::string("\"generation\":7").size(),
                                       "\"generation\":7.0");
-        ExpectRejected(std::move(fractional_generation), "generation");
+        ExpectRejected(fractional_generation, "generation");
 
         std::string unknown_control = Envelope();
         const size_t control_end = unknown_control.rfind("}}");
         unknown_control.insert(control_end, ",\"hooksEnabled\":true");
-        ExpectRejected(std::move(unknown_control), "unknown field");
+        ExpectRejected(unknown_control, "unknown field");
 
         std::string missing_engine_mode = Envelope();
         const std::string engine_field = ",\"engineMode\":\"native_first\"";
         missing_engine_mode.erase(missing_engine_mode.find(engine_field),
                                   engine_field.size());
-        ExpectRejected(std::move(missing_engine_mode), "engineMode");
+        ExpectRejected(missing_engine_mode, "engineMode");
     }
 
     void TestSizeAndCountBounds()
     {
         std::string oversized(echidna::runtime::kProfileSyncMaxEnvelopeBytes + 1, ' ');
-        ExpectRejected(std::move(oversized), "byte length");
+        ExpectRejected(oversized, "byte length");
 
         std::string large_preset =
             R"({"schemaVersion":2,"generation":1,"profiles":{"default":)";
@@ -234,7 +234,7 @@ namespace
             R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
             R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
             R"("engineMode":"native_first"}})";
-        ExpectRejected(std::move(large_preset), "256 KiB");
+        ExpectRejected(large_preset, "256 KiB");
 
         std::string too_many =
             R"({"schemaVersion":2,"generation":1,"profiles":{"default":)"
@@ -253,7 +253,7 @@ namespace
             R"("control":{"masterEnabled":true,"bypass":false,"panicUntilEpochMs":0,)"
             R"("sidetoneEnabled":false,"sidetoneGainDb":0.0,)"
             R"("engineMode":"native_first"}})";
-        ExpectRejected(std::move(too_many), "whitelist");
+        ExpectRejected(too_many, "whitelist");
     }
 
     void TestGenerationDecisions()
@@ -329,7 +329,7 @@ namespace
         oversized_generation.replace(oversized_generation.find("\"generation\":7"),
                                      std::string("\"generation\":7").size(),
                                      "\"generation\":9223372036854775808");
-        ExpectRejected(std::move(oversized_generation), "signed 64-bit");
+        ExpectRejected(oversized_generation, "signed 64-bit");
 
         std::string maximum_panic = Envelope();
         maximum_panic.replace(maximum_panic.find("\"panicUntilEpochMs\":0"),
@@ -343,7 +343,7 @@ namespace
         oversized_panic.replace(oversized_panic.find("\"panicUntilEpochMs\":0"),
                                 std::string("\"panicUntilEpochMs\":0").size(),
                                 "\"panicUntilEpochMs\":9223372036854775808");
-        ExpectRejected(std::move(oversized_panic), "signed 64-bit");
+        ExpectRejected(oversized_panic, "signed 64-bit");
     }
 
 } // namespace

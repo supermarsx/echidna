@@ -8,6 +8,7 @@
 #define ANDROID_LOG_WARN 0
 #endif
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
@@ -128,15 +129,16 @@ namespace
         {
             return false;
         }
-        for (const unsigned char byte : process_name)
-        {
-            if (!is_alpha_numeric(byte) && byte != '_' && byte != '.' && byte != ':' &&
-                byte != '-')
-            {
-                return false;
-            }
-        }
-        return true;
+        const bool contains_only_process_name_bytes =
+            std::all_of(process_name.cbegin(),
+                        process_name.cend(),
+                        [is_alpha_numeric](char value)
+                        {
+                            const auto byte = static_cast<unsigned char>(value);
+                            return is_alpha_numeric(byte) || byte == '_' || byte == '.' ||
+                                   byte == ':' || byte == '-';
+                        });
+        return contains_only_process_name_bytes;
     }
 
     int ConnectPublisher(int64_t expected_uid, std::string_view process_name)
@@ -450,7 +452,7 @@ namespace echidna::runtime
 
         int export_fd = -1;
         int acknowledged_client_fd = -1;
-        TelemetrySendResult result = TelemetrySendResult::kConnectionLost;
+        TelemetrySendResult result;
         {
             // Keep the accepted policy stable through the nonblocking critical
             // write. A later generation cannot overtake this acknowledgement.
@@ -781,11 +783,7 @@ namespace echidna::runtime
             }
 
             int export_fd = -1;
-            uint32_t candidate_sequence = sequence + 1;
-            if (candidate_sequence == 0)
-            {
-                candidate_sequence = 1;
-            }
+            const uint32_t candidate_sequence = detail::NextNonzeroTelemetrySequence(sequence);
             const auto monotonic_ms_raw =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())

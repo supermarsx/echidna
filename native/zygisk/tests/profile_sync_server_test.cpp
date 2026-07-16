@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -95,6 +96,17 @@ namespace
             std::this_thread::sleep_for(5ms);
         }
         return predicate();
+    }
+
+    void TestNonzeroTelemetrySequenceRollover()
+    {
+        using echidna::runtime::detail::NextNonzeroTelemetrySequence;
+        constexpr uint32_t kMaxSequence = std::numeric_limits<uint32_t>::max();
+
+        static_assert(NextNonzeroTelemetrySequence(0) == 1);
+        static_assert(NextNonzeroTelemetrySequence(1) == 2);
+        static_assert(NextNonzeroTelemetrySequence(kMaxSequence - 1) == kMaxSequence);
+        static_assert(NextNonzeroTelemetrySequence(kMaxSequence) == 1);
     }
 
     void TestAtomicPolicyTransitions()
@@ -751,6 +763,7 @@ namespace
 
 int main()
 {
+    TestNonzeroTelemetrySequenceRollover();
     TestAtomicPolicyTransitions();
     TestFrameInFlightDuringStopCannotPublishCallback();
     TestPublisherUidMismatchFailsClosed();
