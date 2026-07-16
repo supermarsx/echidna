@@ -215,10 +215,13 @@ also requires restaging.
 
 The release ZIP itself contains no generated active or inert `audio_effects.xml`/
 `audio_effects.conf`, controller SPKI, telemetry HMAC key, or telemetry key metadata.
-`tools/verify_magisk_module.py` checks all three
-preprocessor ELFs for ABI, SONAME, AELI export, exact DT_NEEDED set, archive modes/layout, early
-activation ordering, exact registration constants, and the absence of command-line host discovery,
-auto-apply, or hot audioserver restart tokens.
+`tools/verify_magisk_module.py --zip out/echidna-magisk.zip --build-root build` checks the exact
+25-member, duplicate-free Unix regular-file layout and binds all nine native members byte-for-byte
+to the trusted NDK outputs. It verifies the Zygisk engine, DSP, and preprocessor ELF ABI, SONAME,
+required exports, exact DT_NEEDED sets, and archive modes. It also checks duplicate-free ordered
+policy, early activation ordering, exact registration constants, and the absence of command-line
+host discovery, auto-apply, or hot audioserver restart tokens. The external build root is the
+provenance authority; archive-contained metadata cannot authorize replacement native payloads.
 
 This is still device-gated. The repository has not yet proved a real device's active HIDL host and
 config, post-fs/mount ordering, magic-mount file labels/linker namespace, factory descriptor,

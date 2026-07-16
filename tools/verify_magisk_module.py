@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import re
+import stat
 import subprocess
 import sys
 import zipfile
@@ -24,6 +26,8 @@ from verify_android_artifacts import (
 
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 PREPROCESSOR_SONAME = "libechidna_preproc.so"
+ZYGISK_SONAME = "libechidna.so"
+DSP_SONAME = "libech_dsp.so"
 TYPE_UUID = "c83e3db3-d4f5-5f2c-a095-8775c1edfc6d"
 IMPLEMENTATION_UUID = "3e66a36e-dee9-5d81-a0d6-49fc3b863530"
 TELEMETRY_KEY_FILE = "preprocessor_telemetry_hmac.key"
@@ -31,40 +35,102 @@ CONTROLLER_SPKI_FILE = "preprocessor_controller_p256.spki"
 CONTROLLER_SPKI_PENDING = f"trust/next-boot/{CONTROLLER_SPKI_FILE}"
 CONTROLLER_SPKI_ACTIVE = f"system/etc/echidna/{CONTROLLER_SPKI_FILE}"
 ALLOWED_PREPROCESSOR_NEEDED = frozenset({"libc.so", "libdl.so", "libm.so"})
+ALLOWED_ZYGISK_NEEDED = frozenset({"libc.so", "libdl.so", "liblog.so", "libm.so"})
+ALLOWED_DSP_NEEDED = frozenset({"libc.so", "libdl.so", "libm.so"})
 KNOWN_DEBUG_CERT = "b545a99be69d7a147d2ebbcd3614d11ce6fcb550660f181f2a20ce0dd835544b"
-EXPECTED_SEPOLICY_LINES = frozenset(
+EXPECTED_SEPOLICY_LINES = (
+    "type echidna_config_file",
+    "typeattribute echidna_config_file file_type",
+    "typeattribute echidna_config_file data_file_type",
+    "type echidna_telemetry_file",
+    "typeattribute echidna_telemetry_file file_type",
+    "typeattribute echidna_telemetry_file data_file_type",
+    "type echidna_telemetry_key_file",
+    "typeattribute echidna_telemetry_key_file file_type",
+    "type echidna_controller_spki_file",
+    "typeattribute echidna_controller_spki_file file_type",
+    "allow appdomain shell_data_file dir search",
+    "allow appdomain echidna_config_file dir { search getattr open read }",
+    "allow appdomain echidna_config_file file { getattr open read map }",
+    "allow untrusted_app echidna_config_file dir { search getattr open read }",
+    "allow untrusted_app echidna_config_file file { getattr open read map }",
+    "dontaudit appdomain echidna_config_file file write",
+    "dontaudit untrusted_app echidna_config_file file write",
+    "allow appdomain echidna_telemetry_file dir { search getattr open read }",
+    "allow appdomain echidna_telemetry_file file { getattr open read write append map }",
+    "allow untrusted_app echidna_telemetry_file dir { search getattr open read }",
+    "allow untrusted_app echidna_telemetry_file file { getattr open read write append map }",
+    "allow audioserver echidna_telemetry_key_file file { getattr open read }",
+    "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
+    "allow audioserver echidna_controller_spki_file file { getattr open read }",
+    "allow hal_audio_server echidna_controller_spki_file file { getattr open read }",
+)
+FIXED_ENTRIES = frozenset(
     {
-        "type echidna_config_file",
-        "typeattribute echidna_config_file file_type",
-        "typeattribute echidna_config_file data_file_type",
-        "type echidna_telemetry_file",
-        "typeattribute echidna_telemetry_file file_type",
-        "typeattribute echidna_telemetry_file data_file_type",
-        "type echidna_telemetry_key_file",
-        "typeattribute echidna_telemetry_key_file file_type",
-        "type echidna_controller_spki_file",
-        "typeattribute echidna_controller_spki_file file_type",
-        "allow appdomain shell_data_file dir search",
-        "allow appdomain echidna_config_file dir { search getattr open read }",
-        "allow appdomain echidna_config_file file { getattr open read map }",
-        "allow untrusted_app echidna_config_file dir { search getattr open read }",
-        "allow untrusted_app echidna_config_file file { getattr open read map }",
-        "dontaudit appdomain echidna_config_file file write",
-        "dontaudit untrusted_app echidna_config_file file write",
-        "allow appdomain echidna_telemetry_file dir { search getattr open read }",
-        "allow appdomain echidna_telemetry_file file { getattr open read write append map }",
-        "allow untrusted_app echidna_telemetry_file dir { search getattr open read }",
-        "allow untrusted_app echidna_telemetry_file file { getattr open read write append map }",
-        "allow audioserver echidna_telemetry_key_file file { getattr open read }",
-        "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
-        "allow audioserver echidna_controller_spki_file file { getattr open read }",
-        "allow hal_audio_server echidna_controller_spki_file file { getattr open read }",
+        "LICENSE.md",
+        "META-INF/com/google/android/update-binary",
+        "META-INF/com/google/android/updater-script",
+        "module.prop",
+        "customize.sh",
+        "post-fs-data.sh",
+        "service.sh",
+        "sepolicy.rule",
+        "common/zygisk-status.sh",
+        "common/trust-bootstrap.sh",
+        "common/telemetry-key-label.sh",
+        "common/effect-registration.sh",
+        "common/effect-activation.sh",
+        "common/echidna-trust-helper.jar",
+        "common/release-cert-sha256",
+        "common/trust-mode",
+    }
+)
+EXECUTABLE_ENTRIES = frozenset(
+    {
+        "META-INF/com/google/android/update-binary",
+        "customize.sh",
+        "post-fs-data.sh",
+        "service.sh",
+        "common/trust-bootstrap.sh",
+        "common/effect-registration.sh",
+        "common/effect-activation.sh",
+    }
+)
+READ_ONLY_ENTRIES = frozenset(
+    {
+        "common/echidna-trust-helper.jar",
+        "common/release-cert-sha256",
+        "common/trust-mode",
     }
 )
 
 
+def expected_entries() -> frozenset[str]:
+    native = {
+        entry
+        for abi in ABIS
+        for entry in (
+            f"zygisk/{abi}.so",
+            f"libs/{abi}/{DSP_SONAME}",
+            f"preproc/{abi}/{PREPROCESSOR_SONAME}",
+        )
+    }
+    return FIXED_ENTRIES | native
+
+
+def expected_mode(entry: str) -> int:
+    if entry in EXECUTABLE_ENTRIES:
+        return 0o755
+    if entry in READ_ONLY_ENTRIES:
+        return 0o444
+    return 0o644
+
+
 def verify_mode(info: zipfile.ZipInfo, expected: int, label: str) -> None:
-    mode = (info.external_attr >> 16) & 0o777
+    unix_mode = info.external_attr >> 16
+    if info.create_system != 3 or not stat.S_ISREG(unix_mode):
+        raise VerificationError(f"{label} must be encoded as one Unix regular file")
+    mode = unix_mode & 0o7777
     if mode != expected:
         raise VerificationError(f"{label} has mode {mode:04o}, expected {expected:04o}")
 
@@ -76,63 +142,101 @@ def read_required(archive: zipfile.ZipFile, name: str) -> bytes:
     return archive.read(matches[0])
 
 
-def verify_preprocessor(
+def invokes_before(source: str, command: str, boundary: int) -> bool:
+    if boundary < 0:
+        return False
+    invocation = re.compile(
+        rf"^[ \t]*(?:(?:if|\|\|)[ \t]+![ \t]+)?{re.escape(command)}(?=[ \t\\;]|$)",
+        re.MULTILINE,
+    )
+    return invocation.search(source, 0, boundary) is not None
+
+
+def verify_native_payload(
     archive: zipfile.ZipFile,
     abi: str,
+    entry: str,
+    build_name: str,
+    expected_soname: str,
+    expected_needed: frozenset[str],
+    required_exports: frozenset[str],
     dynamic_reader: Callable[[bytes, str], DynamicInfo],
+    build_root: Path | None,
 ) -> None:
-    entry = f"preproc/{abi}/{PREPROCESSOR_SONAME}"
     data = read_required(archive, entry)
     verify_elf_identity(data, abi, entry)
     dynamic = dynamic_reader(data, entry)
-    if dynamic.soname != PREPROCESSOR_SONAME:
+    if dynamic.soname != expected_soname:
         raise VerificationError(
-            f"{entry} SONAME is {dynamic.soname!r}, expected {PREPROCESSOR_SONAME!r}"
+            f"{entry} SONAME is {dynamic.soname!r}, expected {expected_soname!r}"
         )
-    if dynamic.needed != ALLOWED_PREPROCESSOR_NEEDED:
+    if dynamic.needed != expected_needed:
         raise VerificationError(
             f"{entry} DT_NEEDED is {sorted(dynamic.needed)}, expected "
-            f"{sorted(ALLOWED_PREPROCESSOR_NEEDED)}"
+            f"{sorted(expected_needed)}"
         )
-    if "AELI" not in dynamic.exports:
-        raise VerificationError(f"{entry} does not export the legacy AELI descriptor")
-    verify_mode(archive.getinfo(entry), 0o644, entry)
+    missing_exports = required_exports - dynamic.exports
+    if missing_exports:
+        raise VerificationError(
+            f"{entry} is missing required exports: {', '.join(sorted(missing_exports))}"
+        )
+    if build_root is not None:
+        source = build_root / abi / "lib" / build_name
+        if source.is_symlink() or not source.is_file():
+            raise VerificationError(f"trusted build output is missing or not regular: {source}")
+        source_data = source.read_bytes()
+        if data != source_data:
+            archive_digest = hashlib.sha256(data).hexdigest()
+            source_digest = hashlib.sha256(source_data).hexdigest()
+            raise VerificationError(
+                f"{entry} does not match exact build output {source}; "
+                f"archive_sha256={archive_digest}, build_sha256={source_digest}"
+            )
+
+
+def native_contracts(
+    abi: str,
+) -> tuple[tuple[str, str, str, frozenset[str], frozenset[str]], ...]:
+    return (
+        (
+            f"zygisk/{abi}.so",
+            ZYGISK_SONAME,
+            ZYGISK_SONAME,
+            ALLOWED_ZYGISK_NEEDED,
+            frozenset({"zygisk_module_entry"}),
+        ),
+        (
+            f"libs/{abi}/{DSP_SONAME}",
+            DSP_SONAME,
+            DSP_SONAME,
+            ALLOWED_DSP_NEEDED,
+            frozenset({"ech_dsp_api_get_version"}),
+        ),
+        (
+            f"preproc/{abi}/{PREPROCESSOR_SONAME}",
+            PREPROCESSOR_SONAME,
+            PREPROCESSOR_SONAME,
+            ALLOWED_PREPROCESSOR_NEEDED,
+            frozenset({"AELI"}),
+        ),
+    )
 
 
 def verify_magisk_zip(
     path: Path,
     dynamic_reader: Callable[[bytes, str], DynamicInfo],
+    build_root: Path | None = None,
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         names = [info.filename for info in archive.infolist()]
-        required = {
-            "module.prop",
-            "customize.sh",
-            "post-fs-data.sh",
-            "service.sh",
-            "sepolicy.rule",
-            "common/trust-bootstrap.sh",
-            "common/telemetry-key-label.sh",
-            "common/effect-registration.sh",
-            "common/effect-activation.sh",
-            "common/echidna-trust-helper.jar",
-            "common/release-cert-sha256",
-            "common/trust-mode",
-        }
-        for abi in ABIS:
-            required.update(
-                {
-                    f"zygisk/{abi}.so",
-                    f"libs/{abi}/libech_dsp.so",
-                    f"preproc/{abi}/{PREPROCESSOR_SONAME}",
-                }
-            )
-        missing = sorted(required - set(names))
-        if missing:
-            raise VerificationError("Magisk ZIP is missing required entries: " + ", ".join(missing))
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise VerificationError("Magisk ZIP contains duplicate entries: " + ", ".join(duplicates))
+        expected = expected_entries()
+        actual = set(names)
+        missing = sorted(expected - actual)
+        if missing:
+            raise VerificationError("Magisk ZIP is missing required entries: " + ", ".join(missing))
 
         unexpected_preprocessors = sorted(
             name for name in names
@@ -171,23 +275,29 @@ def verify_magisk_zip(
                 "release ZIP must not ship generated telemetry proof-key material: "
                 + ", ".join(telemetry_secrets)
             )
-
-        for script in (
-            "customize.sh",
-            "post-fs-data.sh",
-            "service.sh",
-            "common/trust-bootstrap.sh",
-            "common/effect-registration.sh",
-            "common/effect-activation.sh",
-        ):
-            verify_mode(archive.getinfo(script), 0o755, script)
-        verify_mode(
-            archive.getinfo("common/telemetry-key-label.sh"),
-            0o644,
-            "common/telemetry-key-label.sh",
-        )
+        unexpected = sorted(actual - expected)
+        if unexpected:
+            raise VerificationError(
+                "Magisk ZIP entries must match the exact reviewed layout; unexpected="
+                + ", ".join(unexpected)
+            )
+        for entry in sorted(expected):
+            verify_mode(archive.getinfo(entry), expected_mode(entry), entry)
+        if build_root is not None and not build_root.is_dir():
+            raise VerificationError(f"native build root is missing: {build_root}")
         for abi in ABIS:
-            verify_preprocessor(archive, abi, dynamic_reader)
+            for entry, build_name, soname, needed, exports in native_contracts(abi):
+                verify_native_payload(
+                    archive,
+                    abi,
+                    entry,
+                    build_name,
+                    soname,
+                    needed,
+                    exports,
+                    dynamic_reader,
+                    build_root,
+                )
 
         registration = read_required(archive, "common/effect-registration.sh").decode("utf-8")
         activation = read_required(archive, "common/effect-activation.sh").decode("utf-8")
@@ -259,11 +369,20 @@ def verify_magisk_zip(
             "type echidna_controller_spki_file",
             "typeattribute echidna_controller_spki_file file_type",
         }
-        policy_lines = {
+        policy_line_sequence = tuple(
             line.strip()
             for line in sepolicy.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
-        }
+        )
+        duplicate_policy_lines = sorted(
+            {line for line in policy_line_sequence if policy_line_sequence.count(line) > 1}
+        )
+        if duplicate_policy_lines:
+            raise VerificationError(
+                "sepolicy.rule contains duplicate non-comment lines: "
+                + ", ".join(duplicate_policy_lines)
+            )
+        policy_lines = set(policy_line_sequence)
         if not exact_key_allows.issubset(policy_lines):
             raise VerificationError(
                 "telemetry key policy must grant exact read-only access to audio effect hosts"
@@ -315,12 +434,14 @@ def verify_magisk_zip(
                 raise VerificationError(
                     "audio effect hosts must not receive broad system/vendor file access"
                 )
-        if policy_lines != EXPECTED_SEPOLICY_LINES:
-            unexpected = sorted(policy_lines - EXPECTED_SEPOLICY_LINES)
-            missing = sorted(EXPECTED_SEPOLICY_LINES - policy_lines)
+        if policy_line_sequence != EXPECTED_SEPOLICY_LINES:
+            expected_policy_lines = set(EXPECTED_SEPOLICY_LINES)
+            unexpected = sorted(policy_lines - expected_policy_lines)
+            missing = sorted(expected_policy_lines - policy_lines)
+            same_members = not unexpected and not missing
             raise VerificationError(
                 "sepolicy.rule must match the reviewed module policy exactly; "
-                f"unexpected={unexpected}, missing={missing}"
+                f"unexpected={unexpected}, missing={missing}, same_members={same_members}"
             )
         for token in (
             "u:object_r:echidna_telemetry_key_file:s0",
@@ -416,19 +537,15 @@ def verify_magisk_zip(
         if cleanup_call < 0 or staging_call < 0 or cleanup_call > staging_call:
             raise VerificationError("late service must clean activation backing before restaging")
 
-        registration_trust = registration.rfind("echidna_prepare_effect_trust")
         registration_success = registration.find('write_status "staged-next-boot"')
-        if (
-            registration_trust < 0
-            or registration_success < 0
-            or registration_trust > registration_success
+        if not invokes_before(
+            registration, "echidna_prepare_effect_trust", registration_success
         ):
             raise VerificationError(
                 "effect registration must verify both trust inputs before reporting success"
             )
-        bootstrap_trust = trust.rfind("echidna_prepare_effect_trust")
         bootstrap_success = trust.find('write_status "$pin_status"')
-        if bootstrap_trust < 0 or bootstrap_success < 0 or bootstrap_trust > bootstrap_success:
+        if not invokes_before(trust, "echidna_prepare_effect_trust", bootstrap_success):
             raise VerificationError(
                 "trust bootstrap must label both trust inputs before reporting success"
             )
@@ -451,6 +568,11 @@ def verify_magisk_zip(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--zip", required=True, type=Path)
+    parser.add_argument(
+        "--build-root",
+        type=Path,
+        help="compare all packaged native payloads to trusted build/<abi>/lib outputs",
+    )
     parser.add_argument("--readelf")
     parser.add_argument("--nm")
     return parser
@@ -464,7 +586,7 @@ def main(argv: list[str]) -> int:
         readelf = find_readelf(args.readelf)
         nm = find_nm(args.nm)
         dynamic_reader = lambda data, label: read_dynamic_info(data, label, readelf, nm)
-        verify_magisk_zip(args.zip, dynamic_reader)
+        verify_magisk_zip(args.zip, dynamic_reader, args.build_root)
         print("Magisk module contract verified (3 ABIs, default-off legacy effect registration).")
         return 0
     except (OSError, subprocess.SubprocessError, zipfile.BadZipFile, VerificationError) as exc:

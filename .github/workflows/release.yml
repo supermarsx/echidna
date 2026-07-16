@@ -291,7 +291,10 @@ jobs:
         run: bash tools/build_magisk_module.sh
 
       - name: Verify Magisk module and legacy effect payloads
-        run: python3 tools/verify_magisk_module.py --zip out/echidna-magisk.zip
+        run: >-
+          python3 tools/verify_magisk_module.py
+          --zip out/echidna-magisk.zip
+          --build-root build
 
       - name: Collect native release packages
         run: |
