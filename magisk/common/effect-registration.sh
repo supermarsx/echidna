@@ -6,6 +6,7 @@ RUNTIME_DIR="${ECHIDNA_RUNTIME_DIR:-/data/adb/echidna}"
 STATUS_DIR="$RUNTIME_DIR/effect-registration"
 STATUS_FILE="$STATUS_DIR/status.txt"
 HELPER="$MODDIR/common/echidna-trust-helper.jar"
+EFFECT_TRUST_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
 APP_PROCESS="${ECHIDNA_APP_PROCESS:-/system/bin/app_process}"
 ANDROID_ROOT_PREFIX="${ECHIDNA_ANDROID_ROOT:-}"
 PROC_ROOT="${ECHIDNA_PROC_ROOT:-/proc}"
@@ -195,7 +196,7 @@ parse_config_selection() {
     return 0
 }
 
-for required in "$HELPER" "$PENDING_KEY"; do
+for required in "$HELPER" "$PENDING_KEY" "$EFFECT_TRUST_LABEL_HELPER"; do
     if [ ! -f "$required" ] || [ -L "$required" ]; then
         fail_closed "required verified payload is missing or unsafe: $required"
         exit 1
@@ -203,6 +204,15 @@ for required in "$HELPER" "$PENDING_KEY"; do
 done
 if [ ! -x "$APP_PROCESS" ]; then
     fail_closed "app_process is unavailable: $APP_PROCESS"
+    exit 1
+fi
+# Both independent trust pairs must already be complete and correctly labelled
+# before registration staging is allowed to write any next-boot state.
+# shellcheck source=telemetry-key-label.sh
+if ! . "$EFFECT_TRUST_LABEL_HELPER" \
+        || ! command -v echidna_prepare_effect_trust >/dev/null 2>&1 \
+        || ! echidna_prepare_effect_trust "$MODDIR" "" "" required; then
+    fail_closed "effect trust-input pair or SELinux label contract rejected"
     exit 1
 fi
 if [ -e "$RESTAGE_REQUIRED" ]; then
@@ -337,6 +347,10 @@ case "$output" in
         exit 1
         ;;
 esac
+if ! echidna_prepare_effect_trust "$MODDIR" "" "" required; then
+    fail_closed "effect trust inputs drifted while registration was staged"
+    exit 1
+fi
 write_status "staged-next-boot" \
     "registered HIDL factory PID and inert registry/library/key verified" "true"
 log "Default-off effect registration staged for next boot; no session attachment or auto-apply was added"

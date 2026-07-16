@@ -11,7 +11,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTRATION = REPO_ROOT / "magisk" / "common" / "effect-registration.sh"
+LABEL_HELPER = REPO_ROOT / "magisk" / "common" / "telemetry-key-label.sh"
 FACTORY_PID = 4242
+TELEMETRY_BYTES = b"echidna-telemetry-label-fixture!"
+SPKI_PREFIX = bytes.fromhex(
+    "3059301306072a8648ce3d020106082a8648ce3d03010703420004"
+)
+SPKI_BYTES = SPKI_PREFIX + bytes.fromhex(
+    "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+    "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+)
 
 
 class EffectRegistrationTest(unittest.TestCase):
@@ -30,9 +39,25 @@ class EffectRegistrationTest(unittest.TestCase):
             (self.module / "preproc" / abi / "libechidna_preproc.so").write_bytes(b"elf")
         self.bin.mkdir()
         (self.module / "common" / "echidna-trust-helper.jar").write_bytes(b"dex")
-        (self.module / "trust" / "next-boot" / "preprocessor_controller_p256.spki").write_bytes(
-            b"spki"
+        shutil.copyfile(LABEL_HELPER, self.module / "common" / "telemetry-key-label.sh")
+        spki_root = (
+            self.module / "trust" / "next-boot" / "preprocessor_controller_p256.spki"
         )
+        spki_effect = (
+            self.module / "system" / "etc" / "echidna" / "preprocessor_controller_p256.spki"
+        )
+        telemetry_root = (
+            self.module / "trust" / "state" / "preprocessor_telemetry_hmac.key"
+        )
+        telemetry_effect = (
+            self.module / "system" / "etc" / "echidna" / "preprocessor_telemetry_hmac.key"
+        )
+        spki_effect.parent.mkdir(parents=True)
+        telemetry_root.parent.mkdir(parents=True)
+        spki_root.write_bytes(SPKI_BYTES)
+        spki_effect.write_bytes(SPKI_BYTES)
+        telemetry_root.write_bytes(TELEMETRY_BYTES)
+        telemetry_effect.write_bytes(TELEMETRY_BYTES)
         self.evidence = self.root / "factory.txt"
         self.arguments = self.root / "arguments.txt"
         self.app_process = self.root / "app_process"
@@ -40,6 +65,7 @@ class EffectRegistrationTest(unittest.TestCase):
         self.write_evidence("7.0", FACTORY_PID)
         self.write_app_process(0)
         self.write_getprop()
+        self.write_trust_commands()
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -257,6 +283,31 @@ class EffectRegistrationTest(unittest.TestCase):
         transient = self.module / "system" / "vendor" / "etc" / "audio_effects.xml"
         self.assertFalse(transient.exists())
 
+    def test_incomplete_or_mismatched_spki_pair_blocks_registration_before_java(self) -> None:
+        self.write_config("vendor/etc/audio_effects.xml")
+        spki_root = (
+            self.module / "trust" / "next-boot" / "preprocessor_controller_p256.spki"
+        )
+        spki_effect = (
+            self.module / "system" / "etc" / "echidna" / "preprocessor_controller_p256.spki"
+        )
+        spki_effect.unlink()
+
+        incomplete = self.run_registration()
+
+        self.assertNotEqual(0, incomplete.returncode)
+        self.assertFalse(self.arguments.exists())
+        self.assertEqual(SPKI_BYTES, spki_root.read_bytes())
+        self.assertIn("trust-input pair", incomplete.stdout)
+
+        spki_effect.write_bytes(SPKI_PREFIX + b"\x01" * 64)
+        mismatched = self.run_registration()
+
+        self.assertNotEqual(0, mismatched.returncode)
+        self.assertFalse(self.arguments.exists())
+        self.assertEqual(SPKI_BYTES, spki_root.read_bytes())
+        self.assertFalse(spki_effect.exists())
+
     def write_config(self, relative: str) -> None:
         path = self.android / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +379,34 @@ class EffectRegistrationTest(unittest.TestCase):
         )
         getprop.chmod(0o755)
 
+    def write_trust_commands(self) -> None:
+        commands = {
+            "stat": """#!/bin/sh
+case "$3" in
+  */trust/state/preprocessor_telemetry_hmac.key) echo 0:0:400:1:10 ;;
+  */system/etc/echidna/preprocessor_telemetry_hmac.key) echo 0:1005:440:1:20 ;;
+  */trust/next-boot/preprocessor_controller_p256.spki) echo 0:0:444:1:30 ;;
+  */system/etc/echidna/preprocessor_controller_p256.spki) echo 0:0:444:1:40 ;;
+  *) exit 64 ;;
+esac
+""",
+            "chcon": """#!/bin/sh
+case "$1" in
+  u:object_r:echidna_telemetry_key_file:s0|u:object_r:echidna_controller_spki_file:s0) ;;
+  *) exit 64 ;;
+esac
+printf '%s\n' "$1" > "$FAKE_CONTEXT_FILE"
+""",
+            "ls": """#!/bin/sh
+[ "$1" = -Zd ] || exit 64
+printf '%s %s\n' "$(cat "$FAKE_CONTEXT_FILE")" "$2"
+""",
+        }
+        for name, source in commands.items():
+            command = self.bin / name
+            command.write_text(source, encoding="utf-8", newline="\n")
+            command.chmod(0o755)
+
     def run_registration(
         self, extra: dict[str, str] | None = None
     ) -> subprocess.CompletedProcess[str]:
@@ -342,6 +421,7 @@ class EffectRegistrationTest(unittest.TestCase):
                 "ECHIDNA_APP_PROCESS": shell_path(self.app_process),
                 "ECHIDNA_EFFECT_FACTORY_EVIDENCE": shell_path(self.evidence),
                 "ECHIDNA_BUILD_FINGERPRINT": "vendor/device/build:fixture",
+                "FAKE_CONTEXT_FILE": shell_path(self.root / "trust-context.txt"),
             }
         )
         if extra:

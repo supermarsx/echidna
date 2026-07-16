@@ -27,8 +27,40 @@ PREPROCESSOR_SONAME = "libechidna_preproc.so"
 TYPE_UUID = "c83e3db3-d4f5-5f2c-a095-8775c1edfc6d"
 IMPLEMENTATION_UUID = "3e66a36e-dee9-5d81-a0d6-49fc3b863530"
 TELEMETRY_KEY_FILE = "preprocessor_telemetry_hmac.key"
+CONTROLLER_SPKI_FILE = "preprocessor_controller_p256.spki"
+CONTROLLER_SPKI_PENDING = f"trust/next-boot/{CONTROLLER_SPKI_FILE}"
+CONTROLLER_SPKI_ACTIVE = f"system/etc/echidna/{CONTROLLER_SPKI_FILE}"
 ALLOWED_PREPROCESSOR_NEEDED = frozenset({"libc.so", "libdl.so", "libm.so"})
 KNOWN_DEBUG_CERT = "b545a99be69d7a147d2ebbcd3614d11ce6fcb550660f181f2a20ce0dd835544b"
+EXPECTED_SEPOLICY_LINES = frozenset(
+    {
+        "type echidna_config_file",
+        "typeattribute echidna_config_file file_type",
+        "typeattribute echidna_config_file data_file_type",
+        "type echidna_telemetry_file",
+        "typeattribute echidna_telemetry_file file_type",
+        "typeattribute echidna_telemetry_file data_file_type",
+        "type echidna_telemetry_key_file",
+        "typeattribute echidna_telemetry_key_file file_type",
+        "type echidna_controller_spki_file",
+        "typeattribute echidna_controller_spki_file file_type",
+        "allow appdomain shell_data_file dir search",
+        "allow appdomain echidna_config_file dir { search getattr open read }",
+        "allow appdomain echidna_config_file file { getattr open read map }",
+        "allow untrusted_app echidna_config_file dir { search getattr open read }",
+        "allow untrusted_app echidna_config_file file { getattr open read map }",
+        "dontaudit appdomain echidna_config_file file write",
+        "dontaudit untrusted_app echidna_config_file file write",
+        "allow appdomain echidna_telemetry_file dir { search getattr open read }",
+        "allow appdomain echidna_telemetry_file file { getattr open read write append map }",
+        "allow untrusted_app echidna_telemetry_file dir { search getattr open read }",
+        "allow untrusted_app echidna_telemetry_file file { getattr open read write append map }",
+        "allow audioserver echidna_telemetry_key_file file { getattr open read }",
+        "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
+        "allow audioserver echidna_controller_spki_file file { getattr open read }",
+        "allow hal_audio_server echidna_controller_spki_file file { getattr open read }",
+    }
+)
 
 
 def verify_mode(info: zipfile.ZipInfo, expected: int, label: str) -> None:
@@ -123,8 +155,12 @@ def verify_magisk_zip(
                 "release ZIP must not ship a pre-generated effect registry: "
                 + ", ".join(active_registry)
             )
-        if "system/etc/echidna/preprocessor_controller_p256.spki" in names:
-            raise VerificationError("release ZIP must not ship an active controller SPKI")
+        generated_spki = sorted(name for name in names if Path(name).name == CONTROLLER_SPKI_FILE)
+        if generated_spki:
+            raise VerificationError(
+                "release ZIP must not ship generated controller SPKI material: "
+                + ", ".join(generated_spki)
+            )
         telemetry_secrets = sorted(
             name
             for name in names
@@ -199,6 +235,7 @@ def verify_magisk_zip(
             "--telemetry-effect",
             "telemetry_key_sha256",
             "telemetry_key_id",
+            "controller_spki_sha256",
             "silent rotation is refused",
         ):
             if token not in trust:
@@ -210,9 +247,17 @@ def verify_magisk_zip(
             "allow audioserver echidna_telemetry_key_file file { getattr open read }",
             "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
         }
+        exact_spki_allows = {
+            "allow audioserver echidna_controller_spki_file file { getattr open read }",
+            "allow hal_audio_server echidna_controller_spki_file file { getattr open read }",
+        }
         exact_key_declarations = {
             "type echidna_telemetry_key_file",
             "typeattribute echidna_telemetry_key_file file_type",
+        }
+        exact_spki_declarations = {
+            "type echidna_controller_spki_file",
+            "typeattribute echidna_controller_spki_file file_type",
         }
         policy_lines = {
             line.strip()
@@ -227,18 +272,40 @@ def verify_magisk_zip(
             raise VerificationError(
                 "sepolicy.rule must declare the dedicated telemetry key file type"
             )
-        for line in policy_lines:
-            if line.startswith("permissive ") and (
-                "audio" in line or "echidna" in line
-            ):
+        if not exact_spki_allows.issubset(policy_lines):
+            raise VerificationError(
+                "controller SPKI policy must grant exact read-only access to audio effect hosts"
+            )
+        if not exact_spki_declarations.issubset(policy_lines):
+            raise VerificationError(
+                "sepolicy.rule must declare the dedicated controller SPKI file type"
+            )
+        for trust_type in ("echidna_telemetry_key_file", "echidna_controller_spki_file"):
+            actual_attributes = {
+                line
+                for line in policy_lines
+                if line.startswith(f"typeattribute {trust_type} ")
+            }
+            expected_attributes = {f"typeattribute {trust_type} file_type"}
+            if actual_attributes != expected_attributes:
                 raise VerificationError(
-                    "telemetry key policy must not make audio domains permissive"
+                    f"{trust_type} must have exactly the file_type attribute; found "
+                    + ", ".join(sorted(actual_attributes))
+                )
+        for line in policy_lines:
+            if line.startswith("permissive "):
+                raise VerificationError(
+                    "effect trust policy must not contain permissive domains"
                 )
             if not line.startswith("allow "):
                 continue
             if " echidna_telemetry_key_file " in line and line not in exact_key_allows:
                 raise VerificationError(
                     "telemetry key policy contains a non-reviewed allow: " + line
+                )
+            if " echidna_controller_spki_file " in line and line not in exact_spki_allows:
+                raise VerificationError(
+                    "controller SPKI policy contains a non-reviewed allow: " + line
                 )
             if re.search(
                 r"^allow\s+(?:audioserver|hal_audio(?:_[A-Za-z0-9_]+)?)\s+"
@@ -248,21 +315,48 @@ def verify_magisk_zip(
                 raise VerificationError(
                     "audio effect hosts must not receive broad system/vendor file access"
                 )
+        if policy_lines != EXPECTED_SEPOLICY_LINES:
+            unexpected = sorted(policy_lines - EXPECTED_SEPOLICY_LINES)
+            missing = sorted(EXPECTED_SEPOLICY_LINES - policy_lines)
+            raise VerificationError(
+                "sepolicy.rule must match the reviewed module policy exactly; "
+                f"unexpected={unexpected}, missing={missing}"
+            )
         for token in (
-            "type echidna_telemetry_key_file",
-            "typeattribute echidna_telemetry_key_file file_type",
             "u:object_r:echidna_telemetry_key_file:s0",
-            "echidna_prepare_effect_telemetry_key",
+            "u:object_r:echidna_controller_spki_file:s0",
+            CONTROLLER_SPKI_PENDING,
+            CONTROLLER_SPKI_ACTIVE,
+            "ECHIDNA_CONTROLLER_SPKI_BYTES=91",
+            "ECHIDNA_CONTROLLER_SPKI_OWNER_MODE=\"0:0:444\"",
+            "3059301306072a8648ce3d020106082a8648ce3d03010703420004",
+            "echidna_prepare_effect_trust",
             "chcon",
             "ls -Zd",
             "root pin",
             "derived effect key removed",
+            "controller SPKI root pin",
+            "derived controller SPKI",
         ):
-            if token not in combined:
+            if token not in key_label:
                 raise VerificationError(
-                    f"telemetry key label contract is missing {token!r}"
+                    f"effect trust label contract is missing {token!r}"
                 )
-        for live_rule in exact_key_allows | exact_key_declarations:
+        for script_name, source in (
+            ("post-fs-data.sh", post_fs),
+            ("common/trust-bootstrap.sh", trust),
+            ("common/effect-registration.sh", registration),
+        ):
+            if "telemetry-key-label.sh" not in source:
+                raise VerificationError(
+                    f"{script_name} must source the combined effect-trust helper"
+                )
+        for live_rule in (
+            exact_key_allows
+            | exact_key_declarations
+            | exact_spki_allows
+            | exact_spki_declarations
+        ):
             if f'magiskpolicy --live "{live_rule}"' not in post_fs:
                 raise VerificationError(
                     f"post-fs live policy fallback is missing {live_rule!r}"
@@ -276,28 +370,68 @@ def verify_magisk_zip(
                 "effect activation must remove stale backing, then verify fingerprint, then copy"
             )
         discard_call = post_fs.rfind("\ndiscard_stale_preprocessor_activation\n")
+        trust_presence_call = post_fs.rfind("\nif effect_registration_present; then\n")
         marker_call = post_fs.rfind('\nmarker="$(manual_disable_marker')
         policy_call = post_fs.rfind("\napply_sepolicy\n")
-        key_label_call = post_fs.rfind("\nif ! prepare_effect_telemetry_key; then\n")
+        trust_label_call = post_fs.rfind("\nif ! prepare_effect_trust; then\n")
         activate_call = post_fs.rfind("\nactivate_preprocessor_registration\n")
         watchdog_call = post_fs.rfind("\narm_boot_watchdog\n")
         cleanup_call = service.rfind("\ncleanup_preprocessor_activation\n")
         staging_call = service.rfind("\nstage_preprocessor_registration\n")
         if discard_call < 0 or marker_call < 0 or discard_call > marker_call:
             raise VerificationError("post-fs-data must discard stale registration before markers")
+        for token in (
+            "EFFECT_TRUST_PRESENCE=optional",
+            "EFFECT_TRUST_PRESENCE=required",
+            '"$MODDIR/registration"',
+            'echidna_prepare_effect_trust "$MODDIR" "" "" "$EFFECT_TRUST_PRESENCE"',
+        ):
+            if token not in post_fs:
+                raise VerificationError(
+                    "post-fs-data staged or live registration trust contract is missing "
+                    f"{token!r}"
+                )
         if (
-            policy_call < 0
-            or key_label_call < 0
-            or activate_call < 0
-            or not policy_call < key_label_call < activate_call
+            trust_presence_call < 0
+            or discard_call < 0
+            or trust_label_call < 0
+            or not trust_presence_call < discard_call < trust_label_call
         ):
             raise VerificationError(
-                "post-fs-data must load policy and label the exact key before registration exposure"
+                "post-fs-data must make both trust pairs required for any staged or live "
+                "registration before cleanup and exposure"
+            )
+        if (
+            policy_call < 0
+            or trust_label_call < 0
+            or activate_call < 0
+            or not policy_call < trust_label_call < activate_call
+        ):
+            raise VerificationError(
+                "post-fs-data must load policy and label both trust inputs before "
+                "registration exposure"
             )
         if activate_call < 0 or watchdog_call < 0 or activate_call > watchdog_call:
             raise VerificationError("post-fs-data must validate registration before later boot work")
         if cleanup_call < 0 or staging_call < 0 or cleanup_call > staging_call:
             raise VerificationError("late service must clean activation backing before restaging")
+
+        registration_trust = registration.rfind("echidna_prepare_effect_trust")
+        registration_success = registration.find('write_status "staged-next-boot"')
+        if (
+            registration_trust < 0
+            or registration_success < 0
+            or registration_trust > registration_success
+        ):
+            raise VerificationError(
+                "effect registration must verify both trust inputs before reporting success"
+            )
+        bootstrap_trust = trust.rfind("echidna_prepare_effect_trust")
+        bootstrap_success = trust.find('write_status "$pin_status"')
+        if bootstrap_trust < 0 or bootstrap_success < 0 or bootstrap_trust > bootstrap_success:
+            raise VerificationError(
+                "trust bootstrap must label both trust inputs before reporting success"
+            )
 
         helper = read_required(archive, "common/echidna-trust-helper.jar")
         with zipfile.ZipFile(io.BytesIO(helper)) as helper_archive:

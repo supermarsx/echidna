@@ -25,6 +25,18 @@ callback. The callback reads only atomic gates and the atomic expiry deadline.
 The production effect always requires owner UID 0 for the SPKI. The options field that substitutes an
 owner exists only so an unprivileged host test can exercise the same file checks.
 
+The Magisk provisioning boundary is intentionally stricter than the native reader's 1,024-byte
+ceiling. Its authoritative next-boot pin is
+`trust/next-boot/preprocessor_controller_p256.spki`; its derived effect-host copy is
+`system/etc/echidna/preprocessor_controller_p256.spki`. Both must be regular, root:root `0444`,
+exactly 91 bytes, and use the canonical DER P-256 SubjectPublicKeyInfo structure. Their hashes must
+match, both files must retain their required ownership metadata, and the derived inode must remain
+stable before and after relabelling. The derived copy uses
+`u:object_r:echidna_controller_spki_file:s0`; only `audioserver` and `hal_audio_server` receive
+`{ getattr open read }`. A one-sided pair or any structure, ownership, hash, inode, or label drift
+fails closed before registration or post-fs exposure. This lifecycle is host-tested, but effect-host
+access under an enforcing OEM policy still requires device evidence.
+
 ## Standard effect parameter framing
 
 `EFFECT_CMD_SET_PARAM` uses AOSP's standard `effect_param_t` layout:

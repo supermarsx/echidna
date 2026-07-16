@@ -23,6 +23,8 @@ typeattribute echidna_telemetry_file file_type
 typeattribute echidna_telemetry_file data_file_type
 type echidna_telemetry_key_file
 typeattribute echidna_telemetry_key_file file_type
+type echidna_controller_spki_file
+typeattribute echidna_controller_spki_file file_type
 
 # Traverse into /data/local/tmp (the region's parent). Search only: this does
 # not grant reading shell files, only path traversal to the labelled region.
@@ -51,3 +53,9 @@ allow untrusted_app echidna_telemetry_file file { getattr open read write append
 # their stock labels and traversal policy.
 allow audioserver echidna_telemetry_key_file file { getattr open read }
 allow hal_audio_server echidna_telemetry_key_file file { getattr open read }
+
+# Controller capability-verification SPKI: the same effect hosts need read-only
+# access to the independently labelled root:root 0444 public key. Keep this on
+# a distinct type so neither trust input can inherit the other's file contract.
+allow audioserver echidna_controller_spki_file file { getattr open read }
+allow hal_audio_server echidna_controller_spki_file file { getattr open read }

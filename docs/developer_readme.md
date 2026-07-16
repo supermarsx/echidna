@@ -156,7 +156,14 @@ The normalized release certificate pin also gates the Magisk trust bootstrap. Re
 builds a module-owned API-26-compatible Dex helper, embeds the pin, and refuses missing or
 debug-only production inputs. At late-start on API 26–33, the helper verifies PackageManager's
 current `com.echidna.app` signer, user-0 UID/dataDir, and app-owned P-256 SPKI before staging an
-inert root-owned next-boot pin. It does not package/register the legacy effect or replace a live key.
+inert root-owned next-boot pin. A shared fail-closed helper then validates the canonical 91-byte
+P-256 SPKI pair and the per-install telemetry HMAC pair before trust bootstrap reports success.
+The SPKI uses root:root `0444` and `echidna_controller_spki_file`; the derived HMAC copy uses
+root:audio `0440` and `echidna_telemetry_key_file`. Each derived file must match its authoritative
+pin by hash and retain stable inode metadata across relabelling. A one-sided pair, unsafe link,
+mode drift, or label mismatch
+removes only the unsafe derived copy and refuses exposure. The release ZIP ships neither generated
+trust input. These host-verified contracts do not prove effect-host access on an enforcing device.
 
 ### Native per-ABI build (NDK)
 
@@ -476,6 +483,15 @@ rejects this flag, and skips legacy key preparation, when its companion UID belo
 Android user. This limitation is specific to the optional legacy effect; the authenticated Zygisk
 and LSPosed policy transports remain same-user, full-UID scoped.
 
+Registration and post-fs exposure also require both legacy-effect trust inputs to pass the shared
+label lifecycle. The authoritative controller SPKI at
+`trust/next-boot/preprocessor_controller_p256.spki` must match the root:root `0444` derived copy at
+`system/etc/echidna/preprocessor_controller_p256.spki`; the telemetry root pin and root:audio
+`0440` effect copy must match independently. The two files have distinct SELinux types and only
+`audioserver` plus `hal_audio_server` receive `{ getattr open read }`. No app domain receives either
+trust input. This is a packaging and boot-script invariant, not a claim that a real OEM effect host
+has loaded either file successfully.
+
 Attachment still requires signer trust and effect registration staged on a prior boot, a restart,
 a supported legacy HIDL factory, an LSPosed-injected target, an explicit trusted user-0 whitelist
 entry with the LSPosed capture owner, and fresh route-matched mutation evidence. Stable-AIDL-only
@@ -538,6 +554,8 @@ effect load, enablement, linker/label access, enforced-SELinux operation, or tra
 - Physical-device Zygisk lifecycle and hook installation on the arm64 primary path.
 - AAudio, OpenSL ES, and tinyalsa managers in live app processes.
 - On-device SELinux enforcement and vendor audio-stack behavior for supported candidates.
+- Effect-host reads of the separately labelled controller SPKI and telemetry HMAC key under
+  enforcing SELinux.
 - armeabi-v7a graceful-degrade at runtime.
 
 Echidna is a root/sideload application; on-device validation is a required, separate step before any

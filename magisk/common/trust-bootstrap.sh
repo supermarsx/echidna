@@ -8,7 +8,7 @@ STATUS_FILE="$STATUS_DIR/status.txt"
 HELPER="$MODDIR/common/echidna-trust-helper.jar"
 EXPECTED_DIGEST="$MODDIR/common/release-cert-sha256"
 TRUST_MODE_FILE="$MODDIR/common/trust-mode"
-TELEMETRY_KEY_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
+EFFECT_TRUST_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
 PENDING_DIR="$MODDIR/trust/next-boot"
 TRUST_STATE_DIR="$MODDIR/trust/state"
 KEY_NAME="preprocessor_controller_p256.spki"
@@ -31,6 +31,7 @@ write_status() {
     telemetry_state="${4:-unavailable}"
     telemetry_sha256="${5:-unavailable}"
     telemetry_key_id="${6:-unavailable}"
+    controller_spki_sha256="${7:-unavailable}"
     mkdir -p "$STATUS_DIR"
     chmod 0700 "$STATUS_DIR" 2>/dev/null || true
     temporary="$STATUS_FILE.tmp.$$"
@@ -41,6 +42,7 @@ write_status() {
         echo "reboot_required=$reboot"
         echo "active_path=/system/etc/echidna/$KEY_NAME"
         echo "pending_path=$PENDING_KEY"
+        echo "controller_spki_sha256=$controller_spki_sha256"
         echo "telemetry_state=$telemetry_state"
         echo "telemetry_key_sha256=$telemetry_sha256"
         echo "telemetry_key_id=$telemetry_key_id"
@@ -62,7 +64,7 @@ fail_closed() {
 }
 
 for required in "$HELPER" "$EXPECTED_DIGEST" "$TRUST_MODE_FILE" \
-        "$TELEMETRY_KEY_LABEL_HELPER"; do
+        "$EFFECT_TRUST_LABEL_HELPER"; do
     if [ ! -f "$required" ] || [ -L "$required" ]; then
         fail_closed "required module trust file missing or unsafe: $required"
         exit 1
@@ -115,6 +117,8 @@ if output="$(ANDROID_DATA=/data CLASSPATH="$HELPER" "$APP_PROCESS" /system/bin \
         | grep '^telemetry_key_sha256=' | head -n 1 | cut -d= -f2-)"
     telemetry_key_id="$(printf '%s\n' "$output" \
         | grep '^telemetry_key_id=' | head -n 1 | cut -d= -f2-)"
+    controller_spki_sha256="$(printf '%s\n' "$output" \
+        | grep '^spki_sha256=' | head -n 1 | cut -d= -f2-)"
     reboot="$(printf '%s\n' "$output" | grep '^reboot_required=' | head -n 1 | cut -d= -f2-)"
     case "$pin_status:$reboot" in
         pinned-next-boot:true|already-pinned:true|active-match:false) ;;
@@ -144,18 +148,31 @@ if output="$(ANDROID_DATA=/data CLASSPATH="$HELPER" "$APP_PROCESS" /system/bin \
         fail_closed "helper returned inconsistent telemetry proof-key metadata"
         exit 1
     fi
-    # The Java helper writes only the module backing inode. Label and verify it
-    # before declaring success; Magisk exposes the copy on the next module mount.
+    case "$controller_spki_sha256" in
+        ''|*[!0-9a-f]*)
+            fail_closed "helper returned invalid controller-SPKI metadata"
+            exit 1
+            ;;
+    esac
+    if [ "${#controller_spki_sha256}" -ne 64 ]; then
+        fail_closed "helper returned invalid controller-SPKI digest length"
+        exit 1
+    fi
+    # The Java helper transactionally writes both authoritative and derived
+    # module inodes. Validate both trust pairs, then label only their effect
+    # copies before declaring success or allowing a future module mount.
     # shellcheck source=telemetry-key-label.sh
-    if ! . "$TELEMETRY_KEY_LABEL_HELPER" \
-            || ! echidna_prepare_effect_telemetry_key \
-                "$MODDIR" "$telemetry_sha256" required; then
-        fail_closed "effect telemetry key SELinux label contract rejected"
+    if ! . "$EFFECT_TRUST_LABEL_HELPER" \
+            || ! command -v echidna_prepare_effect_trust >/dev/null 2>&1 \
+            || ! echidna_prepare_effect_trust \
+                "$MODDIR" "$telemetry_sha256" "$controller_spki_sha256" required; then
+        fail_closed "effect trust-input SELinux label contract rejected"
         exit 1
     fi
     write_status "$pin_status" \
         "verified signer, UID, dataDir, P-256 SPKI, and telemetry proof key" \
-        "$reboot" "$telemetry_status" "$telemetry_sha256" "$telemetry_key_id"
+        "$reboot" "$telemetry_status" "$telemetry_sha256" "$telemetry_key_id" \
+        "$controller_spki_sha256"
     case "$telemetry_status" in
         generated-next-boot)
             log "Generated and pinned a per-install telemetry proof key for next boot" ;;
@@ -175,5 +192,12 @@ if output="$(ANDROID_DATA=/data CLASSPATH="$HELPER" "$APP_PROCESS" /system/bin \
 fi
 
 detail="$(printf '%s\n' "$output" | tail -n 1 | tr -d '\r' | cut -c1-240)"
+# A failed Java transaction must not leave a one-sided derived file behind.
+# Re-run the pair validator in cleanup mode; it never deletes authoritative
+# pins, and this bootstrap remains failed regardless of the cleanup result.
+if . "$EFFECT_TRUST_LABEL_HELPER" 2>/dev/null \
+        && command -v echidna_prepare_effect_trust >/dev/null 2>&1; then
+    echidna_prepare_effect_trust "$MODDIR" "" "" optional >/dev/null 2>&1 || true
+fi
 fail_closed "app_process verification rejected package/key: $detail"
 exit 1

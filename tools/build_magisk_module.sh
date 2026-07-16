@@ -105,7 +105,7 @@ command -v unzip >/dev/null 2>&1 || die "unzip is required to validate the trust
 [[ -f "${TEMPLATE_DIR}/common/trust-bootstrap.sh" ]] \
   || die "missing trust bootstrap at ${TEMPLATE_DIR}/common/trust-bootstrap.sh"
 [[ -f "${TEMPLATE_DIR}/common/telemetry-key-label.sh" ]] \
-  || die "missing telemetry-key label helper at ${TEMPLATE_DIR}/common/telemetry-key-label.sh"
+  || die "missing effect-trust label helper at ${TEMPLATE_DIR}/common/telemetry-key-label.sh"
 [[ -f "${TEMPLATE_DIR}/common/effect-registration.sh" ]] \
   || die "missing effect registration at ${TEMPLATE_DIR}/common/effect-registration.sh"
 [[ -f "${TEMPLATE_DIR}/common/effect-activation.sh" ]] \

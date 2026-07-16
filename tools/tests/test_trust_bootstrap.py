@@ -32,6 +32,14 @@ LABEL_HELPER = REPO_ROOT / "magisk" / "common" / "telemetry-key-label.sh"
 TELEMETRY_KEY_BYTES = b"echidna-telemetry-label-fixture!"
 TELEMETRY_SHA256 = hashlib.sha256(TELEMETRY_KEY_BYTES).hexdigest()
 TELEMETRY_KEY_ID = TELEMETRY_SHA256[:16]
+SPKI_PREFIX = bytes.fromhex(
+    "3059301306072a8648ce3d020106082a8648ce3d03010703420004"
+)
+SPKI_BYTES = SPKI_PREFIX + bytes.fromhex(
+    "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+    "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+)
+SPKI_SHA256 = hashlib.sha256(SPKI_BYTES).hexdigest()
 
 
 class TrustBootstrapTest(unittest.TestCase):
@@ -41,7 +49,7 @@ class TrustBootstrapTest(unittest.TestCase):
         self.assertIn('if ! "$TRUST_BOOTSTRAP" "$MODDIR"; then', service)
         self.assertLess(service.index("clear_boot_watchdog"), service.index("bootstrap_preprocessor_trust"))
 
-    def test_success_records_next_boot_without_hot_replacing_active_key(self) -> None:
+    def test_success_records_transactional_next_boot_trust_pairs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             module = self.prepare_module(root, "production")
@@ -54,6 +62,7 @@ class TrustBootstrapTest(unittest.TestCase):
                     "echo ECHIDNA_TRUST_V2\n"
                     "echo status=pinned-next-boot\n"
                     "echo telemetry_status=generated-next-boot\n"
+                    f"echo spki_sha256={SPKI_SHA256}\n"
                     f"echo telemetry_key_sha256={TELEMETRY_SHA256}\n"
                     f"echo telemetry_key_id={TELEMETRY_KEY_ID}\n"
                     "echo raw_key=telemetry-fixture-secret-must-not-leak\n"
@@ -70,9 +79,10 @@ class TrustBootstrapTest(unittest.TestCase):
             self.assertIn("telemetry_state=generated-next-boot", status)
             self.assertIn("telemetry_key_sha256=" + TELEMETRY_SHA256, status)
             self.assertNotIn("telemetry-fixture-secret", status + result.stdout + result.stderr)
-            self.assertFalse(
+            self.assertEqual(
+                SPKI_BYTES,
                 (module / "system" / "etc" / "echidna"
-                 / "preprocessor_controller_p256.spki").exists()
+                 / "preprocessor_controller_p256.spki").read_bytes(),
             )
             self.assertIn("reboot is required", result.stdout)
             invocation = arguments.read_text(encoding="utf-8")
@@ -98,6 +108,7 @@ class TrustBootstrapTest(unittest.TestCase):
                         "echo ECHIDNA_TRUST_V2\n"
                         "echo status=active-match\n"
                         "echo telemetry_status=ready\n"
+                        f"echo spki_sha256={SPKI_SHA256}\n"
                         f"echo telemetry_key_sha256={TELEMETRY_SHA256}\n"
                         f"echo telemetry_key_id={TELEMETRY_KEY_ID}\n"
                         "echo reboot_required=false\n"
@@ -120,6 +131,7 @@ class TrustBootstrapTest(unittest.TestCase):
                     "echo ECHIDNA_TRUST_V2\n"
                     "echo status=active-match\n"
                     "echo telemetry_status=ready\n"
+                    f"echo spki_sha256={SPKI_SHA256}\n"
                     f"echo telemetry_key_sha256={'ef' * 32}\n"
                     f"echo telemetry_key_id={'ab' * 8}\n"
                     "echo raw_key=do-not-log-this-secret\n"
@@ -157,6 +169,31 @@ class TrustBootstrapTest(unittest.TestCase):
             self.assertIn("reinstall/reprovision", result.stdout)
             self.assertIn("silent rotation is refused", result.stdout)
 
+    def test_failed_java_transaction_removes_only_one_sided_derived_spki(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            module = self.prepare_module(root, "production")
+            pending = (
+                module / "trust" / "next-boot" / "preprocessor_controller_p256.spki"
+            )
+            derived = (
+                module / "system" / "etc" / "echidna" / "preprocessor_controller_p256.spki"
+            )
+            pending.unlink()
+            app_process = root / "app_process"
+            app_process.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+            app_process.chmod(0o755)
+
+            result = self.run_bootstrap(module, root / "runtime", app_process)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse(pending.exists())
+            self.assertFalse(derived.exists())
+            telemetry_root = (
+                module / "trust" / "state" / "preprocessor_telemetry_hmac.key"
+            )
+            self.assertEqual(TELEMETRY_KEY_BYTES, telemetry_root.read_bytes())
+
     def test_packager_and_schema_share_exact_destination_contract(self) -> None:
         packager = PACKAGER.read_text(encoding="utf-8")
         schema = SCHEMA.read_text(encoding="utf-8")
@@ -171,7 +208,7 @@ class TrustBootstrapTest(unittest.TestCase):
         self.assertIn("--telemetry-root", bootstrap)
         self.assertIn("--telemetry-effect", bootstrap)
         self.assertIn("telemetry-key-label.sh", bootstrap)
-        self.assertIn("echidna_prepare_effect_telemetry_key", bootstrap)
+        self.assertIn("echidna_prepare_effect_trust", bootstrap)
         fixed = "/system/etc/echidna/preprocessor_controller_p256.spki"
         self.assertIn(fixed, schema)
         self.assertIn("/system/etc/echidna/$KEY_NAME", bootstrap)
@@ -183,7 +220,8 @@ class TrustBootstrapTest(unittest.TestCase):
         for token in (
             'TELEMETRY_KEY_SUFFIX =\n            "/files/echidna/preprocessor_telemetry_hmac.key"',
             "private static final int AID_AUDIO = 1005",
-            "options.telemetryRoot, rootPin, 0, 0, 0400",
+            "byte[] contents = index == 0 ? generatedRootPin : metadata",
+            "writeAtomicOwned(path, contents, 0, 0, 0400)",
             "appPath, rootPin, companionUid, companionUid, 0600",
             "options.telemetryEffect, rootPin, 0, AID_AUDIO, 0440",
             "O_NOFOLLOW",
@@ -192,6 +230,13 @@ class TrustBootstrapTest(unittest.TestCase):
             "Os.rename(temporary, path)",
             "fsyncDirectory(new File(path).getParent())",
             "silent rotation refused",
+            "controller SPKI root/derived transaction is incomplete",
+            "FirstProvisionTransaction.create(",
+            "new String[] {pendingPath, activePath}",
+            "new String[] {options.telemetryRoot, options.telemetryMetadata}",
+            'requireMatchingPinnedKey(activePath, spki, "active derived copy")',
+            "deleteNewTrustFile(path)",
+            'path + ".tmp." + Os.getpid()',
         ):
             self.assertIn(token, source)
         self.assertIn("Derived copies are never authoritative", source)
@@ -227,6 +272,13 @@ class TrustBootstrapTest(unittest.TestCase):
         effect_key.parent.mkdir(parents=True)
         root_pin.write_bytes(TELEMETRY_KEY_BYTES)
         effect_key.write_bytes(TELEMETRY_KEY_BYTES)
+        spki_root = module / "trust" / "next-boot" / "preprocessor_controller_p256.spki"
+        spki_effect = (
+            module / "system" / "etc" / "echidna" / "preprocessor_controller_p256.spki"
+        )
+        spki_root.parent.mkdir(parents=True, exist_ok=True)
+        spki_root.write_bytes(SPKI_BYTES)
+        spki_effect.write_bytes(SPKI_BYTES)
         return module
 
     def run_bootstrap(
@@ -241,11 +293,16 @@ class TrustBootstrapTest(unittest.TestCase):
 case "$3" in
   */trust/state/preprocessor_telemetry_hmac.key) echo 0:0:400:1:10 ;;
   */system/etc/echidna/preprocessor_telemetry_hmac.key) echo 0:1005:440:1:20 ;;
+  */trust/next-boot/preprocessor_controller_p256.spki) echo 0:0:444:1:30 ;;
+  */system/etc/echidna/preprocessor_controller_p256.spki) echo 0:0:444:1:40 ;;
   *) exit 64 ;;
 esac
 """,
             "chcon": """#!/bin/sh
-[ "$1" = u:object_r:echidna_telemetry_key_file:s0 ] || exit 64
+case "$1" in
+  u:object_r:echidna_telemetry_key_file:s0|u:object_r:echidna_controller_spki_file:s0) ;;
+  *) exit 64 ;;
+esac
 printf '%s\n' "$1" > "$FAKE_CONTEXT_FILE"
 """,
             "ls": """#!/bin/sh

@@ -46,8 +46,14 @@ public final class EffectRegistrationMain {
         byte[] source = readSafeRootFile(options.source, MAX_CONFIG_BYTES, false);
         byte[] library = readSafeRootFile(options.librarySource, MAX_LIBRARY_BYTES, false);
         byte[] key = readSafeRootFile(options.pendingKey, MAX_KEY_BYTES, true);
+        byte[] activeKey = readSafeRootFile(options.activeKey, MAX_KEY_BYTES, true);
         validateElf(library, options.abi, options.bits);
         SpkiPolicy.verifyP256(key);
+        SpkiPolicy.verifyP256(activeKey);
+        if (!MessageDigest.isEqual(key, activeKey)) {
+            throw new SecurityException(
+                    "active controller SPKI does not match the authoritative pending root pin");
+        }
 
         String sourceHash = sha256(source);
         refuseUntrackedOutput(options.transientConfig);
@@ -70,7 +76,6 @@ public final class EffectRegistrationMain {
         }
         refuseUntrackedOutput(options.inertConfig);
         refuseUntrackedOutput(options.libraryOutput);
-        refuseUntrackedOutput(options.activeKey);
 
         String decoded = decodeUtf8(source);
         String legacyPath = "/" + options.partition + "/lib"
@@ -83,34 +88,48 @@ public final class EffectRegistrationMain {
         String libraryHash = sha256(library);
         String keyHash = sha256(key);
 
-        boolean wroteConfig = false;
-        boolean wroteLibrary = false;
-        boolean wroteKey = false;
-        try {
-            ensureRootDirectory(new File(options.inertConfig).getParentFile(), 0755);
-            ensureRootDirectory(new File(options.libraryOutput).getParentFile(), 0755);
-            ensureRootDirectory(new File(options.activeKey).getParentFile(), 0755);
-            ensureRootDirectory(new File(options.metadata).getParentFile(), 0700);
-            writeAtomic(options.inertConfig, overlay, 0644);
-            wroteConfig = true;
-            writeAtomic(options.libraryOutput, library, 0644);
-            wroteLibrary = true;
-            writeAtomic(options.activeKey, key, 0444);
-            wroteKey = true;
-            String metadata = metadata(options, sourceHash, overlayHash, libraryHash, keyHash);
-            writeAtomic(options.metadata, metadata.getBytes(StandardCharsets.US_ASCII), 0444);
-        } catch (Throwable failure) {
-            if (wroteConfig) {
-                new File(options.inertConfig).delete();
-            }
-            if (wroteLibrary) {
-                new File(options.libraryOutput).delete();
-            }
-            if (wroteKey) {
-                new File(options.activeKey).delete();
-            }
-            throw failure;
-        }
+        ensureRootDirectory(new File(options.inertConfig).getParentFile(), 0755);
+        ensureRootDirectory(new File(options.libraryOutput).getParentFile(), 0755);
+        ensureRootDirectory(new File(options.metadata).getParentFile(), 0700);
+        final byte[] metadataBytes = metadata(
+                options, sourceHash, overlayHash, libraryHash, keyHash)
+                .getBytes(StandardCharsets.US_ASCII);
+        FirstProvisionTransaction.create(
+                new String[] {options.inertConfig, options.libraryOutput, options.metadata},
+                new FirstProvisionTransaction.Operations() {
+                    @Override
+                    public void write(int index) throws Exception {
+                        if (index == 0) {
+                            writeAtomic(options.inertConfig, overlay, 0644);
+                        } else if (index == 1) {
+                            writeAtomic(options.libraryOutput, library, 0644);
+                        } else {
+                            writeAtomic(options.metadata, metadataBytes, 0444);
+                        }
+                    }
+
+                    @Override
+                    public void verify() throws Exception {
+                        ExistingState staged = readExistingState(options);
+                        if (staged == null
+                                || !sourceHash.equals(staged.sourceHash)
+                                || !overlayHash.equals(staged.overlayHash)
+                                || !libraryHash.equals(staged.libraryHash)
+                                || !keyHash.equals(staged.keyHash)
+                                || !options.fingerprint.equals(staged.fingerprint)) {
+                            throw new SecurityException(
+                                    "new registration transaction failed verification");
+                        }
+                        requireDigest(options.inertConfig, overlayHash, MAX_CONFIG_BYTES);
+                        requireDigest(options.libraryOutput, libraryHash, MAX_LIBRARY_BYTES);
+                        requireDigest(options.activeKey, keyHash, MAX_KEY_BYTES);
+                    }
+
+                    @Override
+                    public void remove(String path) throws Exception {
+                        deleteNewRegistrationFile(path);
+                    }
+                });
 
         System.out.println("ECHIDNA_EFFECT_REGISTRATION_V2");
         System.out.println("status=staged-next-boot");
@@ -294,8 +313,12 @@ public final class EffectRegistrationMain {
             output = null;
             Os.rename(temporary, path);
             fsyncDirectory(new File(path).getParent());
-        } catch (Throwable failure) {
-            new File(temporary).delete();
+        } catch (Exception failure) {
+            try {
+                deleteNewRegistrationFile(path);
+            } catch (Exception rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
             throw failure;
         } finally {
             if (output != null) {
@@ -322,6 +345,31 @@ public final class EffectRegistrationMain {
     private static void refuseUntrackedOutput(String path) throws Exception {
         if (existsNoFollow(path)) {
             throw new SecurityException("untracked registration output exists: " + path);
+        }
+    }
+
+    private static void deleteNewRegistrationFile(String path) throws Exception {
+        Exception failure = null;
+        for (String candidate : new String[] {path, path + ".tmp." + Os.getpid()}) {
+            try {
+                if (!existsNoFollow(candidate)) {
+                    continue;
+                }
+                StructStat status = Os.lstat(candidate);
+                if (!OsConstants.S_ISREG(status.st_mode) || !new File(candidate).delete()) {
+                    throw new SecurityException(
+                            "unable to roll back new registration output: " + candidate);
+                }
+            } catch (Exception rollbackFailure) {
+                if (failure == null) {
+                    failure = rollbackFailure;
+                } else {
+                    failure.addSuppressed(rollbackFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 

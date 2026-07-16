@@ -24,7 +24,8 @@ TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
 REGION_BYTES=65536
 ZYGISK_STATUS_HELPER="$MODDIR/common/zygisk-status.sh"
 EFFECT_ACTIVATION="$MODDIR/common/effect-activation.sh"
-TELEMETRY_KEY_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
+EFFECT_TRUST_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
+EFFECT_TRUST_PRESENCE=optional
 
 log() {
     echo "[echidna][post-fs] $1"
@@ -156,6 +157,8 @@ apply_sepolicy() {
     magiskpolicy --live "typeattribute echidna_telemetry_file data_file_type" 2>/dev/null || true
     magiskpolicy --live "type echidna_telemetry_key_file" 2>/dev/null || true
     magiskpolicy --live "typeattribute echidna_telemetry_key_file file_type" 2>/dev/null || true
+    magiskpolicy --live "type echidna_controller_spki_file" 2>/dev/null || true
+    magiskpolicy --live "typeattribute echidna_controller_spki_file file_type" 2>/dev/null || true
     magiskpolicy --live "allow appdomain shell_data_file dir search" 2>/dev/null || true
     magiskpolicy --live "allow appdomain echidna_config_file dir { search getattr open read }" 2>/dev/null || true
     magiskpolicy --live "allow appdomain echidna_config_file file { getattr open read map }" 2>/dev/null || true
@@ -169,17 +172,42 @@ apply_sepolicy() {
     magiskpolicy --live "allow untrusted_app echidna_telemetry_file file { getattr open read write append map }" 2>/dev/null || true
     magiskpolicy --live "allow audioserver echidna_telemetry_key_file file { getattr open read }" 2>/dev/null || true
     magiskpolicy --live "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }" 2>/dev/null || true
+    magiskpolicy --live "allow audioserver echidna_controller_spki_file file { getattr open read }" 2>/dev/null || true
+    magiskpolicy --live "allow hal_audio_server echidna_controller_spki_file file { getattr open read }" 2>/dev/null || true
 }
 
-prepare_effect_telemetry_key() {
-    if [ ! -r "$TELEMETRY_KEY_LABEL_HELPER" ]; then
-        log "Telemetry-key label helper is missing"
+prepare_effect_trust() {
+    if [ ! -r "$EFFECT_TRUST_LABEL_HELPER" ]; then
+        log "Effect-trust label helper is missing"
         return 1
     fi
     # shellcheck source=../../../magisk/common/telemetry-key-label.sh
-    . "$TELEMETRY_KEY_LABEL_HELPER" || return 1
-    command -v echidna_prepare_effect_telemetry_key >/dev/null 2>&1 || return 1
-    echidna_prepare_effect_telemetry_key "$MODDIR" "" optional
+    . "$EFFECT_TRUST_LABEL_HELPER" || return 1
+    command -v echidna_prepare_effect_trust >/dev/null 2>&1 || return 1
+    echidna_prepare_effect_trust "$MODDIR" "" "" "$EFFECT_TRUST_PRESENCE"
+}
+
+effect_registration_present() {
+    # Trust inputs become mandatory once any staged or live registration
+    # backing exists. Evaluate this before stale live configs are removed so a
+    # deleted HMAC pair can never turn an existing registration into an
+    # "unprovisioned" optional state.
+    for candidate in \
+        "$MODDIR/registration" \
+        "$MODDIR/system/lib/soundfx/libechidna_preproc.so" \
+        "$MODDIR/system/lib64/soundfx/libechidna_preproc.so" \
+        "$MODDIR/system/vendor/lib/soundfx/libechidna_preproc.so" \
+        "$MODDIR/system/vendor/lib64/soundfx/libechidna_preproc.so" \
+        "$MODDIR/system/etc/audio_effects.xml" \
+        "$MODDIR/system/etc/audio_effects.conf" \
+        "$MODDIR/system/vendor/etc/audio_effects.xml" \
+        "$MODDIR/system/vendor/etc/audio_effects.conf" \
+        "$MODDIR/system/vendor/etc/audio"/sku_*/audio_effects.xml; do
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 prepare_shared_regions() {
@@ -242,6 +270,11 @@ discard_stale_preprocessor_activation() {
     fi
 }
 
+# Snapshot registration presence before cleanup; it decides whether both trust
+# pairs are mandatory even when cleanup removes the last live config backing.
+if effect_registration_present; then
+    EFFECT_TRUST_PRESENCE=required
+fi
 # Always discard crash/prior-boot backing before considering disable markers or
 # current-boot inputs. A disabled module must never retain a mountable registry.
 discard_stale_preprocessor_activation
@@ -253,8 +286,8 @@ fi
 # policy live for compatible implementations, then label and verify the module
 # backing inode before Magisk exposes module files for this boot.
 apply_sepolicy
-if ! prepare_effect_telemetry_key; then
-    engage_failsafe "effect telemetry key could not be labeled safely"
+if ! prepare_effect_trust; then
+    engage_failsafe "effect trust inputs could not be validated and labeled safely"
 fi
 # Magisk invokes this script before mounting module files. Registration is only
 # exposed after the helper validates current-boot stock and staged artifacts.

@@ -30,7 +30,7 @@ x86_64 AVDs `echidna_e2e33` (Android 13) and `echidna_m26` (Android 14) for the 
 | **Signed release APKs** | Companion + shim `assembleRelease` with a disposable release key, then `tools/verify_android_artifacts.py` with its certificate SHA-256 | **PASS** — both APK signatures verify, both match the pinned non-debug certificate, and exact package/native payload checks pass. Hosted publication now performs the same fail-closed signing preflight and verification |
 | **Debug APK** | `:app:assembleDebug` plus exact payload verification | **PASS** — the companion contains only `libechidna_control_jni.so` for four ABIs; engine/DSP/shim JNI libraries do not leak into it |
 | **Per-ABI native libs** | NDK r27 superbuild, arch-checked with `llvm-readelf -h` | **PASS** — four targets × three ABIs: engine, DSP, shim JNI, and `libechidna_preproc.so`. Release tooling transports/verifies all four families |
-| **Flashable Magisk zip** | `tools/build_magisk_module.sh` + `tools/verify_magisk_module.py` | **PASS** — deterministic archive has **23 file entries**, three Zygisk engines, three DSP libraries, three inert preprocessor libraries, signer/registration helpers, installer/watchdog files, narrow `sepolicy.rule`, status helper, and license. The verifier checks ELF ABI/SONAME/AELI/DT_NEEDED, Unix modes, no active registry/SPKI, and no auto-apply or hot audioserver restart |
+| **Flashable Magisk zip** | `tools/build_magisk_module.sh` + `tools/verify_magisk_module.py` | **PASS** — the deterministic archive has three Zygisk engines, three DSP libraries, three inert preprocessor libraries, signer/registration helpers, installer/watchdog files, narrow `sepolicy.rule`, status helper, and license. The verifier checks ELF ABI/SONAME/AELI/DT_NEEDED, Unix modes, no generated SPKI/HMAC material, exact read-only trust-input policy and label lifecycle, and no auto-apply or hot audioserver restart |
 | **Docker native-build → magisk pipeline** | `docker compose build native-build` then `run native-build`, then `magisk-packager` | **PASS** — the packager consumes engine/DSP pairs plus all three preprocessor ABIs; registration is generated only on an eligible device for its next boot |
 | **Host native tests** | Native CTest suites | **PASS** — DSP, routing, v2 protocol/generation, authenticated lifecycle/reconnect, and legacy preprocessor ABI/lifecycle/audio/no-allocation tests pass |
 | **App unit tests** | `./gradlew :app:testDebugUnitTest` (Robolectric, headless) | **PASS 24/24** — preset serialize/round-trip, status/control/whitelist JSON parsing, repository CRUD |
@@ -116,6 +116,7 @@ Requested coverage, explicitly:
 | tinyalsa | Operational candidate; metadata from `pcm_open` config | Vendor/device target app |
 | LSPosed Java AudioRecord | Operational candidate; Java getters + dedicated JNI | Live LSPosed injection under SELinux |
 | Legacy input preprocessor | Packaged and next-boot registration implemented for a registered system/vendor HIDL factory PID; host fixtures prove first-OTA refusal and bounded activation rollback; default-off LSPosed attachment manager requires a signed short-lived capability | Real factory discovery, post-fs/mount ordering, magic-mount label/linker namespace, descriptor/maps/AVC, attachment/enablement under enforced SELinux, and device audio mutation |
+| Controller capability SPKI | Canonical 91-byte authoritative/derived pair, root:root `0444`, hash/inode checks, and dedicated read-only SELinux policy are host-verified; no generated SPKI ships | Effect-host read access to the separately labelled SPKI and signed-capability verification under enforcing SELinux |
 | Telemetry origin-proof key | Per-install root pin/derived copies plus native ECHT v2 HMAC production, LSPosed relay, and control verification are host-tested; no key bytes ship or enter logs | Effect-host SELinux read access, rotation/recovery observation, and end-to-end device proof |
 | Native AudioRecord | Developer contract only (`ECHIDNA_AR_*`) | A safe normal-flow metadata producer is not implemented |
 | libc raw-device read | Developer contract only (`ECHIDNA_LIBC_*`) | A safe normal-flow metadata producer is not implemented |
@@ -144,7 +145,8 @@ Still not claimed as verified:
   and AudioFlinger are unsupported.
 - **Live LSPosed shim injection** — the shim and Binder policy consumer are implemented, but
   LSPosed installation, scoping, injected-process Binder policy, and SELinux access were not exercised.
-- **Narrow config/telemetry SELinux policy** and supported-route behavior on a real enforcing device.
+- **Narrow config and effect-trust SELinux policy** on a real enforcing device, including separate
+  controller-SPKI and telemetry-HMAC labels and effect-host reads.
 - **arm64 primary hardware and armeabi-v7a runtime behavior** — arm64 still needs physical-device
   proof, and armv7 intentionally fails closed.
 - **Live authenticated policy delivery under SELinux** — UID-scoped Zygisk socket frames and
@@ -176,7 +178,10 @@ release path that the rooted-emulator probe did not cover:
    via `tools/build_magisk_module.sh` or the docker `magisk-packager` image — both verified
    above). Magisk → Modules → *Install from storage* → select the zip → **reboot**.
    `customize.sh` places `libech_dsp.so` per ABI into `system/lib(64)` and stages
-   `libechidna.so` for the in-app JNI `dlopen` path.
+   `libechidna.so` for the in-app JNI `dlopen` path. Before calling the legacy effect ready, verify
+   that the controller SPKI has `echidna_controller_spki_file`, the telemetry HMAC has
+   `echidna_telemetry_key_file`, and only the expected effect-host domains read them. A successful
+   host verifier or module install alone is not this device proof.
 4. **Install the LSPosed shim (Java fallback).** Install LSPosed (Zygisk
    flavour), enable the Echidna module in LSPosed, and scope it to the target app(s). This
    drives the authenticated read-only Binder policy path when native capture is unavailable.

@@ -51,33 +51,28 @@ class MagiskContractsTest(unittest.TestCase):
         self.assertIn('"${TEMPLATE_DIR}/common/zygisk-status.sh"', packager)
         self.assertIn('"${OUT_DIR}/common/zygisk-status.sh"', packager)
 
-    def test_effect_key_policy_is_dedicated_and_read_only(self) -> None:
+    def test_effect_trust_policy_is_dedicated_and_read_only(self) -> None:
         policy = executable_lines(SEPOLICY)
         post_fs = executable_lines(POST_FS)
 
-        self.assertIn("type echidna_telemetry_key_file", policy)
-        self.assertIn("typeattribute echidna_telemetry_key_file file_type", policy)
-        self.assertIn(
-            "allow audioserver echidna_telemetry_key_file file { getattr open read }",
-            policy,
-        )
-        self.assertIn(
-            "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
-            policy,
-        )
-        for live_rule in (
-            'magiskpolicy --live "type echidna_telemetry_key_file"',
-            'magiskpolicy --live "typeattribute echidna_telemetry_key_file file_type"',
-            (
-                'magiskpolicy --live "allow audioserver echidna_telemetry_key_file '
-                'file { getattr open read }"'
-            ),
-            (
-                'magiskpolicy --live "allow hal_audio_server echidna_telemetry_key_file '
-                'file { getattr open read }"'
-            ),
-        ):
-            self.assertIn(live_rule, post_fs)
+        trust_types = ("echidna_telemetry_key_file", "echidna_controller_spki_file")
+        exact_allows = {
+            f"allow {domain} {trust_type} file {{ getattr open read }}"
+            for domain in ("audioserver", "hal_audio_server")
+            for trust_type in trust_types
+        }
+        declarations = {
+            declaration
+            for trust_type in trust_types
+            for declaration in (
+                f"type {trust_type}",
+                f"typeattribute {trust_type} file_type",
+            )
+        }
+        for rule in declarations | exact_allows:
+            with self.subTest(rule=rule):
+                self.assertIn(rule, policy)
+                self.assertIn(f'magiskpolicy --live "{rule}"', post_fs)
         for broad_target in (
             "system_file",
             "vendor_file",
@@ -87,35 +82,73 @@ class MagiskContractsTest(unittest.TestCase):
             with self.subTest(target=broad_target):
                 self.assertNotIn(f"hal_audio_server {broad_target}", policy)
                 self.assertNotIn(f"audioserver {broad_target}", policy)
-        key_allow_lines = [
+        trust_allow_lines = [
             line
             for line in policy.splitlines()
-            if line.startswith("allow ") and " echidna_telemetry_key_file " in line
+            if line.startswith("allow ")
+            and any(f" {trust_type} " in line for trust_type in trust_types)
         ]
-        self.assertEqual(2, len(key_allow_lines))
-        for line in key_allow_lines:
+        self.assertEqual(exact_allows, set(trust_allow_lines))
+        for line in trust_allow_lines:
             self.assertNotRegex(line, r"\b(?:write|append|execute|map|create|unlink)\b")
         self.assertNotIn("permissive ", policy)
 
         self.assertLess(
             post_fs.rfind("\napply_sepolicy"),
-            post_fs.rfind("\nif ! prepare_effect_telemetry_key"),
+            post_fs.rfind("\nif ! prepare_effect_trust"),
         )
         self.assertLess(
-            post_fs.rfind("\nif ! prepare_effect_telemetry_key"),
+            post_fs.rfind("\nif ! prepare_effect_trust"),
             post_fs.rfind("\nactivate_preprocessor_registration"),
         )
 
-    def test_packager_and_runtime_require_effect_key_label_helper(self) -> None:
+    def test_packager_and_runtime_require_combined_effect_trust_helper(self) -> None:
         self.assertTrue(TELEMETRY_KEY_LABEL.is_file())
         packager = PACKAGER.read_text(encoding="utf-8")
         customize = CUSTOMIZE.read_text(encoding="utf-8")
         post_fs = POST_FS.read_text(encoding="utf-8")
         trust = TRUST_BOOTSTRAP.read_text(encoding="utf-8")
-        for source in (packager, customize, post_fs, trust):
+        registration = (
+            REPO_ROOT / "magisk" / "common" / "effect-registration.sh"
+        ).read_text(encoding="utf-8")
+        helper = TELEMETRY_KEY_LABEL.read_text(encoding="utf-8")
+        for source in (packager, customize, post_fs, trust, registration):
             self.assertIn("telemetry-key-label.sh", source)
-        self.assertIn("echidna_prepare_effect_telemetry_key", post_fs)
-        self.assertIn("echidna_prepare_effect_telemetry_key", trust)
+        for source in (post_fs, trust, registration, helper):
+            self.assertIn("echidna_prepare_effect_trust", source)
+        self.assertIn("controller_spki_sha256", trust)
+        for token in (
+            "trust/next-boot/preprocessor_controller_p256.spki",
+            "system/etc/echidna/preprocessor_controller_p256.spki",
+            "u:object_r:echidna_controller_spki_file:s0",
+            "ECHIDNA_CONTROLLER_SPKI_BYTES=91",
+            'ECHIDNA_CONTROLLER_SPKI_OWNER_MODE="0:0:444"',
+            "3059301306072a8648ce3d020106082a8648ce3d03010703420004",
+            "chcon",
+            "ls -Zd",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, helper)
+
+    def test_any_staged_or_live_registration_requires_both_trust_pairs(self) -> None:
+        post_fs = POST_FS.read_text(encoding="utf-8")
+        for token in (
+            'EFFECT_TRUST_PRESENCE=optional',
+            '"$MODDIR/registration"',
+            'libechidna_preproc.so',
+            'audio_effects.xml',
+            'EFFECT_TRUST_PRESENCE=required',
+            'echidna_prepare_effect_trust "$MODDIR" "" "" "$EFFECT_TRUST_PRESENCE"',
+        ):
+            self.assertIn(token, post_fs)
+        detect = post_fs.rfind("\nif effect_registration_present; then\n")
+        cleanup = post_fs.rfind("\ndiscard_stale_preprocessor_activation\n")
+        prepare = post_fs.rfind("\nif ! prepare_effect_trust; then\n")
+        activate = post_fs.rfind("\nactivate_preprocessor_registration\n")
+        self.assertGreaterEqual(detect, 0)
+        self.assertLess(detect, cleanup)
+        self.assertLess(cleanup, prepare)
+        self.assertLess(prepare, activate)
 
     def test_packager_requires_release_pin_and_dex_trust_helper(self) -> None:
         self.assertTrue(TRUST_BOOTSTRAP.is_file())

@@ -46,6 +46,7 @@ public final class TrustBootstrapMain {
             System.out.println("signer_sha256_prefix=" + inspection.signerDigest.substring(0, 12));
             System.out.println("lineage_count=" + inspection.lineageCount);
             System.out.println("spki_sha256_prefix=" + inspection.spkiDigest.substring(0, 12));
+            System.out.println("spki_sha256=" + inspection.spkiDigest);
             System.out.println("telemetry_key_sha256=" + inspection.telemetrySha256);
             System.out.println("telemetry_key_id=" + inspection.telemetryKeyId);
             System.out.println("reboot_required=" + inspection.rebootRequired);
@@ -149,17 +150,36 @@ public final class TrustBootstrapMain {
             }
             rootPin = TelemetryProofKeyPolicy.generate(new SecureRandom());
             byte[] metadata = TelemetryProofKeyPolicy.metadata(rootPin);
-            boolean rootWritten = false;
-            try {
-                writeAtomicOwned(options.telemetryRoot, rootPin, 0, 0, 0400);
-                rootWritten = true;
-                writeAtomicOwned(options.telemetryMetadata, metadata, 0, 0, 0400);
-            } catch (Throwable failure) {
-                if (rootWritten && !existsNoFollow(options.telemetryMetadata)) {
-                    deleteRegularNoFollow(options.telemetryRoot);
-                }
-                throw failure;
-            }
+            final byte[] generatedRootPin = rootPin;
+            FirstProvisionTransaction.create(
+                    new String[] {options.telemetryRoot, options.telemetryMetadata},
+                    new FirstProvisionTransaction.Operations() {
+                        @Override
+                        public void write(int index) throws Exception {
+                            byte[] contents = index == 0 ? generatedRootPin : metadata;
+                            String path = index == 0
+                                    ? options.telemetryRoot : options.telemetryMetadata;
+                            writeAtomicOwned(path, contents, 0, 0, 0400);
+                        }
+
+                        @Override
+                        public void verify() throws Exception {
+                            byte[] actualRootPin = readExactOwnedFile(
+                                    options.telemetryRoot, 0, 0, 0400,
+                                    TelemetryProofKeyPolicy.KEY_BYTES, true,
+                                    "new telemetry root pin");
+                            byte[] actualMetadata = readExactOwnedFile(
+                                    options.telemetryMetadata, 0, 0, 0400,
+                                    TelemetryProofKeyPolicy.MAX_METADATA_BYTES, false,
+                                    "new telemetry root-pin metadata");
+                            TelemetryProofKeyPolicy.verifyMetadata(actualMetadata, actualRootPin);
+                        }
+
+                        @Override
+                        public void remove(String path) throws Exception {
+                            deleteNewTrustFile(path);
+                        }
+                    });
             generated = true;
         } else {
             rootPin = readExactOwnedFile(
@@ -172,50 +192,46 @@ public final class TrustBootstrapMain {
                     "telemetry root-pin metadata");
             TelemetryProofKeyPolicy.verifyMetadata(metadata, rootPin);
         }
-        if (generated) {
-            try {
-                rootPin = readExactOwnedFile(
-                        options.telemetryRoot, 0, 0, 0400,
-                        TelemetryProofKeyPolicy.KEY_BYTES, true, "new telemetry root pin");
-                byte[] metadata = readExactOwnedFile(
-                        options.telemetryMetadata, 0, 0, 0400,
-                        TelemetryProofKeyPolicy.MAX_METADATA_BYTES, false,
-                        "new telemetry root-pin metadata");
-                TelemetryProofKeyPolicy.verifyMetadata(metadata, rootPin);
-            } catch (Throwable failure) {
-                deleteRegularNoFollow(options.telemetryMetadata);
-                deleteRegularNoFollow(options.telemetryRoot);
-                throw failure;
+        try {
+            // Derived copies are never authoritative. Missing, tampered, or
+            // metadata-mismatched regular files are replaced only with the
+            // already validated root pin; symlinks are always refused.
+            byte[] appCopy = readDerivedCopyOrNull(
+                    appPath, companionUid, companionUid, 0600, "app telemetry key");
+            byte[] effectCopy = readDerivedCopyOrNull(
+                    options.telemetryEffect, 0, AID_AUDIO, 0440, "effect telemetry key");
+            TelemetryProofKeyPolicy.CopyPlan plan =
+                    TelemetryProofKeyPolicy.copies(rootPin, appCopy, effectCopy);
+            if (plan.restoreApp) {
+                writeAtomicOwned(appPath, rootPin, companionUid, companionUid, 0600);
             }
-        }
+            if (plan.restoreEffect) {
+                // Atomic rename updates module backing only. A currently mounted/loaded inode is
+                // not replaced; the root:audio 0440 copy is visible only on the next module mount.
+                writeAtomicOwned(options.telemetryEffect, rootPin, 0, AID_AUDIO, 0440);
+            }
+            requireMatchingDerivedCopy(
+                    appPath, rootPin, companionUid, companionUid, 0600, "app telemetry key");
+            requireMatchingDerivedCopy(
+                    options.telemetryEffect, rootPin, 0, AID_AUDIO, 0440,
+                    "effect telemetry key");
 
-        // Derived copies are never authoritative. Missing, tampered, or metadata-mismatched regular
-        // files are replaced only with the already validated root pin; symlinks are always refused.
-        byte[] appCopy = readDerivedCopyOrNull(
-                appPath, companionUid, companionUid, 0600, "app telemetry key");
-        byte[] effectCopy = readDerivedCopyOrNull(
-                options.telemetryEffect, 0, AID_AUDIO, 0440, "effect telemetry key");
-        TelemetryProofKeyPolicy.CopyPlan plan =
-                TelemetryProofKeyPolicy.copies(rootPin, appCopy, effectCopy);
-        if (plan.restoreApp) {
-            writeAtomicOwned(appPath, rootPin, companionUid, companionUid, 0600);
+            TelemetryProofKeyPolicy.Evidence evidence = TelemetryProofKeyPolicy.evidence(rootPin);
+            String status = generated ? "generated-next-boot" : plan.status;
+            return new TelemetryResult(
+                    status, evidence.sha256, evidence.keyId,
+                    generated || plan.rebootRequired);
+        } catch (Throwable failure) {
+            if (generated) {
+                // Every path was absent at first-provision entry. Roll back the
+                // complete root/metadata/app/effect transaction in reverse order.
+                rollbackNewTrustFile(options.telemetryEffect, failure);
+                rollbackNewTrustFile(appPath, failure);
+                rollbackNewTrustFile(options.telemetryMetadata, failure);
+                rollbackNewTrustFile(options.telemetryRoot, failure);
+            }
+            throw failure;
         }
-        if (plan.restoreEffect) {
-            // Atomic rename updates module backing only. A currently mounted/loaded inode is not
-            // replaced; the root:audio 0440 copy becomes visible only on the next module mount.
-            writeAtomicOwned(options.telemetryEffect, rootPin, 0, AID_AUDIO, 0440);
-        }
-        requireMatchingDerivedCopy(
-                appPath, rootPin, companionUid, companionUid, 0600, "app telemetry key");
-        requireMatchingDerivedCopy(
-                options.telemetryEffect, rootPin, 0, AID_AUDIO, 0440,
-                "effect telemetry key");
-
-        TelemetryProofKeyPolicy.Evidence evidence = TelemetryProofKeyPolicy.evidence(rootPin);
-        String status = generated ? "generated-next-boot" : plan.status;
-        return new TelemetryResult(
-                status, evidence.sha256, evidence.keyId,
-                generated || plan.rebootRequired);
     }
 
     private static byte[] readDerivedCopyOrNull(
@@ -357,7 +373,11 @@ public final class TrustBootstrapMain {
             Os.rename(temporary, path);
             fsyncDirectory(new File(path).getParent());
         } catch (Throwable failure) {
-            new File(temporary).delete();
+            try {
+                deleteRegularNoFollow(temporary);
+            } catch (Throwable rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
             throw failure;
         } finally {
             if (output != null) {
@@ -386,7 +406,33 @@ public final class TrustBootstrapMain {
         }
         StructStat status = Os.lstat(path);
         if (!OsConstants.S_ISREG(status.st_mode) || !new File(path).delete()) {
-            throw new SecurityException("unable to roll back partial telemetry root pin");
+            throw new SecurityException("unable to roll back partial trust transaction: " + path);
+        }
+    }
+
+    private static void deleteNewTrustFile(String path) throws Exception {
+        Exception failure = null;
+        for (String candidate : new String[] {path, path + ".tmp." + Os.getpid()}) {
+            try {
+                deleteRegularNoFollow(candidate);
+            } catch (Exception rollbackFailure) {
+                if (failure == null) {
+                    failure = rollbackFailure;
+                } else {
+                    failure.addSuppressed(rollbackFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private static void rollbackNewTrustFile(String path, Throwable failure) {
+        try {
+            deleteNewTrustFile(path);
+        } catch (Exception rollbackFailure) {
+            failure.addSuppressed(rollbackFailure);
         }
     }
 
@@ -499,63 +545,44 @@ public final class TrustBootstrapMain {
 
     private static PinResult pinForNextBoot(byte[] spki, String pendingPath, String activePath)
             throws Exception {
-        if (existsNoFollow(activePath)) {
-            requireMatchingPinnedKey(activePath, spki, "active");
+        boolean pendingExists = existsNoFollow(pendingPath);
+        boolean activeExists = existsNoFollow(activePath);
+        if (pendingExists != activeExists) {
+            throw new SecurityException(
+                    "controller SPKI root/derived transaction is incomplete; explicit reprovision required");
+        }
+        if (pendingExists) {
+            requireMatchingPinnedKey(pendingPath, spki, "pending root pin");
+            requireMatchingPinnedKey(activePath, spki, "active derived copy");
             return new PinResult("active-match", false);
         }
-        if (existsNoFollow(pendingPath)) {
-            requireMatchingPinnedKey(pendingPath, spki, "pending");
-            return new PinResult("already-pinned", true);
-        }
 
-        File parent = new File(pendingPath).getParentFile();
-        if (parent == null) {
-            throw new SecurityException("pending trust directory is missing");
-        }
-        StructStat parentStatus = Os.lstat(parent.getAbsolutePath());
-        if (!OsConstants.S_ISDIR(parentStatus.st_mode)
-                || parentStatus.st_uid != 0
-                || (parentStatus.st_mode & 0777) != 0700) {
-            throw new SecurityException("pending trust directory must be root-owned mode 0700");
-        }
+        requireExactDirectory(
+                new File(pendingPath).getParentFile(), 0, 0, 0700,
+                "pending controller-SPKI trust directory");
+        requireExactDirectory(
+                new File(activePath).getParentFile(), 0, 0, 0755,
+                "active controller-SPKI directory");
 
-        String temporary = pendingPath + ".tmp." + Os.getpid();
-        FileDescriptor output = null;
-        try {
-            output = Os.open(
-                    temporary,
-                    OsConstants.O_WRONLY
-                            | OsConstants.O_CREAT
-                            | OsConstants.O_EXCL
-                            | OsConstants.O_CLOEXEC
-                            | OsConstants.O_NOFOLLOW,
-                    0600);
-            int written = 0;
-            while (written < spki.length) {
-                int count = Os.write(output, spki, written, spki.length - written);
-                if (count <= 0) {
-                    throw new SecurityException("short write while pinning SPKI");
-                }
-                written += count;
-            }
-            Os.fsync(output);
-            Os.fchown(output, 0, 0);
-            Os.fchmod(output, 0444);
-            Os.fsync(output);
-            Os.close(output);
-            output = null;
-            Os.rename(temporary, pendingPath);
-            fsyncDirectory(parent.getAbsolutePath());
-        } catch (Throwable failure) {
-            // Best-effort cleanup; the O_EXCL name cannot replace the final pin.
-            new File(temporary).delete();
-            throw failure;
-        } finally {
-            if (output != null) {
-                Os.close(output);
-            }
-        }
-        requireMatchingPinnedKey(pendingPath, spki, "new pending");
+        FirstProvisionTransaction.create(
+                new String[] {pendingPath, activePath},
+                new FirstProvisionTransaction.Operations() {
+                    @Override
+                    public void write(int index) throws Exception {
+                        writeAtomicOwned(index == 0 ? pendingPath : activePath, spki, 0, 0, 0444);
+                    }
+
+                    @Override
+                    public void verify() throws Exception {
+                        requireMatchingPinnedKey(pendingPath, spki, "new pending root pin");
+                        requireMatchingPinnedKey(activePath, spki, "new active derived copy");
+                    }
+
+                    @Override
+                    public void remove(String path) throws Exception {
+                        deleteNewTrustFile(path);
+                    }
+                });
         return new PinResult("pinned-next-boot", true);
     }
 
