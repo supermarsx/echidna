@@ -305,11 +305,11 @@ class LegacyPreprocessorCapabilityTest {
     }
 
     @Test
-    fun `provider capability API includes capture handoff acknowledgement version six`() {
-        assertEquals(6L, CAPABILITY_PROVIDER_API_VERSION)
-        assertFalse(isCaptureOwnerClientApiSupported(5L))
-        assertTrue(isCaptureOwnerClientApiSupported(6L))
-        assertFalse(isCaptureOwnerClientApiSupported(7L))
+    fun `provider capability API includes synchronous identity routes version seven`() {
+        assertEquals(7L, CAPABILITY_PROVIDER_API_VERSION)
+        assertFalse(isCaptureOwnerClientApiSupported(6L))
+        assertTrue(isCaptureOwnerClientApiSupported(7L))
+        assertFalse(isCaptureOwnerClientApiSupported(8L))
         assertEquals(-1, LegacyCapabilityStatus.DENIED)
         assertEquals(-116, LegacyCapabilityStatus.STALE)
         assertEquals(-126, LegacyCapabilityStatus.KEY_UNAVAILABLE)

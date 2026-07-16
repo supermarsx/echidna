@@ -24,4 +24,14 @@ interface IEchidnaPolicyProvider {
             IEchidnaPolicyListener listener);
     oneway void reportCaptureOwnerInactive(
             String processName, long generation, long handoffToken);
+    // Append-only v7 surface. These calls are synchronous only long enough to capture and validate
+    // Binder UID/PID; expensive signing/HMAC work remains offloaded by the service.
+    boolean requestLegacyPreprocessorCapabilityV7(int audioSessionId, String processName,
+            long generation, in byte[] nonce, IEchidnaCapabilityCallback callback);
+    boolean reportLegacyPreprocessorTelemetryV7(int audioSessionId, String processName,
+            long generation, in byte[] capabilityNonce, in byte[] snapshot);
+    boolean reportLegacyPreprocessorTelemetryProofV7(int audioSessionId, String processName,
+            long generation, in byte[] proof);
+    boolean reportCaptureOwnerInactiveV7(
+            String processName, long generation, long handoffToken);
 }

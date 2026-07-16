@@ -38,9 +38,9 @@ final class ProfileSyncReceiver {
     private static final String TAG = "EchidnaPolicySync";
     private static final long RECONNECT_DELAY_MS = 1000L;
     private static final long CONNECT_TIMEOUT_MS = 5_000L;
-    private static final long CAPTURE_HANDOFF_PROVIDER_API_VERSION = 6L;
-    private static final long TELEMETRY_PROVIDER_API_VERSION = 4L;
-    private static final long TELEMETRY_PROOF_PROVIDER_API_VERSION = 5L;
+    private static final long CAPTURE_HANDOFF_PROVIDER_API_VERSION = 7L;
+    private static final long TELEMETRY_PROVIDER_API_VERSION = 7L;
+    private static final long TELEMETRY_PROOF_PROVIDER_API_VERSION = 7L;
     private static final int TELEMETRY_VALUE_BYTES = 48;
     private static final int TELEMETRY_PROOF_VALUE_BYTES = 112;
     private static final ComponentName POLICY_COMPONENT = new ComponentName(
@@ -308,7 +308,10 @@ final class ProfileSyncReceiver {
                 return;
             }
             try {
-                connected.reportCaptureOwnerInactive(processName, generation, handoffToken);
+                if (!connected.reportCaptureOwnerInactiveV7(
+                        processName, generation, handoffToken)) {
+                    invalidateBinding(binding, true);
+                }
             } catch (RemoteException error) {
                 if (!connected.asBinder().isBinderAlive()) {
                     invalidateBinding(binding, true);
@@ -332,14 +335,18 @@ final class ProfileSyncReceiver {
                 if (apiVersion < TELEMETRY_PROOF_PROVIDER_API_VERSION) {
                     return;
                 }
-                connected.reportLegacyPreprocessorTelemetryProofV5(
-                        audioSessionId, processName, generation, snapshot);
+                if (!connected.reportLegacyPreprocessorTelemetryProofV7(
+                        audioSessionId, processName, generation, snapshot)) {
+                    invalidateBinding(binding, true);
+                }
             } else {
                 if (apiVersion < TELEMETRY_PROVIDER_API_VERSION) {
                     return;
                 }
-                connected.reportLegacyPreprocessorTelemetryV4(
-                        audioSessionId, processName, generation, capabilityNonce, snapshot);
+                if (!connected.reportLegacyPreprocessorTelemetryV7(
+                        audioSessionId, processName, generation, capabilityNonce, snapshot)) {
+                    invalidateBinding(binding, true);
+                }
             }
         } catch (RemoteException error) {
             if (!connected.asBinder().isBinderAlive()) {
@@ -364,7 +371,7 @@ final class ProfileSyncReceiver {
         IEchidnaPolicyProvider connected = binding.provider;
         AtomicBoolean delivered = new AtomicBoolean(false);
         try {
-            connected.requestLegacyPreprocessorCapability(
+            boolean accepted = connected.requestLegacyPreprocessorCapabilityV7(
                     audioSessionId,
                     processName,
                     generation,
@@ -395,6 +402,12 @@ final class ProfileSyncReceiver {
                             }
                         }
                     });
+            if (!accepted) {
+                if (delivered.compareAndSet(false, true)) {
+                    callback.onFailure("request_rejected");
+                }
+                invalidateBinding(binding, true);
+            }
         } catch (RemoteException error) {
             if (delivered.compareAndSet(false, true)) {
                 callback.onFailure(connected.asBinder().isBinderAlive()

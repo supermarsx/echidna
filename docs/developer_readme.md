@@ -85,8 +85,11 @@ Key consequences of the in-app topology:
   plus a `project(":service").projectDir = file("../control-service/service")` redirect in
   `android/app/settings.gradle.kts`. The app declares `implementation(project(":service"))`, so the
   APK bundles `EchidnaControlService`, the canonical AIDL, and the `echidna_control_jni` native lib.
-- The **canonical AIDL lives only** in `android/control-service/service/src/main/aidl/`. The app's
-  old divergent copy was deleted; the app compiles against the library's complete interface.
+- The privileged control AIDL lives only in
+  `android/control-service/service/src/main/aidl/`; the app's old divergent copy was deleted. The
+  narrow exported policy-provider AIDL is mirrored into `android/lsposed-shim` because the shim is a
+  separate build. Its method order is append-only and an automated contract check keeps both copies
+  identical.
 - The old phantom `ServiceManager` binder (`echidna_control` / `IControlService` / `getAppConfig`)
   remains removed. The current `PolicySnapshotService` is a real explicit component with a separate
   narrow AIDL: it is exported only for read-only, caller-UID/process-authenticated LSPosed policy.
@@ -435,7 +438,10 @@ LSPosed does not use that socket. It explicitly binds exported read-only `Policy
 the provider binds `Binder.getCallingUid()` to the same published package/user/signing identity and
 pins PID plus the callback Binder to one registration incarnation. It returns an exact/base scoped
 view. Bounded listeners carry generation invalidations only. The shim fetches the new snapshot,
-rejects rollback/conflict, and preserves original audio if policy changes in-flight.
+rejects rollback/conflict, and preserves original audio if policy changes in-flight. Provider API
+v7 makes every PID-bound capability, telemetry, proof, and drain report synchronous only through
+UID/PID validation and bounded queue admission. Signing and proof verification remain offloaded.
+Retained v2-v6 one-way report transactions cannot supply a caller PID and therefore fail closed.
 
 Do not assign one process to both capture owners. The policy schema permits only `zygisk` or
 `lsposed`, and each consumer requires its own owner before processing.

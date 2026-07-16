@@ -245,7 +245,11 @@ the private identity table.
   binds `Binder.getCallingUid()` to the same current published identity and pins PID plus the live
   callback Binder to one registration incarnation. It returns only the exact/base process view.
   Bounded listeners receive generation invalidations, then fetch the newest scoped document. They
-  never receive mutation authority.
+  never receive mutation authority. Provider API v7 uses synchronous Binder transactions for the
+  PID-bound capability, telemetry, proof, and drain reports. Those transactions only capture and
+  validate UID/PID and enqueue bounded work; signing and proof verification stay off Binder threads.
+  The retained v2-v6 one-way transactions fail closed because Android does not provide a caller PID
+  for one-way calls.
 - A socket LSPosed hello is closed, and an unnegotiated legacy socket reader receives one inert
   fail-closed document before disconnect. The old filesystem endpoint
   `/data/local/tmp/echidna_profiles.sock` is not used.

@@ -44,7 +44,7 @@ public final class ProfileSyncReceiverCapabilityTest {
 
     @Test
     public void supportedProviderRunsOffCallerAndRedispatchesOneShotResult() throws Exception {
-        RecordingProvider provider = new RecordingProvider(6L);
+        RecordingProvider provider = new RecordingProvider(7L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             long callerThread = Thread.currentThread().getId();
@@ -55,6 +55,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertTrue(callback.completed.await(3, TimeUnit.SECONDS));
 
             assertEquals(1, provider.requestCount.get());
+            assertEquals(0, provider.legacyCapabilityCount.get());
             assertEquals(77, provider.sessionId);
             assertEquals(9L, provider.generation);
             assertEquals("com.example.recorder", provider.processName);
@@ -70,8 +71,29 @@ public final class ProfileSyncReceiverCapabilityTest {
     }
 
     @Test
+    public void rejectedV7CapabilityBoundaryFailsClosedWithoutLegacyFallback() throws Exception {
+        RecordingProvider provider = new RecordingProvider(7L);
+        ProfileSyncReceiver receiver = connectedReceiver(provider);
+        try {
+            provider.acceptV7Boundary = false;
+            RecordingCallback callback = new RecordingCallback();
+
+            assertTrue(receiver.requestLegacyPreprocessorCapability(
+                    177, 19L, nonce(10), callback));
+            assertTrue(callback.completed.await(3, TimeUnit.SECONDS));
+            assertEquals("request_rejected", callback.failure.get());
+            assertFalse(callback.resultDelivered.get());
+            assertEquals(0, provider.requestCount.get());
+            assertEquals(0, provider.legacyCapabilityCount.get());
+            assertTrue(provider.unregistered.await(3, TimeUnit.SECONDS));
+        } finally {
+            shutdown(receiver);
+        }
+    }
+
+    @Test
     public void providerBelowHandoffVersionNeverBecomesCapabilitySource() throws Exception {
-        RecordingProvider provider = new RecordingProvider(5L);
+        RecordingProvider provider = new RecordingProvider(6L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             RecordingCallback callback = new RecordingCallback();
@@ -91,7 +113,7 @@ public final class ProfileSyncReceiverCapabilityTest {
     @Test
     public void versionFourProviderReceivesOwnedNonceBoundTelemetryOffCallerThread()
             throws Exception {
-        RecordingProvider provider = new RecordingProvider(6L);
+        RecordingProvider provider = new RecordingProvider(7L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             long callerThread = Thread.currentThread().getId();
@@ -105,6 +127,8 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertTrue(provider.telemetryReported.await(3, TimeUnit.SECONDS));
 
             assertEquals(1, provider.telemetryCount.get());
+            assertEquals(0, provider.legacyV4TelemetryCount.get());
+            assertEquals(0, provider.legacyTelemetryCount.get());
             assertEquals(79, provider.sessionId);
             assertEquals(11L, provider.generation);
             assertEquals("com.example.recorder", provider.processName);
@@ -119,7 +143,7 @@ public final class ProfileSyncReceiverCapabilityTest {
     @Test
     public void providerBelowHandoffVersionCannotSendLegacyTelemetry()
             throws Exception {
-        RecordingProvider provider = new RecordingProvider(5L);
+        RecordingProvider provider = new RecordingProvider(6L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             assertTrue(receiver.reportLegacyPreprocessorTelemetry(
@@ -134,7 +158,7 @@ public final class ProfileSyncReceiverCapabilityTest {
 
     @Test
     public void versionFiveProviderReceivesOwnedProofWithoutNonceDowngrade() throws Exception {
-        RecordingProvider provider = new RecordingProvider(6L);
+        RecordingProvider provider = new RecordingProvider(7L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             byte[] proof = new byte[112];
@@ -147,6 +171,8 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertEquals(1, provider.proofCount.get());
             assertEquals(0, provider.telemetryCount.get());
             assertEquals(0, provider.legacyTelemetryCount.get());
+            assertEquals(0, provider.legacyV4TelemetryCount.get());
+            assertEquals(0, provider.legacyV5ProofCount.get());
             assertEquals(0x45, provider.telemetrySnapshot[0]);
         } finally {
             shutdown(receiver);
@@ -155,7 +181,7 @@ public final class ProfileSyncReceiverCapabilityTest {
 
     @Test
     public void providerBelowHandoffVersionNeverReceivesV2Proof() throws Exception {
-        RecordingProvider provider = new RecordingProvider(5L);
+        RecordingProvider provider = new RecordingProvider(6L);
         ProfileSyncReceiver receiver = connectedReceiver(provider);
         try {
             assertTrue(receiver.reportLegacyPreprocessorTelemetry(
@@ -171,13 +197,13 @@ public final class ProfileSyncReceiverCapabilityTest {
     }
 
     @Test
-    public void revokeAndProviderDeathStayFailClosedUntilApiSixReregistrationFetchesPolicy()
+    public void revokeAndProviderDeathStayFailClosedUntilApiSevenReregistrationFetchesPolicy()
             throws Exception {
         ProfileSnapshotStore store = ProfileSnapshotStore.getInstance();
         store.resetForTests();
         ProfileSyncReceiver receiver = startedReceiver(store);
         try {
-            RecordingProvider first = new RecordingProvider(6L);
+            RecordingProvider first = new RecordingProvider(7L);
             first.policyPayload = policyPayload(1L);
             CountDownLatch firstFetch = first.expectPolicyFetch();
             ServiceConnection firstConnection = connect(receiver, first);
@@ -186,7 +212,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertTrue(firstFetch.await(3, TimeUnit.SECONDS));
             awaitExecutorIdle(receiver);
             assertEquals(1, first.captureRegistrationCount.get());
-            assertEquals(6L, first.captureClientApiVersion);
+            assertEquals(7L, first.captureClientApiVersion);
             assertEquals("com.example.recorder", first.captureProcessName);
             assertNotNull(first.captureListener);
             assertEquals(1L, store.getSnapshot().generation());
@@ -199,7 +225,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertEquals(1, first.unregisterCount.get());
             assertFalse(store.getSnapshot().isValid());
 
-            RecordingProvider second = new RecordingProvider(6L);
+            RecordingProvider second = new RecordingProvider(7L);
             CountDownLatch emptyFetch = second.expectPolicyFetch();
             connect(receiver, second);
             assertTrue(second.captureRegistrationAttempted.await(3, TimeUnit.SECONDS));
@@ -224,14 +250,14 @@ public final class ProfileSyncReceiverCapabilityTest {
     }
 
     @Test
-    public void apiFiveHandshakeCannotFetchPolicyRequestCapabilityOrReportDrainAck()
+    public void apiSixHandshakeCannotFetchPolicyRequestCapabilityOrReportDrainAck()
             throws Exception {
         ProfileSnapshotStore store = ProfileSnapshotStore.getInstance();
         store.resetForTests();
         store.update(ProfileSnapshot.parse(policyPayload(1L)));
         ProfileSyncReceiver receiver = startedReceiver(store);
         try {
-            RecordingProvider provider = new RecordingProvider(5L);
+            RecordingProvider provider = new RecordingProvider(6L);
             provider.policyPayload = policyPayload(2L);
             connect(receiver, provider);
 
@@ -249,7 +275,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertEquals("unavailable", callback.failure.get());
             assertEquals(0, provider.requestCount.get());
 
-            // No v6 registration exists, so there is no current endpoint to report through.
+            // No v7 registration exists, so there is no current endpoint to report through.
             awaitExecutorIdle(receiver);
             assertEquals(0, provider.inactiveReportCount.get());
         } finally {
@@ -266,7 +292,7 @@ public final class ProfileSyncReceiverCapabilityTest {
         ProfileSyncReceiver receiver = startedReceiver(store);
         long callbackThread = Thread.currentThread().getId();
         try {
-            RecordingProvider first = new RecordingProvider(6L);
+            RecordingProvider first = new RecordingProvider(7L);
             first.policyPayload = policyPayload(1L);
             CountDownLatch firstFetch = first.expectPolicyFetch();
             ServiceConnection firstConnection = connect(receiver, first);
@@ -287,7 +313,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             assertNotEquals(callbackThread, first.unregisterThread.get());
             assertNotEquals(callbackThread, bindingAdapter(receiver).unbindThread.get());
 
-            RecordingProvider second = new RecordingProvider(6L);
+            RecordingProvider second = new RecordingProvider(7L);
             second.policyPayload = policyPayload(2L);
             CountDownLatch secondFetch = second.expectPolicyFetch();
             connect(receiver, second);
@@ -315,6 +341,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             currentDrain.completion.onDrained(2L, 201L);
             awaitExecutorIdle(receiver);
             assertEquals(1, second.inactiveReportCount.get());
+            assertEquals(0, second.legacyInactiveReportCount.get());
             assertEquals(2L, second.inactiveGeneration);
             assertEquals(201L, second.inactiveHandoffToken);
 
@@ -341,7 +368,7 @@ public final class ProfileSyncReceiverCapabilityTest {
         store.resetForTests();
         ProfileSyncReceiver receiver = startedReceiver(store);
         try {
-            RecordingProvider first = new RecordingProvider(6L);
+            RecordingProvider first = new RecordingProvider(7L);
             first.policyPayload = policyPayload(1L);
             first.deferCapability = true;
             CountDownLatch firstFetch = first.expectPolicyFetch();
@@ -357,7 +384,7 @@ public final class ProfileSyncReceiverCapabilityTest {
 
             firstConnection.onServiceDisconnected(POLICY_COMPONENT);
             assertTrue(first.unregistered.await(3, TimeUnit.SECONDS));
-            RecordingProvider second = new RecordingProvider(6L);
+            RecordingProvider second = new RecordingProvider(7L);
             second.policyPayload = policyPayload(2L);
             CountDownLatch secondFetch = second.expectPolicyFetch();
             connect(receiver, second);
@@ -380,7 +407,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             throws Exception {
         ProfileSyncReceiver receiver = startedReceiver(ProfileSnapshotStore.getInstance());
         connect(receiver, provider);
-        if (provider.apiVersion >= 6L) {
+        if (provider.apiVersion >= 7L) {
             assertTrue(provider.captureRegistrationAttempted.await(3, TimeUnit.SECONDS));
         } else {
             assertTrue(provider.apiVersionRead.await(3, TimeUnit.SECONDS));
@@ -592,7 +619,11 @@ public final class ProfileSyncReceiverCapabilityTest {
         volatile byte[] nonce;
         final AtomicInteger telemetryCount = new AtomicInteger();
         final AtomicInteger proofCount = new AtomicInteger();
+        final AtomicInteger legacyCapabilityCount = new AtomicInteger();
         final AtomicInteger legacyTelemetryCount = new AtomicInteger();
+        final AtomicInteger legacyV4TelemetryCount = new AtomicInteger();
+        final AtomicInteger legacyV5ProofCount = new AtomicInteger();
+        final AtomicInteger legacyInactiveReportCount = new AtomicInteger();
         final AtomicLong telemetryThread = new AtomicLong(-1L);
         volatile byte[] telemetrySnapshot;
         volatile byte[] telemetryNonce;
@@ -614,6 +645,7 @@ public final class ProfileSyncReceiverCapabilityTest {
         volatile long inactiveGeneration;
         volatile long inactiveHandoffToken;
         volatile boolean deferCapability;
+        volatile boolean acceptV7Boundary = true;
         volatile IEchidnaCapabilityCallback pendingCapabilityCallback;
 
         RecordingProvider(long apiVersion) {
@@ -657,15 +689,25 @@ public final class ProfileSyncReceiverCapabilityTest {
             captureClientApiVersion = clientApiVersion;
             captureListener = listener;
             captureRegistrationAttempted.countDown();
-            return apiVersion >= 6L;
+            return apiVersion >= 7L;
         }
 
         @Override
         public void reportCaptureOwnerInactive(
                 String processName, long generation, long handoffToken) {
+            legacyInactiveReportCount.incrementAndGet();
+        }
+
+        @Override
+        public boolean reportCaptureOwnerInactiveV7(
+                String processName, long generation, long handoffToken) {
+            if (!acceptV7Boundary) {
+                return false;
+            }
             inactiveReportCount.incrementAndGet();
             inactiveGeneration = generation;
             inactiveHandoffToken = handoffToken;
+            return true;
         }
 
         CountDownLatch expectPolicyFetch() {
@@ -681,6 +723,19 @@ public final class ProfileSyncReceiverCapabilityTest {
                 long requestedGeneration,
                 byte[] requestedNonce,
                 IEchidnaCapabilityCallback callback) throws android.os.RemoteException {
+            legacyCapabilityCount.incrementAndGet();
+        }
+
+        @Override
+        public boolean requestLegacyPreprocessorCapabilityV7(
+                int audioSessionId,
+                String requestedProcess,
+                long requestedGeneration,
+                byte[] requestedNonce,
+                IEchidnaCapabilityCallback callback) throws android.os.RemoteException {
+            if (!acceptV7Boundary) {
+                return false;
+            }
             requestThread.set(Thread.currentThread().getId());
             requestCount.incrementAndGet();
             sessionId = audioSessionId;
@@ -690,11 +745,12 @@ public final class ProfileSyncReceiverCapabilityTest {
             if (deferCapability) {
                 pendingCapabilityCallback = callback;
                 capabilityRequested.countDown();
-                return;
+                return true;
             }
             capabilityRequested.countDown();
             callback.onCapabilityResult(
                     0, requestedGeneration, new byte[] {4, 5, 6}, "accepted");
+            return true;
         }
 
         @Override
@@ -713,6 +769,19 @@ public final class ProfileSyncReceiverCapabilityTest {
                 long requestedGeneration,
                 byte[] capabilityNonce,
                 byte[] snapshot) {
+            legacyV4TelemetryCount.incrementAndGet();
+        }
+
+        @Override
+        public boolean reportLegacyPreprocessorTelemetryV7(
+                int audioSessionId,
+                String requestedProcess,
+                long requestedGeneration,
+                byte[] capabilityNonce,
+                byte[] snapshot) {
+            if (!acceptV7Boundary) {
+                return false;
+            }
             telemetryThread.set(Thread.currentThread().getId());
             telemetryCount.incrementAndGet();
             sessionId = audioSessionId;
@@ -721,6 +790,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             telemetryNonce = capabilityNonce.clone();
             telemetrySnapshot = snapshot.clone();
             telemetryReported.countDown();
+            return true;
         }
 
         @Override
@@ -729,6 +799,18 @@ public final class ProfileSyncReceiverCapabilityTest {
                 String requestedProcess,
                 long requestedGeneration,
                 byte[] proof) {
+            legacyV5ProofCount.incrementAndGet();
+        }
+
+        @Override
+        public boolean reportLegacyPreprocessorTelemetryProofV7(
+                int audioSessionId,
+                String requestedProcess,
+                long requestedGeneration,
+                byte[] proof) {
+            if (!acceptV7Boundary) {
+                return false;
+            }
             telemetryThread.set(Thread.currentThread().getId());
             proofCount.incrementAndGet();
             sessionId = audioSessionId;
@@ -736,6 +818,7 @@ public final class ProfileSyncReceiverCapabilityTest {
             generation = requestedGeneration;
             telemetrySnapshot = proof.clone();
             proofReported.countDown();
+            return true;
         }
     }
 

@@ -229,6 +229,7 @@ class PolicySnapshotService : Service() {
             if (listener == null || !isCaptureOwnerClientApiSupported(clientApiVersion)) return false
             val uid = Binder.getCallingUid()
             val pid = Binder.getCallingPid()
+            if (pid <= 0) return false
             val authorized = authorizeCapabilityCaller(uid, processName) ?: return false
             val ownedProcess = processName!!
             val endpoint = BinderLsposedEndpoint(
@@ -533,6 +534,297 @@ class PolicySnapshotService : Service() {
                 // One-way proof ingestion is best effort and must not block Binder threads.
             }
         }
+
+        override fun requestLegacyPreprocessorCapabilityV7(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            nonce: ByteArray?,
+            callback: IEchidnaCapabilityCallback?,
+        ): Boolean = requestLegacyPreprocessorCapabilityV7(
+            Binder.getCallingUid(),
+            Binder.getCallingPid(),
+            audioSessionId,
+            processName,
+            generation,
+            nonce,
+            callback,
+        )
+
+        override fun reportLegacyPreprocessorTelemetryV7(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            capabilityNonce: ByteArray?,
+            snapshot: ByteArray?,
+        ): Boolean = reportLegacyPreprocessorTelemetryV7(
+            Binder.getCallingUid(),
+            Binder.getCallingPid(),
+            audioSessionId,
+            processName,
+            generation,
+            capabilityNonce,
+            snapshot,
+        )
+
+        override fun reportLegacyPreprocessorTelemetryProofV7(
+            audioSessionId: Int,
+            processName: String?,
+            generation: Long,
+            proof: ByteArray?,
+        ): Boolean = reportLegacyPreprocessorTelemetryProofV7(
+            Binder.getCallingUid(),
+            Binder.getCallingPid(),
+            audioSessionId,
+            processName,
+            generation,
+            proof,
+        )
+
+        override fun reportCaptureOwnerInactiveV7(
+            processName: String?,
+            generation: Long,
+            handoffToken: Long,
+        ): Boolean = acknowledgeCaptureOwnerInactiveV7(
+            Binder.getCallingUid(),
+            Binder.getCallingPid(),
+            processName,
+            generation,
+            handoffToken,
+        )
+    }
+
+    private fun acknowledgeCaptureOwnerInactiveV7(
+        callingUid: Int,
+        callingPid: Int,
+        processName: String?,
+        generation: Long,
+        handoffToken: Long,
+    ): Boolean {
+        if (callingPid <= 0 || generation <= 0L || handoffToken <= 0L) return false
+        if (authorizeCapabilityCaller(callingUid, processName) == null) return false
+        val ownedProcess = processName ?: return false
+        val endpoint = currentHandoffEndpoint(callingUid, callingPid, ownedProcess) ?: return false
+        return handoffCoordinator.acknowledgeLsposedInactive(
+            endpoint,
+            ownedProcess,
+            generation,
+            handoffToken,
+        )
+    }
+
+    private fun requestLegacyPreprocessorCapabilityV7(
+        callingUid: Int,
+        callingPid: Int,
+        audioSessionId: Int,
+        processName: String?,
+        generation: Long,
+        nonce: ByteArray?,
+        callback: IEchidnaCapabilityCallback?,
+    ): Boolean {
+        if (callback == null) return false
+        val authorized = if (callingPid > 0) {
+            authorizeCapabilityCaller(callingUid, processName)
+        } else {
+            null
+        }
+        val endpoint = if (authorized != null) {
+            currentHandoffEndpoint(callingUid, callingPid, processName!!)
+        } else {
+            null
+        }
+        if (authorized == null || endpoint == null) {
+            notifyCapability(
+                callback,
+                LegacyCapabilityResult(
+                    LegacyCapabilityStatus.DENIED,
+                    generation,
+                    diagnostic = LegacyCapabilityDiagnostic.CALLER_UNAUTHORIZED,
+                ),
+            )
+            return false
+        }
+        val request = LegacyCapabilityRequest(
+            uid = callingUid,
+            packageName = authorized.identity.packageName,
+            processName = processName!!,
+            audioSessionId = audioSessionId,
+            generation = generation,
+            nonce = nonce?.clone() ?: ByteArray(0),
+        )
+        capabilityIssuer.request(
+            request,
+            object : LegacyCapabilityResultSink {
+                override fun isAlive(): Boolean = callback.asBinder().isBinderAlive &&
+                    currentHandoffEndpoint(
+                        callingUid,
+                        callingPid,
+                        request.processName,
+                    ) === endpoint
+
+                override fun complete(result: LegacyCapabilityResult) {
+                    if (
+                        !callback.asBinder().isBinderAlive ||
+                        currentHandoffEndpoint(
+                            callingUid,
+                            callingPid,
+                            request.processName,
+                        ) !== endpoint
+                    ) {
+                        return
+                    }
+                    if (result.status == LegacyCapabilityStatus.OK) {
+                        val currentPolicy = handoffCoordinator.capabilityPolicy(
+                            endpoint,
+                            request.packageName,
+                            request.processName,
+                            System.currentTimeMillis(),
+                        )
+                        if (currentPolicy?.generation != result.generation) {
+                            notifyCapability(
+                                callback,
+                                LegacyCapabilityResult(
+                                    LegacyCapabilityStatus.STALE,
+                                    result.generation,
+                                    diagnostic = LegacyCapabilityDiagnostic.STALE_GENERATION,
+                                ),
+                            )
+                            return
+                        }
+                        issuanceLedger.record(callingPid, request, result)
+                    }
+                    notifyCapability(callback, result)
+                }
+            },
+            requestPolicySource = { requestedPackage, requestedProcess ->
+                handoffCoordinator.capabilityPolicy(
+                    endpoint,
+                    requestedPackage,
+                    requestedProcess,
+                    System.currentTimeMillis(),
+                )
+            },
+        )
+        return true
+    }
+
+    private fun reportLegacyPreprocessorTelemetryV7(
+        callingUid: Int,
+        callingPid: Int,
+        audioSessionId: Int,
+        processName: String?,
+        generation: Long,
+        capabilityNonce: ByteArray?,
+        snapshot: ByteArray?,
+    ): Boolean {
+        if (callingPid <= 0) return false
+        val receivedAtMs = SystemClock.elapsedRealtime()
+        val authorized = authorizeCapabilityCaller(callingUid, processName) ?: return false
+        val packageName = authorized.identity.packageName
+        val ownedProcess = processName ?: return false
+        val endpoint = currentHandoffEndpoint(callingUid, callingPid, ownedProcess) ?: return false
+        if (
+            packageName != ownedProcess.substringBefore(':') ||
+            capabilityNonce == null ||
+            capabilityNonce.size != PREPROCESSOR_TELEMETRY_CAPABILITY_NONCE_BYTES ||
+            snapshot == null || snapshot.size != PREPROCESSOR_TELEMETRY_VALUE_BYTES ||
+            !isCurrentLsposedOwner(
+                endpoint,
+                callingUid,
+                callingPid,
+                packageName,
+                ownedProcess,
+                generation,
+            )
+        ) {
+            return false
+        }
+        val ownedNonce = capabilityNonce.clone()
+        val ownedSnapshot = snapshot.clone()
+        return try {
+            telemetryExecutor.execute {
+                if (!isCurrentLsposedOwner(
+                        endpoint,
+                        callingUid,
+                        callingPid,
+                        packageName,
+                        ownedProcess,
+                        generation,
+                    )) {
+                    return@execute
+                }
+                telemetryRelay.report(
+                    callingUid,
+                    callingPid,
+                    ownedProcess,
+                    audioSessionId,
+                    generation,
+                    ownedNonce,
+                    ownedSnapshot,
+                    receivedAtMs,
+                )
+            }
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
+    }
+
+    private fun reportLegacyPreprocessorTelemetryProofV7(
+        callingUid: Int,
+        callingPid: Int,
+        audioSessionId: Int,
+        processName: String?,
+        generation: Long,
+        proof: ByteArray?,
+    ): Boolean {
+        if (callingPid <= 0) return false
+        val receivedAtMs = SystemClock.elapsedRealtime()
+        val authorized = authorizeCapabilityCaller(callingUid, processName) ?: return false
+        val packageName = authorized.identity.packageName
+        val ownedProcess = processName ?: return false
+        val endpoint = currentHandoffEndpoint(callingUid, callingPid, ownedProcess) ?: return false
+        if (
+            packageName != ownedProcess.substringBefore(':') ||
+            proof == null || proof.size != PREPROCESSOR_TELEMETRY_PROOF_VALUE_BYTES ||
+            !isCurrentLsposedOwner(
+                endpoint,
+                callingUid,
+                callingPid,
+                packageName,
+                ownedProcess,
+                generation,
+            )
+        ) {
+            return false
+        }
+        val ownedProof = proof.clone()
+        return try {
+            telemetryExecutor.execute {
+                if (!isCurrentLsposedOwner(
+                        endpoint,
+                        callingUid,
+                        callingPid,
+                        packageName,
+                        ownedProcess,
+                        generation,
+                    )) {
+                    return@execute
+                }
+                telemetryRelay.reportProof(
+                    callingUid,
+                    callingPid,
+                    ownedProcess,
+                    audioSessionId,
+                    generation,
+                    ownedProof,
+                    receivedAtMs,
+                )
+            }
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
     }
 
     private fun authorizeCaller(processName: String?): String? {
@@ -546,6 +838,7 @@ class PolicySnapshotService : Service() {
         pid: Int,
         processName: String,
     ): BinderLsposedEndpoint? {
+        if (pid <= 0) return null
         val endpoint = synchronized(registrationLock) {
             (handoffEndpoints.values + pendingHandoffEndpoints.values).singleOrNull { endpoint ->
             endpoint.uid == uid && endpoint.pid == pid && endpoint.processName == processName
