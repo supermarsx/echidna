@@ -356,7 +356,6 @@ jobs:
       - android
       - smoke-tests
       - android-unit-tests
-      - instrumentation-tests
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write

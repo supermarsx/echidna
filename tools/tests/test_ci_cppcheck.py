@@ -11,6 +11,19 @@ SUPPRESSIONS = REPO_ROOT / ".cppcheck-suppressions"
 
 
 class CppcheckCiContractTest(unittest.TestCase):
+    def test_non_blocking_instrumentation_does_not_gate_release(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        instrumentation_start = workflow.index("  instrumentation-tests:")
+        release_start = workflow.index("  release:", instrumentation_start)
+        instrumentation_job = workflow[instrumentation_start:release_start]
+        release_job = workflow[release_start:]
+
+        self.assertIn("continue-on-error: true", instrumentation_job)
+        needs_start = release_job.index("    needs:")
+        needs_end = release_job.index("    if:", needs_start)
+        release_needs = release_job[needs_start:needs_end]
+        self.assertNotIn("- instrumentation-tests", release_needs)
+
     def test_cppcheck_is_blocking(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         start = workflow.index("- name: Run cppcheck on native sources")
