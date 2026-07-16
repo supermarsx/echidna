@@ -17,6 +17,7 @@ SEPOLICY = REPO_ROOT / "magisk" / "sepolicy.rule"
 PACKAGER = REPO_ROOT / "tools" / "build_magisk_module.sh"
 ZYGISK_STATUS = REPO_ROOT / "magisk" / "common" / "zygisk-status.sh"
 TRUST_BOOTSTRAP = REPO_ROOT / "magisk" / "common" / "trust-bootstrap.sh"
+TELEMETRY_KEY_LABEL = REPO_ROOT / "magisk" / "common" / "telemetry-key-label.sh"
 
 
 class MagiskContractsTest(unittest.TestCase):
@@ -49,6 +50,72 @@ class MagiskContractsTest(unittest.TestCase):
         packager = PACKAGER.read_text(encoding="utf-8")
         self.assertIn('"${TEMPLATE_DIR}/common/zygisk-status.sh"', packager)
         self.assertIn('"${OUT_DIR}/common/zygisk-status.sh"', packager)
+
+    def test_effect_key_policy_is_dedicated_and_read_only(self) -> None:
+        policy = executable_lines(SEPOLICY)
+        post_fs = executable_lines(POST_FS)
+
+        self.assertIn("type echidna_telemetry_key_file", policy)
+        self.assertIn("typeattribute echidna_telemetry_key_file file_type", policy)
+        self.assertIn(
+            "allow audioserver echidna_telemetry_key_file file { getattr open read }",
+            policy,
+        )
+        self.assertIn(
+            "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
+            policy,
+        )
+        for live_rule in (
+            'magiskpolicy --live "type echidna_telemetry_key_file"',
+            'magiskpolicy --live "typeattribute echidna_telemetry_key_file file_type"',
+            (
+                'magiskpolicy --live "allow audioserver echidna_telemetry_key_file '
+                'file { getattr open read }"'
+            ),
+            (
+                'magiskpolicy --live "allow hal_audio_server echidna_telemetry_key_file '
+                'file { getattr open read }"'
+            ),
+        ):
+            self.assertIn(live_rule, post_fs)
+        for broad_target in (
+            "system_file",
+            "vendor_file",
+            "system_configs_file",
+            "vendor_configs_file",
+        ):
+            with self.subTest(target=broad_target):
+                self.assertNotIn(f"hal_audio_server {broad_target}", policy)
+                self.assertNotIn(f"audioserver {broad_target}", policy)
+        key_allow_lines = [
+            line
+            for line in policy.splitlines()
+            if line.startswith("allow ") and " echidna_telemetry_key_file " in line
+        ]
+        self.assertEqual(2, len(key_allow_lines))
+        for line in key_allow_lines:
+            self.assertNotRegex(line, r"\b(?:write|append|execute|map|create|unlink)\b")
+        self.assertNotIn("permissive ", policy)
+
+        self.assertLess(
+            post_fs.rfind("\napply_sepolicy"),
+            post_fs.rfind("\nif ! prepare_effect_telemetry_key"),
+        )
+        self.assertLess(
+            post_fs.rfind("\nif ! prepare_effect_telemetry_key"),
+            post_fs.rfind("\nactivate_preprocessor_registration"),
+        )
+
+    def test_packager_and_runtime_require_effect_key_label_helper(self) -> None:
+        self.assertTrue(TELEMETRY_KEY_LABEL.is_file())
+        packager = PACKAGER.read_text(encoding="utf-8")
+        customize = CUSTOMIZE.read_text(encoding="utf-8")
+        post_fs = POST_FS.read_text(encoding="utf-8")
+        trust = TRUST_BOOTSTRAP.read_text(encoding="utf-8")
+        for source in (packager, customize, post_fs, trust):
+            self.assertIn("telemetry-key-label.sh", source)
+        self.assertIn("echidna_prepare_effect_telemetry_key", post_fs)
+        self.assertIn("echidna_prepare_effect_telemetry_key", trust)
 
     def test_packager_requires_release_pin_and_dex_trust_helper(self) -> None:
         self.assertTrue(TRUST_BOOTSTRAP.is_file())

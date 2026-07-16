@@ -24,6 +24,7 @@ TELEMETRY_BIN="$TMP_DIR/echidna_telemetry.bin"
 REGION_BYTES=65536
 ZYGISK_STATUS_HELPER="$MODDIR/common/zygisk-status.sh"
 EFFECT_ACTIVATION="$MODDIR/common/effect-activation.sh"
+TELEMETRY_KEY_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
 
 log() {
     echo "[echidna][post-fs] $1"
@@ -153,6 +154,8 @@ apply_sepolicy() {
     magiskpolicy --live "type echidna_telemetry_file" 2>/dev/null || true
     magiskpolicy --live "typeattribute echidna_telemetry_file file_type" 2>/dev/null || true
     magiskpolicy --live "typeattribute echidna_telemetry_file data_file_type" 2>/dev/null || true
+    magiskpolicy --live "type echidna_telemetry_key_file" 2>/dev/null || true
+    magiskpolicy --live "typeattribute echidna_telemetry_key_file file_type" 2>/dev/null || true
     magiskpolicy --live "allow appdomain shell_data_file dir search" 2>/dev/null || true
     magiskpolicy --live "allow appdomain echidna_config_file dir { search getattr open read }" 2>/dev/null || true
     magiskpolicy --live "allow appdomain echidna_config_file file { getattr open read map }" 2>/dev/null || true
@@ -164,6 +167,19 @@ apply_sepolicy() {
     magiskpolicy --live "allow appdomain echidna_telemetry_file file { getattr open read write append map }" 2>/dev/null || true
     magiskpolicy --live "allow untrusted_app echidna_telemetry_file dir { search getattr open read }" 2>/dev/null || true
     magiskpolicy --live "allow untrusted_app echidna_telemetry_file file { getattr open read write append map }" 2>/dev/null || true
+    magiskpolicy --live "allow audioserver echidna_telemetry_key_file file { getattr open read }" 2>/dev/null || true
+    magiskpolicy --live "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }" 2>/dev/null || true
+}
+
+prepare_effect_telemetry_key() {
+    if [ ! -r "$TELEMETRY_KEY_LABEL_HELPER" ]; then
+        log "Telemetry-key label helper is missing"
+        return 1
+    fi
+    # shellcheck source=../../../magisk/common/telemetry-key-label.sh
+    . "$TELEMETRY_KEY_LABEL_HELPER" || return 1
+    command -v echidna_prepare_effect_telemetry_key >/dev/null 2>&1 || return 1
+    echidna_prepare_effect_telemetry_key "$MODDIR" "" optional
 }
 
 prepare_shared_regions() {
@@ -233,13 +249,19 @@ marker="$(manual_disable_marker 2>/dev/null || true)"
 if [ -n "$marker" ]; then
     engage_failsafe "manual disable marker present at $marker"
 fi
+# Magisk normally loads sepolicy.rule before this script. Reapply the exact
+# policy live for compatible implementations, then label and verify the module
+# backing inode before Magisk exposes module files for this boot.
+apply_sepolicy
+if ! prepare_effect_telemetry_key; then
+    engage_failsafe "effect telemetry key could not be labeled safely"
+fi
 # Magisk invokes this script before mounting module files. Registration is only
 # exposed after the helper validates current-boot stock and staged artifacts.
 activate_preprocessor_registration
 arm_boot_watchdog
 bootstrap
 prepare_tmp
-apply_sepolicy
 prepare_shared_regions
 ensure_permissions
 report_status

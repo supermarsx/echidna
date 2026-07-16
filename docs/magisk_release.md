@@ -124,7 +124,8 @@ common/echidna-trust-helper.jar # module-owned app_process Dex helper (classes.d
 common/release-cert-sha256      # normalized exact companion release signer pin
 common/trust-mode               # production, or an explicit non-production development marker
 common/trust-bootstrap.sh       # late signer/UID/dataDir/SPKI verifier and next-boot pinning
-sepolicy.rule                   # narrow config/telemetry region types and grants
+common/telemetry-key-label.sh   # exact effect-key label/hash/inode fail-closed lifecycle
+sepolicy.rule                   # narrow region and effect-key types/grants
 ```
 
 At install, `customize.sh` maps Magisk's `$ARCH` to the build ABI, copies the matching
@@ -138,7 +139,9 @@ for the in-app control-service JNI (`dlopen` from `/data/adb/modules/echidna/lib
 - **`post-fs-data.sh`** arms the boot watchdog, creates `/data/adb/echidna/{lib,run}`, mirrors
   `libechidna.so` to the JNI search path, and prepares `/data/local/tmp/echidna` (plugin directory
   plus pre-sized config/telemetry region files). It applies dedicated region types and narrow app
-  read/write grants matching `sepolicy.rule`. It does not grant zygote transitions or binder access.
+  read/write grants matching `sepolicy.rule`. Before module-file exposure it also verifies and
+  labels any existing effect HMAC backing inode. A failure removes that derived copy and engages
+  the module failsafe. It does not grant zygote transitions or binder access.
 - **`service.sh`** marks late-start as reached, clears the watchdog, removes transient effect-config
   backing left after Magisk's mount phase, recreates safe runtime permissions, stages
   `libechidna.so`, and invokes trust then inert effect staging nonfatally. Failure leaves the legacy
@@ -158,7 +161,13 @@ pin and SHA-256/key-ID-only metadata live under `trust/state/`. Atomic derived c
 module backing for `/system/etc/echidna/preprocessor_telemetry_hmac.key`. Regular-file drift is
 restored only from the root pin; symlinks, root metadata drift, or a missing root pin with surviving
 derived copies fail closed. Effect backing is replaced by atomic rename after the mount phase, so
-it is a next-boot update and does not hot-replace a currently mounted/loaded inode.
+it is a next-boot update and does not hot-replace a currently mounted/loaded inode. Before trust
+bootstrap reports success, `common/telemetry-key-label.sh` verifies the root-pin hash, 32-byte size,
+root:audio `0440` ownership, stable inode, and exact
+`u:object_r:echidna_telemetry_key_file:s0` context. Early `post-fs-data` repeats that check before
+Magisk exposes the next-boot copy. Only `audioserver` and the standard `hal_audio_server` attribute
+receive `{ getattr open read }`; no app, broad system/vendor file type, write, map, or execute grant
+is added.
 
 ## Default-off legacy effect registration
 

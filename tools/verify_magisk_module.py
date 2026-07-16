@@ -80,6 +80,7 @@ def verify_magisk_zip(
             "service.sh",
             "sepolicy.rule",
             "common/trust-bootstrap.sh",
+            "common/telemetry-key-label.sh",
             "common/effect-registration.sh",
             "common/effect-activation.sh",
             "common/echidna-trust-helper.jar",
@@ -144,6 +145,11 @@ def verify_magisk_zip(
             "common/effect-activation.sh",
         ):
             verify_mode(archive.getinfo(script), 0o755, script)
+        verify_mode(
+            archive.getinfo("common/telemetry-key-label.sh"),
+            0o644,
+            "common/telemetry-key-label.sh",
+        )
         for abi in ABIS:
             verify_preprocessor(archive, abi, dynamic_reader)
 
@@ -153,7 +159,11 @@ def verify_magisk_zip(
         service = read_required(archive, "service.sh").decode("utf-8")
         customize = read_required(archive, "customize.sh").decode("utf-8")
         trust = read_required(archive, "common/trust-bootstrap.sh").decode("utf-8")
-        combined = "\n".join((registration, activation, post_fs, service, customize, trust))
+        key_label = read_required(archive, "common/telemetry-key-label.sh").decode("utf-8")
+        sepolicy = read_required(archive, "sepolicy.rule").decode("utf-8")
+        combined = "\n".join(
+            (registration, activation, post_fs, service, customize, trust, key_label, sepolicy)
+        )
         for token in (
             TYPE_UUID,
             IMPLEMENTATION_UUID,
@@ -196,6 +206,68 @@ def verify_magisk_zip(
                     f"telemetry proof-key provisioning contract is missing {token!r}"
                 )
 
+        exact_key_allows = {
+            "allow audioserver echidna_telemetry_key_file file { getattr open read }",
+            "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
+        }
+        exact_key_declarations = {
+            "type echidna_telemetry_key_file",
+            "typeattribute echidna_telemetry_key_file file_type",
+        }
+        policy_lines = {
+            line.strip()
+            for line in sepolicy.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        if not exact_key_allows.issubset(policy_lines):
+            raise VerificationError(
+                "telemetry key policy must grant exact read-only access to audio effect hosts"
+            )
+        if not exact_key_declarations.issubset(policy_lines):
+            raise VerificationError(
+                "sepolicy.rule must declare the dedicated telemetry key file type"
+            )
+        for line in policy_lines:
+            if line.startswith("permissive ") and (
+                "audio" in line or "echidna" in line
+            ):
+                raise VerificationError(
+                    "telemetry key policy must not make audio domains permissive"
+                )
+            if not line.startswith("allow "):
+                continue
+            if " echidna_telemetry_key_file " in line and line not in exact_key_allows:
+                raise VerificationError(
+                    "telemetry key policy contains a non-reviewed allow: " + line
+                )
+            if re.search(
+                r"^allow\s+(?:audioserver|hal_audio(?:_[A-Za-z0-9_]+)?)\s+"
+                r"(?:system_file|vendor_file|system_configs_file|vendor_configs_file)\b",
+                line,
+            ):
+                raise VerificationError(
+                    "audio effect hosts must not receive broad system/vendor file access"
+                )
+        for token in (
+            "type echidna_telemetry_key_file",
+            "typeattribute echidna_telemetry_key_file file_type",
+            "u:object_r:echidna_telemetry_key_file:s0",
+            "echidna_prepare_effect_telemetry_key",
+            "chcon",
+            "ls -Zd",
+            "root pin",
+            "derived effect key removed",
+        ):
+            if token not in combined:
+                raise VerificationError(
+                    f"telemetry key label contract is missing {token!r}"
+                )
+        for live_rule in exact_key_allows | exact_key_declarations:
+            if f'magiskpolicy --live "{live_rule}"' not in post_fs:
+                raise VerificationError(
+                    f"post-fs live policy fallback is missing {live_rule!r}"
+                )
+
         cleanup = activation.find("cleanup_transient_configs")
         fingerprint = activation.find("current_fingerprint=")
         copy = activation.find('cp "$inert_config"')
@@ -205,12 +277,23 @@ def verify_magisk_zip(
             )
         discard_call = post_fs.rfind("\ndiscard_stale_preprocessor_activation\n")
         marker_call = post_fs.rfind('\nmarker="$(manual_disable_marker')
+        policy_call = post_fs.rfind("\napply_sepolicy\n")
+        key_label_call = post_fs.rfind("\nif ! prepare_effect_telemetry_key; then\n")
         activate_call = post_fs.rfind("\nactivate_preprocessor_registration\n")
         watchdog_call = post_fs.rfind("\narm_boot_watchdog\n")
         cleanup_call = service.rfind("\ncleanup_preprocessor_activation\n")
         staging_call = service.rfind("\nstage_preprocessor_registration\n")
         if discard_call < 0 or marker_call < 0 or discard_call > marker_call:
             raise VerificationError("post-fs-data must discard stale registration before markers")
+        if (
+            policy_call < 0
+            or key_label_call < 0
+            or activate_call < 0
+            or not policy_call < key_label_call < activate_call
+        ):
+            raise VerificationError(
+                "post-fs-data must load policy and label the exact key before registration exposure"
+            )
         if activate_call < 0 or watchdog_call < 0 or activate_call > watchdog_call:
             raise VerificationError("post-fs-data must validate registration before later boot work")
         if cleanup_call < 0 or staging_call < 0 or cleanup_call > staging_call:

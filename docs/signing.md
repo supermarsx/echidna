@@ -99,6 +99,16 @@ from that root pin: an app-UID-owned `0600` file at
 (`AID_AUDIO=1005`) `0440` next-boot backing file for
 `/system/etc/echidna/preprocessor_telemetry_hmac.key`.
 
+Before that backing inode can be exposed by the next Magisk mount, the shared key-label helper
+rechecks its no-symlink regular-file identity, 32-byte length, root-pin hash, owner/mode, and stable
+inode. It applies and verifies the dedicated
+`u:object_r:echidna_telemetry_key_file:s0` type. Policy grants only `{ getattr open read }` to the
+specific `audioserver` domain used by legacy framework-hosted effects and the standard
+`hal_audio_server` attribute used by HIDL/Stable-AIDL audio HAL services. It does not grant access
+to `system_file`, vendor/config types, app domains, or any write, map, or execute permission. A
+missing type, failed relabel, label drift, hash mismatch, or unsafe path removes only the derived
+effect copy and leaves the authoritative root pin intact for explicit restaging.
+
 The app and effect copies are never authorities. Missing, tampered, or metadata-mismatched regular
 copies are restored only from the validated root pin; symlinks are refused. The root pin and its
 root-owned hash metadata must agree, and neither an app nor effect copy may silently replace a
@@ -127,8 +137,9 @@ details under `/data/adb/echidna/trust/status.txt` and
 
 Native consumption is implemented and host-tested: the legacy effect loads the root:audio key and
 signs a capability-incarnation- and nonce-bound ECHT v2 proof, LSPosed relays that proof, and the
-control service verifies its key ID and HMAC before accepting telemetry. Physical-device effect-host
-key access under enforced SELinux and end-to-end transformed-audio evidence remain explicit gates.
+control service verifies its key ID and HMAC before accepting telemetry. Release validation must
+still confirm the exact label, absence of relevant AVCs, and transformed-audio evidence under
+Enforcing SELinux on each supported platform path.
 
 ## Signing-certificate migration
 

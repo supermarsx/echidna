@@ -59,6 +59,30 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             with self.assertRaisesRegex(verifier.VerificationError, "auto-apply"):
                 verifier.verify_magisk_zip(path, self.dynamic_reader)
 
+    def test_rejects_broad_audio_hal_key_policy(self) -> None:
+        broad = self.sepolicy() + (
+            b"\nallow hal_audio_server system_file file { getattr open read }\n"
+        )
+        with self.archive({"sepolicy.rule": broad}) as path:
+            with self.assertRaisesRegex(verifier.VerificationError, "broad system/vendor"):
+                verifier.verify_magisk_zip(path, self.dynamic_reader)
+
+    def test_rejects_type_declared_only_by_live_fallback(self) -> None:
+        allows_only = (
+            b"allow audioserver echidna_telemetry_key_file file { getattr open read }\n"
+            b"allow hal_audio_server echidna_telemetry_key_file file { getattr open read }\n"
+        )
+        with self.archive({"sepolicy.rule": allows_only}) as path:
+            with self.assertRaisesRegex(verifier.VerificationError, "declare the dedicated"):
+                verifier.verify_magisk_zip(path, self.dynamic_reader)
+
+    def test_rejects_missing_exact_key_label_lifecycle(self) -> None:
+        with self.archive(
+            {"common/telemetry-key-label.sh": b"#!/system/bin/sh\nchcon system_file\n"}
+        ) as path:
+            with self.assertRaisesRegex(verifier.VerificationError, "label contract"):
+                verifier.verify_magisk_zip(path, self.dynamic_reader)
+
     def test_rejects_missing_aeli_export(self) -> None:
         with self.archive() as path:
             def missing_aeli(data: bytes, label: str) -> verifier.DynamicInfo:
@@ -84,8 +108,16 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             "customize.sh": (b"#!/system/bin/sh\n$MODDIR/system/vendor\n", 0o755),
             "post-fs-data.sh": (
                 b"#!/system/bin/sh\n"
+                b"magiskpolicy --live \"type echidna_telemetry_key_file\"\n"
+                b"magiskpolicy --live \"typeattribute echidna_telemetry_key_file file_type\"\n"
+                b"magiskpolicy --live \"allow audioserver echidna_telemetry_key_file "
+                b"file { getattr open read }\"\n"
+                b"magiskpolicy --live \"allow hal_audio_server echidna_telemetry_key_file "
+                b"file { getattr open read }\"\n"
                 b"discard_stale_preprocessor_activation\n"
                 b"marker=\"$(manual_disable_marker)\"\n"
+                b"apply_sepolicy\n"
+                b"if ! prepare_effect_telemetry_key; then\nexit 1\nfi\n"
                 b"activate_preprocessor_registration\n"
                 b"arm_boot_watchdog\n",
                 0o755,
@@ -97,8 +129,9 @@ class VerifyMagiskModuleTest(unittest.TestCase):
                 b"staged-next-boot\n",
                 0o755,
             ),
-            "sepolicy.rule": (b"", 0o644),
+            "sepolicy.rule": (self.sepolicy(), 0o644),
             "common/trust-bootstrap.sh": (self.trust_bootstrap(), 0o755),
+            "common/telemetry-key-label.sh": (self.key_label(), 0o644),
             "common/effect-registration.sh": (self.registration(), 0o755),
             "common/effect-activation.sh": (self.activation(), 0o755),
             "common/echidna-trust-helper.jar": (self.helper_jar(), 0o444),
@@ -152,6 +185,29 @@ class VerifyMagiskModuleTest(unittest.TestCase):
             "telemetry_key_sha256\n"
             "telemetry_key_id\n"
             "silent rotation is refused\n"
+            "telemetry-key-label.sh\n"
+            "echidna_prepare_effect_telemetry_key\n"
+        ).encode("utf-8")
+
+    @staticmethod
+    def key_label() -> bytes:
+        return (
+            "#!/system/bin/sh\n"
+            "u:object_r:echidna_telemetry_key_file:s0\n"
+            "echidna_prepare_effect_telemetry_key\n"
+            "chcon\n"
+            "ls -Zd\n"
+            "root pin\n"
+            "derived effect key removed\n"
+        ).encode("utf-8")
+
+    @staticmethod
+    def sepolicy() -> bytes:
+        return (
+            "type echidna_telemetry_key_file\n"
+            "typeattribute echidna_telemetry_key_file file_type\n"
+            "allow audioserver echidna_telemetry_key_file file { getattr open read }\n"
+            "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }\n"
         ).encode("utf-8")
 
     @staticmethod

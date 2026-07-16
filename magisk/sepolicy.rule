@@ -21,6 +21,8 @@ typeattribute echidna_config_file data_file_type
 type echidna_telemetry_file
 typeattribute echidna_telemetry_file file_type
 typeattribute echidna_telemetry_file data_file_type
+type echidna_telemetry_key_file
+typeattribute echidna_telemetry_key_file file_type
 
 # Traverse into /data/local/tmp (the region's parent). Search only: this does
 # not grant reading shell files, only path traversal to the labelled region.
@@ -41,3 +43,11 @@ allow appdomain echidna_telemetry_file dir { search getattr open read }
 allow appdomain echidna_telemetry_file file { getattr open read write append map }
 allow untrusted_app echidna_telemetry_file dir { search getattr open read }
 allow untrusted_app echidna_telemetry_file file { getattr open read write append map }
+
+# Effect telemetry proof key: only audio effect hosts may read the dedicated
+# root:audio 0440 file. audioserver covers legacy framework-loaded effects;
+# hal_audio_server covers HIDL/Stable-AIDL HAL services, including OEM domains
+# carrying that standard server attribute. Parent system directories retain
+# their stock labels and traversal policy.
+allow audioserver echidna_telemetry_key_file file { getattr open read }
+allow hal_audio_server echidna_telemetry_key_file file { getattr open read }

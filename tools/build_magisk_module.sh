@@ -104,6 +104,8 @@ command -v unzip >/dev/null 2>&1 || die "unzip is required to validate the trust
   || die "missing Zygisk status helper at ${TEMPLATE_DIR}/common/zygisk-status.sh"
 [[ -f "${TEMPLATE_DIR}/common/trust-bootstrap.sh" ]] \
   || die "missing trust bootstrap at ${TEMPLATE_DIR}/common/trust-bootstrap.sh"
+[[ -f "${TEMPLATE_DIR}/common/telemetry-key-label.sh" ]] \
+  || die "missing telemetry-key label helper at ${TEMPLATE_DIR}/common/telemetry-key-label.sh"
 [[ -f "${TEMPLATE_DIR}/common/effect-registration.sh" ]] \
   || die "missing effect registration at ${TEMPLATE_DIR}/common/effect-registration.sh"
 [[ -f "${TEMPLATE_DIR}/common/effect-activation.sh" ]] \
@@ -143,6 +145,8 @@ cp "${MAGISK_SCRIPTS_DIR}/post-fs-data.sh" "${OUT_DIR}/post-fs-data.sh"
 cp "${MAGISK_SCRIPTS_DIR}/service.sh" "${OUT_DIR}/service.sh"
 cp "${TEMPLATE_DIR}/common/zygisk-status.sh" "${OUT_DIR}/common/zygisk-status.sh"
 cp "${TEMPLATE_DIR}/common/trust-bootstrap.sh" "${OUT_DIR}/common/trust-bootstrap.sh"
+cp "${TEMPLATE_DIR}/common/telemetry-key-label.sh" \
+  "${OUT_DIR}/common/telemetry-key-label.sh"
 cp "${TEMPLATE_DIR}/common/effect-registration.sh" \
   "${OUT_DIR}/common/effect-registration.sh"
 cp "${TEMPLATE_DIR}/common/effect-activation.sh" \
@@ -155,6 +159,7 @@ chmod 0755 "${OUT_DIR}/customize.sh" "${OUT_DIR}/post-fs-data.sh" \
   "${OUT_DIR}/service.sh" "${OUT_DIR}/META-INF/com/google/android/update-binary"
 chmod 0644 "${OUT_DIR}/LICENSE.md"
 chmod 0644 "${OUT_DIR}/common/zygisk-status.sh"
+chmod 0644 "${OUT_DIR}/common/telemetry-key-label.sh"
 chmod 0755 "${OUT_DIR}/common/trust-bootstrap.sh" \
   "${OUT_DIR}/common/effect-registration.sh" \
   "${OUT_DIR}/common/effect-activation.sh"

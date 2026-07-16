@@ -8,6 +8,7 @@ STATUS_FILE="$STATUS_DIR/status.txt"
 HELPER="$MODDIR/common/echidna-trust-helper.jar"
 EXPECTED_DIGEST="$MODDIR/common/release-cert-sha256"
 TRUST_MODE_FILE="$MODDIR/common/trust-mode"
+TELEMETRY_KEY_LABEL_HELPER="$MODDIR/common/telemetry-key-label.sh"
 PENDING_DIR="$MODDIR/trust/next-boot"
 TRUST_STATE_DIR="$MODDIR/trust/state"
 KEY_NAME="preprocessor_controller_p256.spki"
@@ -60,7 +61,8 @@ fail_closed() {
     return 1
 }
 
-for required in "$HELPER" "$EXPECTED_DIGEST" "$TRUST_MODE_FILE"; do
+for required in "$HELPER" "$EXPECTED_DIGEST" "$TRUST_MODE_FILE" \
+        "$TELEMETRY_KEY_LABEL_HELPER"; do
     if [ ! -f "$required" ] || [ -L "$required" ]; then
         fail_closed "required module trust file missing or unsafe: $required"
         exit 1
@@ -140,6 +142,15 @@ if output="$(ANDROID_DATA=/data CLASSPATH="$HELPER" "$APP_PROCESS" /system/bin \
             || [ "${#telemetry_key_id}" -ne 16 ] \
             || [ "${telemetry_sha256#"$telemetry_key_id"}" = "$telemetry_sha256" ]; then
         fail_closed "helper returned inconsistent telemetry proof-key metadata"
+        exit 1
+    fi
+    # The Java helper writes only the module backing inode. Label and verify it
+    # before declaring success; Magisk exposes the copy on the next module mount.
+    # shellcheck source=telemetry-key-label.sh
+    if ! . "$TELEMETRY_KEY_LABEL_HELPER" \
+            || ! echidna_prepare_effect_telemetry_key \
+                "$MODDIR" "$telemetry_sha256" required; then
+        fail_closed "effect telemetry key SELinux label contract rejected"
         exit 1
     fi
     write_status "$pin_status" \

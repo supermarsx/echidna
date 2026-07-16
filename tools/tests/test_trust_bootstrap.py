@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -27,6 +28,10 @@ TRUST_MAIN = (
     / "magisk"
     / "TrustBootstrapMain.java"
 )
+LABEL_HELPER = REPO_ROOT / "magisk" / "common" / "telemetry-key-label.sh"
+TELEMETRY_KEY_BYTES = b"echidna-telemetry-label-fixture!"
+TELEMETRY_SHA256 = hashlib.sha256(TELEMETRY_KEY_BYTES).hexdigest()
+TELEMETRY_KEY_ID = TELEMETRY_SHA256[:16]
 
 
 class TrustBootstrapTest(unittest.TestCase):
@@ -49,8 +54,8 @@ class TrustBootstrapTest(unittest.TestCase):
                     "echo ECHIDNA_TRUST_V2\n"
                     "echo status=pinned-next-boot\n"
                     "echo telemetry_status=generated-next-boot\n"
-                    f"echo telemetry_key_sha256={'ab' * 32}\n"
-                    f"echo telemetry_key_id={'ab' * 8}\n"
+                    f"echo telemetry_key_sha256={TELEMETRY_SHA256}\n"
+                    f"echo telemetry_key_id={TELEMETRY_KEY_ID}\n"
                     "echo raw_key=telemetry-fixture-secret-must-not-leak\n"
                     "echo reboot_required=true\n"
                 ).encode("utf-8")
@@ -63,7 +68,7 @@ class TrustBootstrapTest(unittest.TestCase):
             self.assertIn("state=pinned-next-boot", status)
             self.assertIn("reboot_required=true", status)
             self.assertIn("telemetry_state=generated-next-boot", status)
-            self.assertIn("telemetry_key_sha256=" + "ab" * 32, status)
+            self.assertIn("telemetry_key_sha256=" + TELEMETRY_SHA256, status)
             self.assertNotIn("telemetry-fixture-secret", status + result.stdout + result.stderr)
             self.assertFalse(
                 (module / "system" / "etc" / "echidna"
@@ -93,8 +98,8 @@ class TrustBootstrapTest(unittest.TestCase):
                         "echo ECHIDNA_TRUST_V2\n"
                         "echo status=active-match\n"
                         "echo telemetry_status=ready\n"
-                        f"echo telemetry_key_sha256={'cd' * 32}\n"
-                        f"echo telemetry_key_id={'cd' * 8}\n"
+                        f"echo telemetry_key_sha256={TELEMETRY_SHA256}\n"
+                        f"echo telemetry_key_id={TELEMETRY_KEY_ID}\n"
                         "echo reboot_required=false\n"
                     ).encode("utf-8")
                 )
@@ -165,6 +170,8 @@ class TrustBootstrapTest(unittest.TestCase):
         self.assertIn("preprocessor_telemetry_hmac.key", bootstrap)
         self.assertIn("--telemetry-root", bootstrap)
         self.assertIn("--telemetry-effect", bootstrap)
+        self.assertIn("telemetry-key-label.sh", bootstrap)
+        self.assertIn("echidna_prepare_effect_telemetry_key", bootstrap)
         fixed = "/system/etc/echidna/preprocessor_controller_p256.spki"
         self.assertIn(fixed, schema)
         self.assertIn("/system/etc/echidna/$KEY_NAME", bootstrap)
@@ -211,14 +218,49 @@ class TrustBootstrapTest(unittest.TestCase):
         (common / "echidna-trust-helper.jar").write_bytes(b"dex-container")
         (common / "release-cert-sha256").write_text("ab" * 32 + "\n", encoding="ascii")
         (common / "trust-mode").write_text(mode + "\n", encoding="ascii")
+        shutil.copyfile(LABEL_HELPER, common / "telemetry-key-label.sh")
+        root_pin = module / "trust" / "state" / "preprocessor_telemetry_hmac.key"
+        effect_key = (
+            module / "system" / "etc" / "echidna" / "preprocessor_telemetry_hmac.key"
+        )
+        root_pin.parent.mkdir(parents=True)
+        effect_key.parent.mkdir(parents=True)
+        root_pin.write_bytes(TELEMETRY_KEY_BYTES)
+        effect_key.write_bytes(TELEMETRY_KEY_BYTES)
         return module
 
     def run_bootstrap(
         self, module: Path, runtime: Path, app_process: Path
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
+        fake_bin = module.parent / "fake-bin"
+        fake_bin.mkdir(exist_ok=True)
+        context_file = module.parent / "telemetry-key-context.txt"
+        fake_commands = {
+            "stat": """#!/bin/sh
+case "$3" in
+  */trust/state/preprocessor_telemetry_hmac.key) echo 0:0:400:1:10 ;;
+  */system/etc/echidna/preprocessor_telemetry_hmac.key) echo 0:1005:440:1:20 ;;
+  *) exit 64 ;;
+esac
+""",
+            "chcon": """#!/bin/sh
+[ "$1" = u:object_r:echidna_telemetry_key_file:s0 ] || exit 64
+printf '%s\n' "$1" > "$FAKE_CONTEXT_FILE"
+""",
+            "ls": """#!/bin/sh
+[ "$1" = -Zd ] || exit 64
+printf '%s %s\n' "$(cat "$FAKE_CONTEXT_FILE")" "$2"
+""",
+        }
+        for name, source in fake_commands.items():
+            command = fake_bin / name
+            command.write_text(source, encoding="utf-8", newline="\n")
+            command.chmod(0o755)
         env["ECHIDNA_RUNTIME_DIR"] = shell_path(runtime)
         env["ECHIDNA_APP_PROCESS"] = shell_path(app_process)
+        env["FAKE_CONTEXT_FILE"] = shell_path(context_file)
+        env["PATH"] = shell_path(fake_bin) + os.pathsep + env.get("PATH", "")
         return subprocess.run(
             [bash_executable(), shell_path(BOOTSTRAP), shell_path(module)],
             cwd=REPO_ROOT,
