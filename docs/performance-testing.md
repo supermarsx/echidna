@@ -37,6 +37,25 @@ versioned. The stable JSON contract is `tools/perf/audio_pipeline_result.schema.
 run the standard-library-only `validate_audio_pipeline_report.py` contract checker after report
 emission; Python 3.10 or newer is required.
 
+The compact post-handoff comparison is tracked as
+`tools/perf/audio_pipeline_post_handoff_comparison.json`. It records report hashes, the exact host
+and methodology, a bundle hash of the production DSP and PCM bridge sources, grouped
+latency/deadline/throughput results, functional audio metrics, and the predeclared
+material-regression policy without committing the large raw reports. Verify that the evidence still
+matches the benchmark, report schema, and production processing sources with:
+
+```powershell
+python tools/perf/compare_audio_pipeline_reports.py verify `
+  tools/perf/audio_pipeline_post_handoff_comparison.json
+```
+
+The compact artifact explicitly records that its historical raw baseline is ignored rather than
+tracked. Its hash makes the local source report identifiable, but it is not a substitute for
+retaining raw CI artifacts or release-device measurements. Non-audio contract metrics, such as an
+intentional public API version advance, require baseline/current values, the source-declared current
+version, and an allowlisted rationale plus change reference; audio metrics remain exact to the
+declared tolerance.
+
 ## Coverage
 
 The broad performance matrix compares:

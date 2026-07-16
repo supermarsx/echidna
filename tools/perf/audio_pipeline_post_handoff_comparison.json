@@ -1,0 +1,2543 @@
+{
+  "audio_checks": [
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 9.999999407,
+        "input_hz": 449.9999994,
+        "max_callback_boundary_jump": 0.02002894878,
+        "mean_abs_delta": 0.2646240527,
+        "output_error_hz": 0.4344281229,
+        "output_hz": 440.4344281,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 8.533333333,
+        "stream_output_error_hz": 0.4072702323,
+        "stream_output_hz": 440.4072702
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 9.999999407,
+        "input_hz": 449.9999994,
+        "max_callback_boundary_jump": 0.02002894878,
+        "mean_abs_delta": 0.2646240527,
+        "output_error_hz": 0.4344281229,
+        "output_hz": 440.4344281,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 8.533333333,
+        "stream_output_error_hz": 0.4072702323,
+        "stream_output_hz": 440.4072702
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_2048",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1379,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.02183997631,
+        "mean_abs_delta": 0.28444245,
+        "output_error_hz": 0.2349889495,
+        "output_hz": 440.2349889,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.002539683,
+        "stream_output_error_hz": 0.4127758877,
+        "stream_output_hz": 440.4127759
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1379,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.02183997631,
+        "mean_abs_delta": 0.28444245,
+        "output_error_hz": 0.2349889495,
+        "output_hz": 440.2349889,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.002539683,
+        "stream_output_error_hz": 0.4127758877,
+        "stream_output_hz": 440.4127759
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_44100hz_128f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1379,
+        "input_error_hz": 10.00000155,
+        "input_hz": 429.9999984,
+        "max_callback_boundary_jump": 0.02190354466,
+        "mean_abs_delta": 0.2759385422,
+        "output_error_hz": 1.470617144,
+        "output_hz": 438.5293829,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.002539683,
+        "stream_output_error_hz": 1.449084755,
+        "stream_output_hz": 438.5509152
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1379,
+        "input_error_hz": 10.00000155,
+        "input_hz": 429.9999984,
+        "max_callback_boundary_jump": 0.02190354466,
+        "mean_abs_delta": 0.2759385422,
+        "output_error_hz": 1.470617144,
+        "output_hz": 438.5293829,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.002539683,
+        "stream_output_error_hz": 1.449084755,
+        "stream_output_hz": 438.5509152
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_44100hz_128f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.0217242837,
+        "mean_abs_delta": 0.2668627421,
+        "output_error_hz": 0.422689649,
+        "output_hz": 440.4226896,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 9.287981859,
+        "stream_output_error_hz": 0.4207802413,
+        "stream_output_hz": 440.4207802
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.0217242837,
+        "mean_abs_delta": 0.2668627421,
+        "output_error_hz": 0.422689649,
+        "output_hz": 440.4226896,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 9.287981859,
+        "stream_output_error_hz": 0.4207802413,
+        "stream_output_hz": 440.4207802
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_44100hz_2048f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 9.999998675,
+        "input_hz": 430.0000013,
+        "max_callback_boundary_jump": 0.02162235975,
+        "mean_abs_delta": 0.2685643273,
+        "output_error_hz": 1.484242149,
+        "output_hz": 438.5157579,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 9.287981859,
+        "stream_output_error_hz": 1.465528247,
+        "stream_output_hz": 438.5344718
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 9.999998675,
+        "input_hz": 430.0000013,
+        "max_callback_boundary_jump": 0.02162235975,
+        "mean_abs_delta": 0.2685643273,
+        "output_error_hz": 1.484242149,
+        "output_hz": 438.5157579,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 9.287981859,
+        "stream_output_error_hz": 1.465528247,
+        "stream_output_hz": 438.5344718
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_44100hz_2048f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 368,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.02164331079,
+        "mean_abs_delta": 0.2876245603,
+        "output_error_hz": 0.2983227483,
+        "output_hz": 440.2983227,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.005442177,
+        "stream_output_error_hz": 0.4077258249,
+        "stream_output_hz": 440.4077258
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 368,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.02164331079,
+        "mean_abs_delta": 0.2876245603,
+        "output_error_hz": 0.2983227483,
+        "output_hz": 440.2983227,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.005442177,
+        "stream_output_error_hz": 0.4077258249,
+        "stream_output_hz": 440.4077258
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_44100hz_480f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 368,
+        "input_error_hz": 10.00000295,
+        "input_hz": 429.9999971,
+        "max_callback_boundary_jump": 0.02185916901,
+        "mean_abs_delta": 0.2698059315,
+        "output_error_hz": 1.418991482,
+        "output_hz": 438.5810085,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.005442177,
+        "stream_output_error_hz": 1.437485601,
+        "stream_output_hz": 438.5625144
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 368,
+        "input_error_hz": 10.00000295,
+        "input_hz": 429.9999971,
+        "max_callback_boundary_jump": 0.02185916901,
+        "mean_abs_delta": 0.2698059315,
+        "output_error_hz": 1.418991482,
+        "output_hz": 438.5810085,
+        "sample_rate_hz": 44100,
+        "stream_duration_seconds": 4.005442177,
+        "stream_output_error_hz": 1.437485601,
+        "stream_output_hz": 438.5625144
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_44100hz_480f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 400,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.01957233995,
+        "mean_abs_delta": 0.2781885522,
+        "output_error_hz": 1.136017315,
+        "output_hz": 441.1360173,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.17877547,
+        "stream_output_hz": 441.1787755
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 400,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.01957233995,
+        "mean_abs_delta": 0.2781885522,
+        "output_error_hz": 1.136017315,
+        "output_hz": 441.1360173,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.17877547,
+        "stream_output_hz": 441.1787755
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_480",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1500,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.02009570599,
+        "mean_abs_delta": 0.2690138991,
+        "output_error_hz": 0.5263969527,
+        "output_hz": 440.526397,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 0.5892135953,
+        "stream_output_hz": 440.5892136
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1500,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.02009570599,
+        "mean_abs_delta": 0.2690138991,
+        "output_error_hz": 0.5263969527,
+        "output_hz": 440.526397,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 0.5892135953,
+        "stream_output_hz": 440.5892136
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_48000hz_128f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1500,
+        "input_error_hz": 10.00000297,
+        "input_hz": 429.999997,
+        "max_callback_boundary_jump": 0.02009385824,
+        "mean_abs_delta": 0.2785520541,
+        "output_error_hz": 1.395359641,
+        "output_hz": 438.6046404,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.445255646,
+        "stream_output_hz": 438.5547444
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 1500,
+        "input_error_hz": 10.00000297,
+        "input_hz": 429.999997,
+        "max_callback_boundary_jump": 0.02009385824,
+        "mean_abs_delta": 0.2785520541,
+        "output_error_hz": 1.395359641,
+        "output_hz": 438.6046404,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.445255646,
+        "stream_output_hz": 438.5547444
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_48000hz_128f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 9.99999913,
+        "input_hz": 430.0000009,
+        "max_callback_boundary_jump": 0.02008518577,
+        "mean_abs_delta": 0.2751890501,
+        "output_error_hz": 1.443102592,
+        "output_hz": 438.5568974,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 8.533333333,
+        "stream_output_error_hz": 1.444725843,
+        "stream_output_hz": 438.5552742
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 9.99999913,
+        "input_hz": 430.0000009,
+        "max_callback_boundary_jump": 0.02008518577,
+        "mean_abs_delta": 0.2751890501,
+        "output_error_hz": 1.443102592,
+        "output_hz": 438.5568974,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 8.533333333,
+        "stream_output_error_hz": 1.444725843,
+        "stream_output_hz": 438.5552742
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_48000hz_2048f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 400,
+        "input_error_hz": 10.00000297,
+        "input_hz": 429.999997,
+        "max_callback_boundary_jump": 0.0200638473,
+        "mean_abs_delta": 0.2735848418,
+        "output_error_hz": 1.435487002,
+        "output_hz": 438.564513,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.441468287,
+        "stream_output_hz": 438.5585317
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 400,
+        "input_error_hz": 10.00000297,
+        "input_hz": 429.999997,
+        "max_callback_boundary_jump": 0.0200638473,
+        "mean_abs_delta": 0.2735848418,
+        "output_error_hz": 1.435487002,
+        "output_hz": 438.564513,
+        "sample_rate_hz": 48000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.441468287,
+        "stream_output_hz": 438.5585317
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_48000hz_480f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 3000,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.01006320119,
+        "mean_abs_delta": 0.2559467833,
+        "output_error_hz": 0.4398771456,
+        "output_hz": 440.4398771,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 0.5620382519,
+        "stream_output_hz": 440.5620383
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 3000,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.01006320119,
+        "mean_abs_delta": 0.2559467833,
+        "output_error_hz": 0.4398771456,
+        "output_hz": 440.4398771,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 0.5620382519,
+        "stream_output_hz": 440.5620383
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_96000hz_128f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 3000,
+        "input_error_hz": 9.99999992,
+        "input_hz": 430.0000001,
+        "max_callback_boundary_jump": 0.01004183292,
+        "mean_abs_delta": 0.2792602134,
+        "output_error_hz": 1.391250575,
+        "output_hz": 438.6087494,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.445058793,
+        "stream_output_hz": 438.5549412
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 128,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 3000,
+        "input_error_hz": 9.99999992,
+        "input_hz": 430.0000001,
+        "max_callback_boundary_jump": 0.01004183292,
+        "mean_abs_delta": 0.2792602134,
+        "output_error_hz": 1.391250575,
+        "output_hz": 438.6087494,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.445058793,
+        "stream_output_hz": 438.5549412
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_96000hz_128f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 10.00000015,
+        "input_hz": 450.0000001,
+        "max_callback_boundary_jump": 0.009996443987,
+        "mean_abs_delta": 0.2484384251,
+        "output_error_hz": 0.2860302515,
+        "output_hz": 440.2860303,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4.266666667,
+        "stream_output_error_hz": 0.3669593942,
+        "stream_output_hz": 440.3669594
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 10.00000015,
+        "input_hz": 450.0000001,
+        "max_callback_boundary_jump": 0.009996443987,
+        "mean_abs_delta": 0.2484384251,
+        "output_error_hz": 0.2860302515,
+        "output_hz": 440.2860303,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4.266666667,
+        "stream_output_error_hz": 0.3669593942,
+        "stream_output_hz": 440.3669594
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_96000hz_2048f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 10.00000006,
+        "input_hz": 429.9999999,
+        "max_callback_boundary_jump": 0.01002463698,
+        "mean_abs_delta": 0.2780685296,
+        "output_error_hz": 1.383892375,
+        "output_hz": 438.6161076,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4.266666667,
+        "stream_output_error_hz": 1.463979276,
+        "stream_output_hz": 438.5360207
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 2048,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 200,
+        "input_error_hz": 10.00000006,
+        "input_hz": 429.9999999,
+        "max_callback_boundary_jump": 0.01002463698,
+        "mean_abs_delta": 0.2780685296,
+        "output_error_hz": 1.383892375,
+        "output_hz": 438.6161076,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4.266666667,
+        "stream_output_error_hz": 1.463979276,
+        "stream_output_hz": 438.5360207
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_96000hz_2048f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 800,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.01002153754,
+        "mean_abs_delta": 0.2794475588,
+        "output_error_hz": 1.169802522,
+        "output_hz": 441.1698025,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.188890219,
+        "stream_output_hz": 441.1888902
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 800,
+        "input_error_hz": 10,
+        "input_hz": 450,
+        "max_callback_boundary_jump": 0.01002153754,
+        "mean_abs_delta": 0.2794475588,
+        "output_error_hz": 1.169802522,
+        "output_hz": 441.1698025,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.188890219,
+        "stream_output_hz": 441.1888902
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_down",
+      "id": "autotune_convergence_96000hz_480f_down",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 800,
+        "input_error_hz": 9.99999992,
+        "input_hz": 430.0000001,
+        "max_callback_boundary_jump": 0.01004505157,
+        "mean_abs_delta": 0.2766179615,
+        "output_error_hz": 1.440814374,
+        "output_hz": 438.5591856,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.446366944,
+        "stream_output_hz": 438.5536331
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "activated": 1,
+        "block_frames": 480,
+        "callback_boundary_jump_limit": 0.05,
+        "callback_count": 800,
+        "input_error_hz": 9.99999992,
+        "input_hz": 430.0000001,
+        "max_callback_boundary_jump": 0.01004505157,
+        "mean_abs_delta": 0.2766179615,
+        "output_error_hz": 1.440814374,
+        "output_hz": 438.5591856,
+        "sample_rate_hz": 96000,
+        "stream_duration_seconds": 4,
+        "stream_output_error_hz": 1.446366944,
+        "stream_output_hz": 438.5536331
+      },
+      "current_passed": true,
+      "effect": "autotune",
+      "fixture": "detuned_sine_up",
+      "id": "autotune_convergence_96000hz_480f_up",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "activated": 0.0,
+        "block_frames": 0.0,
+        "callback_boundary_jump_limit": 0.0,
+        "callback_count": 0.0,
+        "input_error_hz": 0.0,
+        "input_hz": 0.0,
+        "max_callback_boundary_jump": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_error_hz": 0.0,
+        "output_hz": 0.0,
+        "sample_rate_hz": 0.0,
+        "stream_duration_seconds": 0.0,
+        "stream_output_error_hz": 0.0,
+        "stream_output_hz": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "checksum_changed": 1
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "checksum_changed": 1
+      },
+      "current_passed": true,
+      "effect": "benchmark",
+      "fixture": "mutated_baseline_output",
+      "id": "benchmark_output_dependency",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "checksum_changed": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "input_dynamic_range_ratio": 50.00248434,
+        "loud_gain_ratio": 0.1875738169,
+        "output_dynamic_range_ratio": 9.379156842,
+        "quiet_gain_ratio": 1
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "input_dynamic_range_ratio": 50.00248434,
+        "loud_gain_ratio": 0.1875738169,
+        "output_dynamic_range_ratio": 9.379156842,
+        "quiet_gain_ratio": 1
+      },
+      "current_passed": true,
+      "effect": "compressor",
+      "fixture": "amplitude_step",
+      "id": "compressor_dynamic_range",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "input_dynamic_range_ratio": 0.0,
+        "loud_gain_ratio": 0.0,
+        "output_dynamic_range_ratio": 0.0,
+        "quiet_gain_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "center_gain_ratio": 2.818550527,
+        "mean_abs_delta": 0.1157722214,
+        "off_band_gain_ratio": 1.012778968
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "center_gain_ratio": 2.818550527,
+        "mean_abs_delta": 0.1157722214,
+        "off_band_gain_ratio": 1.012778968
+      },
+      "current_passed": true,
+      "effect": "eq",
+      "fixture": "multi_tone",
+      "id": "eq_center_band_gain",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "center_gain_ratio": 0.0,
+        "mean_abs_delta": 0.0,
+        "off_band_gain_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "correlation": 0.9749598529,
+        "mean_abs_delta": 0.03123411001,
+        "rms_ratio": 0.9998620024
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "correlation": 0.9749598529,
+        "mean_abs_delta": 0.03123411001,
+        "rms_ratio": 0.9998620024
+      },
+      "current_passed": true,
+      "effect": "formant",
+      "fixture": "multi_tone",
+      "id": "formant_phase_response",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "correlation": 0.0,
+        "mean_abs_delta": 0.0,
+        "rms_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "correlation": 0.2929497485,
+        "input_rms": 0.1740606585,
+        "mean_abs_delta": 0.1420193145,
+        "output_peak": 0.3117961586,
+        "output_rms": 0.09115128334
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "correlation": 0.2929497485,
+        "input_rms": 0.1740606585,
+        "mean_abs_delta": 0.1420193145,
+        "output_peak": 0.3117961586,
+        "output_rms": 0.09115128334
+      },
+      "current_passed": true,
+      "effect": "voice_fx_chain",
+      "fixture": "noise",
+      "id": "full_chain_noise",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "correlation": 0.0,
+        "input_rms": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "output_rms": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "correlation": 1,
+        "input_rms": 0,
+        "mean_abs_delta": 0,
+        "output_peak": 0,
+        "output_rms": 0
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "correlation": 1,
+        "input_rms": 0,
+        "mean_abs_delta": 0,
+        "output_peak": 0,
+        "output_rms": 0
+      },
+      "current_passed": true,
+      "effect": "voice_fx_chain",
+      "fixture": "silence",
+      "id": "full_chain_silence",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "correlation": 0.0,
+        "input_rms": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "output_rms": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "correlation": 0.3690166602,
+        "input_rms": 0.247485335,
+        "mean_abs_delta": 0.1968747111,
+        "output_peak": 0.3121843338,
+        "output_rms": 0.1154942341
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "correlation": 0.3690166602,
+        "input_rms": 0.247485335,
+        "mean_abs_delta": 0.1968747111,
+        "output_peak": 0.3121843338,
+        "output_rms": 0.1154942341
+      },
+      "current_passed": true,
+      "effect": "voice_fx_chain",
+      "fixture": "sine_sweep",
+      "id": "full_chain_sine_sweep",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "correlation": 0.0,
+        "input_rms": 0.0,
+        "mean_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "output_rms": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "fixture_duration_seconds": 2,
+        "input_rms": 0.001414213563,
+        "output_rms": 1.055291638e-09,
+        "steady_state_gain_ratio": 7.46203873e-07
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "fixture_duration_seconds": 2,
+        "input_rms": 0.001414213563,
+        "output_rms": 1.055291638e-09,
+        "steady_state_gain_ratio": 7.46203873e-07
+      },
+      "current_passed": true,
+      "effect": "gate",
+      "fixture": "low_level_tone",
+      "id": "gate_subthreshold_attenuation",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "fixture_duration_seconds": 0.0,
+        "input_rms": 0.0,
+        "output_rms": 0.0,
+        "steady_state_gain_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "mean_abs_delta": 0.06331341803,
+        "rms_gain_ratio": 1.995262388
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "mean_abs_delta": 0.06331341803,
+        "rms_gain_ratio": 1.995262388
+      },
+      "current_passed": true,
+      "effect": "mix",
+      "fixture": "sine",
+      "id": "mix_output_gain",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "mean_abs_delta": 0.0,
+        "rms_gain_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.5,
+        "snr_db": 300
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.5,
+        "snr_db": 300
+      },
+      "current_passed": true,
+      "effect": "neutral",
+      "fixture": "amplitude_step",
+      "id": "neutral_amplitude_step",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "snr_db": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.8000000119,
+        "snr_db": 300
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.8000000119,
+        "snr_db": 300
+      },
+      "current_passed": true,
+      "effect": "neutral",
+      "fixture": "impulse",
+      "id": "neutral_impulse",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "snr_db": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.379257828,
+        "snr_db": 300
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.379257828,
+        "snr_db": 300
+      },
+      "current_passed": true,
+      "effect": "neutral",
+      "fixture": "multi_tone",
+      "id": "neutral_multi_tone",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "snr_db": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.2999750674,
+        "snr_db": 300
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.2999750674,
+        "snr_db": 300
+      },
+      "current_passed": true,
+      "effect": "neutral",
+      "fixture": "noise",
+      "id": "neutral_noise",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "snr_db": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0,
+        "snr_db": 300
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0,
+        "snr_db": 300
+      },
+      "current_passed": true,
+      "effect": "neutral",
+      "fixture": "silence",
+      "id": "neutral_silence",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "snr_db": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.349999994,
+        "snr_db": 300
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "output_peak": 0.349999994,
+        "snr_db": 300
+      },
+      "current_passed": true,
+      "effect": "neutral",
+      "fixture": "sine_sweep",
+      "id": "neutral_sine_sweep",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "output_peak": 0.0,
+        "snr_db": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "guards_ok": 1,
+        "maximum_pcm": 32767,
+        "minimum_pcm": -32768
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "guards_ok": 1,
+        "maximum_pcm": 32767,
+        "minimum_pcm": -32768
+      },
+      "current_passed": true,
+      "effect": "pcm16_bridge",
+      "fixture": "amplified_sine",
+      "id": "pcm16_clipping_matches_float_bounds",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "guards_ok": 0.0,
+        "maximum_pcm": 0.0,
+        "minimum_pcm": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "guards_ok": 1,
+        "max_error_lsb": 0,
+        "max_error_normalized": 0
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "guards_ok": 1,
+        "max_error_lsb": 0,
+        "max_error_normalized": 0
+      },
+      "current_passed": true,
+      "effect": "pcm16_bridge",
+      "fixture": "multi_tone",
+      "id": "pcm16_neutral_quantization",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "guards_ok": 0.0,
+        "max_error_lsb": 0.0,
+        "max_error_normalized": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "actual_ratio": 0.7532823498,
+        "expected_ratio": 0.7491535384,
+        "input_hz": 300,
+        "output_hz": 225.9847049,
+        "stream_output_hz": 225.2232005,
+        "stream_ratio": 0.7507440018
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "actual_ratio": 0.7532823498,
+        "expected_ratio": 0.7491535384,
+        "input_hz": 300,
+        "output_hz": 225.9847049,
+        "stream_output_hz": 225.2232005,
+        "stream_ratio": 0.7507440018
+      },
+      "current_passed": true,
+      "effect": "pitch",
+      "fixture": "sine",
+      "id": "pitch_negative_direction",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "actual_ratio": 0.0,
+        "expected_ratio": 0.0,
+        "input_hz": 0.0,
+        "output_hz": 0.0,
+        "stream_output_hz": 0.0,
+        "stream_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "actual_ratio": 1.262549005,
+        "expected_ratio": 1.25992105,
+        "input_hz": 300,
+        "output_hz": 378.7647015,
+        "stream_output_hz": 378.7562992,
+        "stream_ratio": 1.262520997
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "actual_ratio": 1.262549005,
+        "expected_ratio": 1.25992105,
+        "input_hz": 300,
+        "output_hz": 378.7647015,
+        "stream_output_hz": 378.7562992,
+        "stream_ratio": 1.262520997
+      },
+      "current_passed": true,
+      "effect": "pitch",
+      "fixture": "sine",
+      "id": "pitch_positive_direction",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "actual_ratio": 0.0,
+        "expected_ratio": 0.0,
+        "input_hz": 0.0,
+        "output_hz": 0.0,
+        "stream_output_hz": 0.0,
+        "stream_ratio": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "header_version": 65792,
+        "runtime_version": 65792
+      },
+      "baseline_passed": true,
+      "contract_change": {
+        "baseline_version": 65792,
+        "change_reference": "e7c2f1f597554f7ec97e3af2799a0f24ce11d1f8",
+        "current_version": 66048,
+        "rationale": "DSP ABI 1.2 adds independently owned per-stream engine handles; runtime and header versions must advance together.",
+        "source_declared_version": 66048,
+        "source_header": "native/dsp/include/echidna/dsp/api.h"
+      },
+      "current_metrics": {
+        "header_version": 66048,
+        "runtime_version": 66048
+      },
+      "current_passed": true,
+      "effect": "public_api",
+      "fixture": "none",
+      "id": "public_api_version",
+      "maximum_metric_absolute_delta": 256.0,
+      "metric_delta_policy": "allowlisted_contract_change",
+      "metric_deltas": {
+        "header_version": 256.0,
+        "runtime_version": 256.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "early_tail_rms": 0.01078238356,
+        "late_tail_rms": 0.001737213273,
+        "output_peak": 0.400000006
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "early_tail_rms": 0.01078238356,
+        "late_tail_rms": 0.001737213273,
+        "output_peak": 0.400000006
+      },
+      "current_passed": true,
+      "effect": "reverb",
+      "fixture": "impulse_then_silence",
+      "id": "reverb_impulse_tail",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "early_tail_rms": 0.0,
+        "late_tail_rms": 0.0,
+        "output_peak": 0.0
+      }
+    },
+    {
+      "baseline_metrics": {
+        "max_abs_delta": 0,
+        "right_channel_rms": 0
+      },
+      "baseline_passed": true,
+      "current_metrics": {
+        "max_abs_delta": 0,
+        "right_channel_rms": 0
+      },
+      "current_passed": true,
+      "effect": "channel_layout",
+      "fixture": "left_tone_right_silence",
+      "id": "stereo_channel_isolation",
+      "maximum_metric_absolute_delta": 0.0,
+      "metric_delta_policy": "exact_audio_metrics",
+      "metric_deltas": {
+        "max_abs_delta": 0.0,
+        "right_channel_rms": 0.0
+      }
+    }
+  ],
+  "baseline": {
+    "generated_utc": "2026-07-15T14:01:03Z",
+    "label": "final-methodology-20260715",
+    "report_sha256": "8416c600e3fb21116022d98604e98982bd0c64cd9163df65f54dda07cd0f6712",
+    "tracked_raw_report": false
+  },
+  "comparison_id": "post-handoff-8ee3f5a",
+  "current": {
+    "generated_utc": "2026-07-16T08:52:05Z",
+    "git_revision": "a1c34f58d950d1d0f729295f05ce95888a74d101",
+    "label": "post-handoff-8ee3f5a",
+    "report_sha256": "3bac8401397d1c3e49a6879bf4a256eb6461c2ab79f68c53af74042296551909"
+  },
+  "generated_utc": "2026-07-16T09:55:49+01:00",
+  "groups": [
+    {
+      "audio_validation_ids": [
+        "autotune_convergence_2048",
+        "autotune_convergence_44100hz_128f_down",
+        "autotune_convergence_44100hz_128f_up",
+        "autotune_convergence_44100hz_2048f_down",
+        "autotune_convergence_44100hz_2048f_up",
+        "autotune_convergence_44100hz_480f_down",
+        "autotune_convergence_44100hz_480f_up",
+        "autotune_convergence_480",
+        "autotune_convergence_48000hz_128f_down",
+        "autotune_convergence_48000hz_128f_up",
+        "autotune_convergence_48000hz_2048f_up",
+        "autotune_convergence_48000hz_480f_up",
+        "autotune_convergence_96000hz_128f_down",
+        "autotune_convergence_96000hz_128f_up",
+        "autotune_convergence_96000hz_2048f_down",
+        "autotune_convergence_96000hz_2048f_up",
+        "autotune_convergence_96000hz_480f_down",
+        "autotune_convergence_96000hz_480f_up",
+        "pitch_negative_direction",
+        "pitch_positive_direction"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 2003.575,
+        "average_p95_us": 3073.625,
+        "average_p99_us": 6072.575,
+        "maximum_deadline_utilization": 0.7778,
+        "minimum_throughput_frames_per_second": 172756.265,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 8238.0
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 220.05,
+        "average_p50_ratio": 1.109828681,
+        "average_p95_absolute_delta_us": -695.275,
+        "average_p95_ratio": 0.77379316,
+        "average_p99_absolute_delta_us": -2454.525,
+        "average_p99_ratio": 0.595801616,
+        "minimum_throughput_ratio": 1.000119954,
+        "worst_p99_absolute_delta_us": -927.9,
+        "worst_p99_ratio": 0.887363438
+      },
+      "current": {
+        "average_p50_us": 2223.625,
+        "average_p95_us": 2378.35,
+        "average_p99_us": 3618.05,
+        "maximum_deadline_utilization": 0.365505,
+        "minimum_throughput_frames_per_second": 172776.9878,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 7310.1
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "autotune_hq",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "autotune_convergence_2048",
+        "autotune_convergence_44100hz_128f_down",
+        "autotune_convergence_44100hz_128f_up",
+        "autotune_convergence_44100hz_2048f_down",
+        "autotune_convergence_44100hz_2048f_up",
+        "autotune_convergence_44100hz_480f_down",
+        "autotune_convergence_44100hz_480f_up",
+        "autotune_convergence_480",
+        "autotune_convergence_48000hz_128f_down",
+        "autotune_convergence_48000hz_128f_up",
+        "autotune_convergence_48000hz_2048f_up",
+        "autotune_convergence_48000hz_480f_up",
+        "autotune_convergence_96000hz_128f_down",
+        "autotune_convergence_96000hz_128f_up",
+        "autotune_convergence_96000hz_2048f_down",
+        "autotune_convergence_96000hz_2048f_up",
+        "autotune_convergence_96000hz_480f_down",
+        "autotune_convergence_96000hz_480f_up",
+        "pitch_negative_direction",
+        "pitch_positive_direction"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 2302.925,
+        "average_p95_us": 3138.575,
+        "average_p99_us": 5051.25,
+        "maximum_deadline_utilization": 0.57501,
+        "minimum_throughput_frames_per_second": 161263.7704,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 8642.9
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 25.375,
+        "average_p50_ratio": 1.011018596,
+        "average_p95_absolute_delta_us": -734.225,
+        "average_p95_ratio": 0.766064217,
+        "average_p99_absolute_delta_us": -2308.875,
+        "average_p99_ratio": 0.542910171,
+        "minimum_throughput_ratio": 1.003610035,
+        "worst_p99_absolute_delta_us": -4418.2,
+        "worst_p99_ratio": 0.488805841
+      },
+      "current": {
+        "average_p50_us": 2328.3,
+        "average_p95_us": 2404.35,
+        "average_p99_us": 2742.375,
+        "maximum_deadline_utilization": 0.34742,
+        "minimum_throughput_frames_per_second": 161845.9383,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 4224.7
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "autotune_hq",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "autotune_convergence_2048",
+        "autotune_convergence_44100hz_128f_down",
+        "autotune_convergence_44100hz_128f_up",
+        "autotune_convergence_44100hz_2048f_down",
+        "autotune_convergence_44100hz_2048f_up",
+        "autotune_convergence_44100hz_480f_down",
+        "autotune_convergence_44100hz_480f_up",
+        "autotune_convergence_480",
+        "autotune_convergence_48000hz_128f_down",
+        "autotune_convergence_48000hz_128f_up",
+        "autotune_convergence_48000hz_2048f_up",
+        "autotune_convergence_48000hz_480f_up",
+        "autotune_convergence_96000hz_128f_down",
+        "autotune_convergence_96000hz_128f_up",
+        "autotune_convergence_96000hz_2048f_down",
+        "autotune_convergence_96000hz_2048f_up",
+        "autotune_convergence_96000hz_480f_down",
+        "autotune_convergence_96000hz_480f_up",
+        "pcm16_clipping_matches_float_bounds",
+        "pcm16_neutral_quantization",
+        "pitch_negative_direction",
+        "pitch_positive_direction"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 2063.175,
+        "average_p95_us": 3157.875,
+        "average_p99_us": 6122.275,
+        "maximum_deadline_utilization": 0.73288,
+        "minimum_throughput_frames_per_second": 171004.8205,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 8797.9
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 196.075,
+        "average_p50_ratio": 1.095035564,
+        "average_p95_absolute_delta_us": -766.6,
+        "average_p95_ratio": 0.757241816,
+        "average_p99_absolute_delta_us": -3131.075,
+        "average_p99_ratio": 0.48857655,
+        "minimum_throughput_ratio": 0.987556584,
+        "worst_p99_absolute_delta_us": -4027.3,
+        "worst_p99_ratio": 0.542243035
+      },
+      "current": {
+        "average_p50_us": 2259.25,
+        "average_p95_us": 2391.275,
+        "average_p99_us": 2991.2,
+        "maximum_deadline_utilization": 0.47706,
+        "minimum_throughput_frames_per_second": 168876.9364,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 4770.6
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "autotune_hq",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "autotune_convergence_2048",
+        "autotune_convergence_44100hz_128f_down",
+        "autotune_convergence_44100hz_128f_up",
+        "autotune_convergence_44100hz_2048f_down",
+        "autotune_convergence_44100hz_2048f_up",
+        "autotune_convergence_44100hz_480f_down",
+        "autotune_convergence_44100hz_480f_up",
+        "autotune_convergence_480",
+        "autotune_convergence_48000hz_128f_down",
+        "autotune_convergence_48000hz_128f_up",
+        "autotune_convergence_48000hz_2048f_up",
+        "autotune_convergence_48000hz_480f_up",
+        "autotune_convergence_96000hz_128f_down",
+        "autotune_convergence_96000hz_128f_up",
+        "autotune_convergence_96000hz_2048f_down",
+        "autotune_convergence_96000hz_2048f_up",
+        "autotune_convergence_96000hz_480f_down",
+        "autotune_convergence_96000hz_480f_up",
+        "pcm16_clipping_matches_float_bounds",
+        "pcm16_neutral_quantization",
+        "pitch_negative_direction",
+        "pitch_positive_direction"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 2289.875,
+        "average_p95_us": 3072.325,
+        "average_p99_us": 5409.675,
+        "maximum_deadline_utilization": 0.80804,
+        "minimum_throughput_frames_per_second": 154025.2864,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 8080.4
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 62.8,
+        "average_p50_ratio": 1.027425078,
+        "average_p95_absolute_delta_us": -611.7,
+        "average_p95_ratio": 0.80089997,
+        "average_p99_absolute_delta_us": -2052.3,
+        "average_p99_ratio": 0.620624159,
+        "minimum_throughput_ratio": 1.041798173,
+        "worst_p99_absolute_delta_us": -2985.8,
+        "worst_p99_ratio": 0.63048859
+      },
+      "current": {
+        "average_p50_us": 2352.675,
+        "average_p95_us": 2460.625,
+        "average_p99_us": 3357.375,
+        "maximum_deadline_utilization": 0.40613,
+        "minimum_throughput_frames_per_second": 160463.2619,
+        "safety_gate_failures": 0,
+        "scenario_count": 4,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 5094.6
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "autotune_hq",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "benchmark_output_dependency"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 0.122916667,
+        "average_p95_us": 0.139583333,
+        "average_p99_us": 0.15,
+        "maximum_deadline_utilization": 0.00015,
+        "minimum_throughput_frames_per_second": 567627494.5,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.3
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -0.010416667,
+        "average_p50_ratio": 0.915254235,
+        "average_p95_absolute_delta_us": -0.004166666,
+        "average_p95_ratio": 0.970149258,
+        "average_p99_absolute_delta_us": -0.002083333,
+        "average_p99_ratio": 0.986111113,
+        "minimum_throughput_ratio": 1.201598579,
+        "worst_p99_absolute_delta_us": 0.2,
+        "worst_p99_ratio": 1.666666667
+      },
+      "current": {
+        "average_p50_us": 0.1125,
+        "average_p95_us": 0.135416667,
+        "average_p99_us": 0.147916667,
+        "maximum_deadline_utilization": 0.00015,
+        "minimum_throughput_frames_per_second": 682060390.8,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.5
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "memcpy_baseline",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "benchmark_output_dependency"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 0.179166667,
+        "average_p95_us": 0.245833333,
+        "average_p99_us": 0.272916667,
+        "maximum_deadline_utilization": 0.0003,
+        "minimum_throughput_frames_per_second": 310303030.3,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.9
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -0.039583334,
+        "average_p50_ratio": 0.779069764,
+        "average_p95_absolute_delta_us": -0.0625,
+        "average_p95_ratio": 0.745762712,
+        "average_p99_absolute_delta_us": -0.045833334,
+        "average_p99_ratio": 0.832061066,
+        "minimum_throughput_ratio": 1.790882779,
+        "worst_p99_absolute_delta_us": 0.0,
+        "worst_p99_ratio": 1.0
+      },
+      "current": {
+        "average_p50_us": 0.139583333,
+        "average_p95_us": 0.183333333,
+        "average_p99_us": 0.227083333,
+        "maximum_deadline_utilization": 0.0003,
+        "minimum_throughput_frames_per_second": 555716353.1,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.9
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "memcpy_baseline",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "benchmark_output_dependency"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 0.1,
+        "average_p95_us": 0.108333333,
+        "average_p99_us": 0.1125,
+        "maximum_deadline_utilization": 0.00015,
+        "minimum_throughput_frames_per_second": 868778280.5,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.2
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 0.002083333,
+        "average_p50_ratio": 1.02083333,
+        "average_p95_absolute_delta_us": 0.0,
+        "average_p95_ratio": 1.0,
+        "average_p99_absolute_delta_us": 0.00625,
+        "average_p99_ratio": 1.055555556,
+        "minimum_throughput_ratio": 1.014925373,
+        "worst_p99_absolute_delta_us": 0.0,
+        "worst_p99_ratio": 1.0
+      },
+      "current": {
+        "average_p50_us": 0.102083333,
+        "average_p95_us": 0.108333333,
+        "average_p99_us": 0.11875,
+        "maximum_deadline_utilization": 0.00015,
+        "minimum_throughput_frames_per_second": 881745120.6,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.2
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "memcpy_baseline",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "benchmark_output_dependency"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 0.147916667,
+        "average_p95_us": 0.195833333,
+        "average_p99_us": 0.214583333,
+        "maximum_deadline_utilization": 0.00045,
+        "minimum_throughput_frames_per_second": 293577981.7,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 0.7
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -0.020833334,
+        "average_p50_ratio": 0.859154925,
+        "average_p95_absolute_delta_us": -0.045833333,
+        "average_p95_ratio": 0.765957448,
+        "average_p99_absolute_delta_us": -0.033333333,
+        "average_p99_ratio": 0.844660195,
+        "minimum_throughput_ratio": 1.719921104,
+        "worst_p99_absolute_delta_us": 0.3,
+        "worst_p99_ratio": 1.428571429
+      },
+      "current": {
+        "average_p50_us": 0.127083333,
+        "average_p95_us": 0.15,
+        "average_p99_us": 0.18125,
+        "maximum_deadline_utilization": 0.0003,
+        "minimum_throughput_frames_per_second": 504930966.5,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 1.0
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "memcpy_baseline",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "neutral_amplitude_step",
+        "neutral_impulse",
+        "neutral_multi_tone",
+        "neutral_noise",
+        "neutral_silence",
+        "neutral_sine_sweep",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 0.495833333,
+        "average_p95_us": 0.533333333,
+        "average_p99_us": 0.572916667,
+        "maximum_deadline_utilization": 0.00045,
+        "minimum_throughput_frames_per_second": 176653249.0,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 2.1
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -0.004166666,
+        "average_p50_ratio": 0.99159664,
+        "average_p95_absolute_delta_us": 0.029166667,
+        "average_p95_ratio": 1.054687501,
+        "average_p99_absolute_delta_us": 0.029166666,
+        "average_p99_ratio": 1.05090909,
+        "minimum_throughput_ratio": 1.053428641,
+        "worst_p99_absolute_delta_us": 1.0,
+        "worst_p99_ratio": 1.476190476
+      },
+      "current": {
+        "average_p50_us": 0.491666667,
+        "average_p95_us": 0.5625,
+        "average_p99_us": 0.602083333,
+        "maximum_deadline_utilization": 0.00045,
+        "minimum_throughput_frames_per_second": 186091592.0,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 3.1
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "neutral_dsp",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "neutral_amplitude_step",
+        "neutral_impulse",
+        "neutral_multi_tone",
+        "neutral_noise",
+        "neutral_silence",
+        "neutral_sine_sweep",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 0.741666667,
+        "average_p95_us": 0.827083333,
+        "average_p99_us": 0.9625,
+        "maximum_deadline_utilization": 0.001125,
+        "minimum_throughput_frames_per_second": 83596386.2,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 4.1
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -0.070833334,
+        "average_p50_ratio": 0.904494381,
+        "average_p95_absolute_delta_us": -0.070833333,
+        "average_p95_ratio": 0.914357683,
+        "average_p99_absolute_delta_us": -0.114583333,
+        "average_p99_ratio": 0.880952381,
+        "minimum_throughput_ratio": 1.638195436,
+        "worst_p99_absolute_delta_us": -1.7,
+        "worst_p99_ratio": 0.585365854
+      },
+      "current": {
+        "average_p50_us": 0.670833333,
+        "average_p95_us": 0.75625,
+        "average_p99_us": 0.847916667,
+        "maximum_deadline_utilization": 0.00075,
+        "minimum_throughput_frames_per_second": 136947218.3,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 2.4
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "neutral_dsp",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "neutral_amplitude_step",
+        "neutral_impulse",
+        "neutral_multi_tone",
+        "neutral_noise",
+        "neutral_silence",
+        "neutral_sine_sweep",
+        "pcm16_clipping_matches_float_bounds",
+        "pcm16_neutral_quantization",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 7.958333333,
+        "average_p95_us": 9.170833333,
+        "average_p99_us": 11.80625,
+        "maximum_deadline_utilization": 0.00435,
+        "minimum_throughput_frames_per_second": 12766113.06,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 105.4
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -0.441666666,
+        "average_p50_ratio": 0.944502618,
+        "average_p95_absolute_delta_us": -0.68125,
+        "average_p95_ratio": 0.925715584,
+        "average_p99_absolute_delta_us": 0.5125,
+        "average_p99_ratio": 1.043409211,
+        "minimum_throughput_ratio": 2.324411904,
+        "worst_p99_absolute_delta_us": -52.9,
+        "worst_p99_ratio": 0.498102467
+      },
+      "current": {
+        "average_p50_us": 7.516666667,
+        "average_p95_us": 8.489583333,
+        "average_p99_us": 12.31875,
+        "maximum_deadline_utilization": 0.004125,
+        "minimum_throughput_frames_per_second": 29673705.16,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 52.5
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "neutral_dsp",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "neutral_amplitude_step",
+        "neutral_impulse",
+        "neutral_multi_tone",
+        "neutral_noise",
+        "neutral_silence",
+        "neutral_sine_sweep",
+        "pcm16_clipping_matches_float_bounds",
+        "pcm16_neutral_quantization",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 9.747916667,
+        "average_p95_us": 13.497916667,
+        "average_p99_us": 15.79375,
+        "maximum_deadline_utilization": 0.0081,
+        "minimum_throughput_frames_per_second": 10749527.61,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 79.7
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": -1.283333334,
+        "average_p50_ratio": 0.868347938,
+        "average_p95_absolute_delta_us": -3.539583334,
+        "average_p95_ratio": 0.737768174,
+        "average_p99_absolute_delta_us": -2.179166667,
+        "average_p99_ratio": 0.86202348,
+        "minimum_throughput_ratio": 1.234758864,
+        "worst_p99_absolute_delta_us": -24.5,
+        "worst_p99_ratio": 0.69259724
+      },
+      "current": {
+        "average_p50_us": 8.464583333,
+        "average_p95_us": 9.958333333,
+        "average_p99_us": 13.614583333,
+        "maximum_deadline_utilization": 0.00536,
+        "minimum_throughput_frames_per_second": 13273074.5,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 55.2
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "neutral_dsp",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "compressor_dynamic_range",
+        "eq_center_band_gain",
+        "formant_phase_response",
+        "full_chain_noise",
+        "full_chain_silence",
+        "full_chain_sine_sweep",
+        "gate_subthreshold_attenuation",
+        "mix_output_gain",
+        "pitch_negative_direction",
+        "pitch_positive_direction",
+        "reverb_impulse_tail",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 110.802083333,
+        "average_p95_us": 164.979166667,
+        "average_p99_us": 222.15625,
+        "maximum_deadline_utilization": 0.12736,
+        "minimum_throughput_frames_per_second": 1467150.725,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 1360.3
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 12.69375,
+        "average_p50_ratio": 1.114562377,
+        "average_p95_absolute_delta_us": -21.24375,
+        "average_p95_ratio": 0.871233742,
+        "average_p99_absolute_delta_us": -42.883333333,
+        "average_p99_ratio": 0.806967694,
+        "minimum_throughput_ratio": 1.351459729,
+        "worst_p99_absolute_delta_us": -700.7,
+        "worst_p99_ratio": 0.484893038
+      },
+      "current": {
+        "average_p50_us": 123.495833333,
+        "average_p95_us": 143.735416667,
+        "average_p99_us": 179.272916667,
+        "maximum_deadline_utilization": 0.1133625,
+        "minimum_throughput_frames_per_second": 1982795.121,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 659.6
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "voice_fx_ll",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "compressor_dynamic_range",
+        "eq_center_band_gain",
+        "formant_phase_response",
+        "full_chain_noise",
+        "full_chain_silence",
+        "full_chain_sine_sweep",
+        "gate_subthreshold_attenuation",
+        "mix_output_gain",
+        "pitch_negative_direction",
+        "pitch_positive_direction",
+        "reverb_impulse_tail",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 124.247916667,
+        "average_p95_us": 195.525,
+        "average_p99_us": 284.691666667,
+        "maximum_deadline_utilization": 0.12802,
+        "minimum_throughput_frames_per_second": 1236513.868,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 1284.6
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 5.4625,
+        "average_p50_ratio": 1.04396452,
+        "average_p95_absolute_delta_us": -40.777083333,
+        "average_p95_ratio": 0.791448238,
+        "average_p99_absolute_delta_us": -101.4125,
+        "average_p99_ratio": 0.643781284,
+        "minimum_throughput_ratio": 1.413893973,
+        "worst_p99_absolute_delta_us": -584.2,
+        "worst_p99_ratio": 0.545228087
+      },
+      "current": {
+        "average_p50_us": 129.710416667,
+        "average_p95_us": 154.747916667,
+        "average_p99_us": 183.279166667,
+        "maximum_deadline_utilization": 0.1018875,
+        "minimum_throughput_frames_per_second": 1748299.506,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 700.4
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "voice_fx_ll",
+      "reasons": [],
+      "route": "float32"
+    },
+    {
+      "audio_validation_ids": [
+        "compressor_dynamic_range",
+        "eq_center_band_gain",
+        "formant_phase_response",
+        "full_chain_noise",
+        "full_chain_silence",
+        "full_chain_sine_sweep",
+        "gate_subthreshold_attenuation",
+        "mix_output_gain",
+        "pcm16_clipping_matches_float_bounds",
+        "pcm16_neutral_quantization",
+        "pitch_negative_direction",
+        "pitch_positive_direction",
+        "reverb_impulse_tail",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 0,
+      "baseline": {
+        "average_p50_us": 121.510416667,
+        "average_p95_us": 205.558333333,
+        "average_p99_us": 271.93125,
+        "maximum_deadline_utilization": 0.13513,
+        "minimum_throughput_frames_per_second": 1465699.203,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 1501.9
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 14.75,
+        "average_p50_ratio": 1.12138877,
+        "average_p95_absolute_delta_us": -47.0875,
+        "average_p95_ratio": 0.770928771,
+        "average_p99_absolute_delta_us": -48.345833333,
+        "average_p99_ratio": 0.822213029,
+        "minimum_throughput_ratio": 1.271165389,
+        "worst_p99_absolute_delta_us": -113.4,
+        "worst_p99_ratio": 0.924495639
+      },
+      "current": {
+        "average_p50_us": 136.260416667,
+        "average_p95_us": 158.470833333,
+        "average_p99_us": 223.585416667,
+        "maximum_deadline_utilization": 0.1266,
+        "minimum_throughput_frames_per_second": 1863146.097,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 1388.5
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "voice_fx_ll",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    },
+    {
+      "audio_validation_ids": [
+        "compressor_dynamic_range",
+        "eq_center_band_gain",
+        "formant_phase_response",
+        "full_chain_noise",
+        "full_chain_silence",
+        "full_chain_sine_sweep",
+        "gate_subthreshold_attenuation",
+        "mix_output_gain",
+        "pcm16_clipping_matches_float_bounds",
+        "pcm16_neutral_quantization",
+        "pitch_negative_direction",
+        "pitch_positive_direction",
+        "reverb_impulse_tail",
+        "stereo_channel_isolation"
+      ],
+      "background_load_threads": 8,
+      "baseline": {
+        "average_p50_us": 138.654166667,
+        "average_p95_us": 210.14375,
+        "average_p99_us": 295.2125,
+        "maximum_deadline_utilization": 0.14058,
+        "minimum_throughput_frames_per_second": 1408254.425,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 1451.4
+      },
+      "comparison": {
+        "average_p50_absolute_delta_us": 3.96875,
+        "average_p50_ratio": 1.028623374,
+        "average_p95_absolute_delta_us": -40.327083333,
+        "average_p95_ratio": 0.808097632,
+        "average_p99_absolute_delta_us": -61.26875,
+        "average_p99_ratio": 0.792458822,
+        "minimum_throughput_ratio": 1.223358293,
+        "worst_p99_absolute_delta_us": -498.2,
+        "worst_p99_ratio": 0.656745212
+      },
+      "current": {
+        "average_p50_us": 142.622916667,
+        "average_p95_us": 169.816666667,
+        "average_p99_us": 233.94375,
+        "maximum_deadline_utilization": 0.1064,
+        "minimum_throughput_frames_per_second": 1722799.729,
+        "safety_gate_failures": 0,
+        "scenario_count": 48,
+        "strict_deadline_misses": 0,
+        "worst_p99_us": 953.2
+      },
+      "material_regression": false,
+      "maximum_audio_metric_absolute_delta": 0.0,
+      "profile": "voice_fx_ll",
+      "reasons": [],
+      "route": "pcm16_bridge"
+    }
+  ],
+  "harness": {
+    "ambient_conditions": "Windows host; adb empty; no qemu, emulator, Gradle, Java, CMake, or Ninja process at start; total CPU samples 10.90%, 18.38%, 13.90%; no Echidna build or device lane overlap",
+    "background_load_threads": [
+      0,
+      8
+    ],
+    "benchmark_source": "tools/perf/audio_pipeline_benchmark.cpp",
+    "benchmark_source_sha256": "9c7d738daa89d0340fd0ee3ac3dcb42cbaa996b8a900ed3556fd63b055ea14a5",
+    "environment": {
+      "build_type": "Release",
+      "compiler": "GCC 15.2.0",
+      "cpu": "Intel64 Family 6 Model 85 Stepping 4, GenuineIntel",
+      "cxx_flags": " -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow",
+      "logical_cpu_count": 40,
+      "os": "Windows"
+    },
+    "methodology": {
+      "allocations_config_and_pcm_reset_outside_timed_region": true,
+      "clock": "std::chrono::steady_clock",
+      "clock_is_steady": true,
+      "clock_tick_ns": 1,
+      "compiler_barrier_before_end_timestamp": true,
+      "measured_iterations_per_scenario": 1200,
+      "mode": "full",
+      "output_checksum_after_end_timestamp": true,
+      "percentile_method": "nearest-rank ceil(p*n), no interpolation",
+      "public_api_path": "initialize -> update_config -> prepare_realtime -> process_block",
+      "safety_factor": 4,
+      "safety_gate_uses": "unloaded p99 <= max(30ms, safety_factor * buffer duration)",
+      "scenario_seed": 1162037321,
+      "strict_deadline_uses": "p99 <= buffer duration",
+      "warmups_per_scenario": 200,
+      "warmups_run_under_configured_load": true
+    },
+    "production_source_bundle_sha256": "1ddb90a286fd803ea851d9c3ad29ecfe801bc724c9d09b3d827f297f432e11e4",
+    "production_source_file_count": 42,
+    "report_schema": "tools/perf/audio_pipeline_result.schema.json",
+    "report_schema_sha256": "c715c2915b479913d03083d8766d6fcc1e76656f9b6d49b1a562c902fcc55a42"
+  },
+  "result": {
+    "allowlisted_contract_change_count": 1,
+    "audio_comparison_failure_count": 0,
+    "material_regression_count": 0,
+    "passed": true
+  },
+  "schema_version": "1.0.0",
+  "scope": "host processing cost only; not Android callback, HAL, acoustic, or end-to-end latency",
+  "summary": {
+    "baseline": {
+      "functional_checks": 40,
+      "functional_failures": 0,
+      "scenarios": 592,
+      "strict_deadline_misses": 0,
+      "unloaded_safety_failures": 0
+    },
+    "current": {
+      "functional_checks": 40,
+      "functional_failures": 0,
+      "scenarios": 592,
+      "strict_deadline_misses": 0,
+      "unloaded_safety_failures": 0
+    }
+  },
+  "thresholds": {
+    "audio_metric_max_absolute_delta": 1e-09,
+    "functional_failures_max": 0,
+    "group_average_latency_min_absolute_us": 5.0,
+    "group_average_latency_ratio": 1.35,
+    "group_minimum_throughput_ratio": 0.75,
+    "group_worst_p99_min_absolute_us": 20.0,
+    "group_worst_p99_ratio": 1.5,
+    "strict_deadline_misses_max": 0,
+    "unloaded_safety_failures_max": 0
+  }
+}
