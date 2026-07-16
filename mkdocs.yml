@@ -99,6 +99,10 @@ nav:
       - Verification: verification.md
       - Legacy Effect Loader Validation: legacy-effect-emulator-loader-validation.md
       - Vendor HAL Analysis: vendor-hal-analysis.md
+  - Hardening:
+      - Checklist (24-section status): hardening/checklist.md
+      - Real-Time Safety Audit: hardening/rt-safety.md
+      - Evidence & State Model: hardening/evidence-state-model.md
   - Developer:
       - Developer Guide: developer_readme.md
       - Signing: signing.md

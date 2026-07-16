@@ -6,6 +6,41 @@
 > build is not proof that a capture route transforms audio on a phone. See
 > [Verification](docs/verification.md).
 
+## Engineering hardening (t6, 2026-07-16)
+
+The user's 24-section engineering hardening checklist was mapped section-by-section
+to an honest status in [`docs/hardening/checklist.md`](docs/hardening/checklist.md).
+Landed this task (host-verified, not committed at time of writing):
+
+- [x] **§3 AAudio callback ownership (report P0 anchor)** — the callback route runs
+  the DSP into pre-faulted per-stream scratch and never writes the platform-owned
+  input buffer; fail-open to untouched input; scratch held across the app callback.
+  Tests in `native/zygisk/tests/aaudio_stream_registry_test.cpp` (t6-e1).
+- [x] **§9 real-time-safety audit** — owned non-AAudio routes (OpenSL, tinyalsa,
+  AudioFlinger [disabled], AudioRecord, capture_buffer_router) audited RT-clean with
+  zero-alloc / fail-open / close-quiesce host tests; route table in
+  [`docs/hardening/rt-safety.md`](docs/hardening/rt-safety.md) (t6-e3).
+- [x] **§10 DSP correctness** — NaN/inf reject, non-finite output guard, neutral
+  bit-exact (float) / ≤2 LSB (pcm16), bypass no-state-advance, boundary/canary tests
+  in `native/dsp/tests/dsp_quality_test.cpp` + `stream_handle_registry_test.cpp` (t6-e2).
+- [x] **§18 observability** — telemetry state model documented in
+  [`docs/hardening/evidence-state-model.md`](docs/hardening/evidence-state-model.md);
+  new `install_failures` counter so install-failure no longer conflates with
+  block-failure (t6-e4, t6-e8).
+- [x] **§19 failure behavior** — fail-closed(admission) / fail-open(app-audio)
+  regression-locked across AAudio, non-AAudio routes, and the DSP boundary.
+
+Honest residuals surfaced (NOT done here):
+
+- [~] **libc `read` route** runs `fstat()`+`readlink()` per read (real RT violation);
+  fix is a per-fd verdict cache, device-gated. Opt-in developer route.
+- [ ] **§18-F2 telemetry wire** — exporter still drops `bypasses`/`installed`/
+  `install_events`; blocked on a strict-validator schema-v3 evolution
+  (`AuthenticatedTelemetry.kt`); do not weaken the validator. Open.
+- [~] Milestones **M3/M5** (evidenced on-device arm64 success; OEM HAL matrix) remain
+  **device-gated** — see [checklist §23](docs/hardening/checklist.md) and the
+  device-gated procedure in [Verification](docs/verification.md).
+
 ## Release-critical capture status
 
 The route contract is defined in
@@ -14,7 +49,7 @@ The route contract is defined in
 
 | Route | Status | Remaining work |
 | --- | --- | --- |
-| AAudio | [~] Operational candidate | Stable getters and processing paths exist; prove input read/callback transform in a whitelisted arm64 app on hardware. |
+| AAudio | [~] Operational candidate | Stable getters and processing paths exist; the callback route no longer mutates the platform-owned input buffer (fixed + host-tested, t6-e1); prove input read/callback transform in a whitelisted arm64 app on hardware. |
 | OpenSL ES | [~] Operational candidate | PCM descriptor, queue FIFO, rollback, callback, and destroy lifecycle have host coverage; prove live recorder capture. |
 | tinyalsa | [~] Operational candidate | `pcm_open` config and read lifetimes exist; prove a real target/vendor route. |
 | LSPosed Java `AudioRecord` | [~] Operational candidate | Dedicated JNI + DSP packaging and transactional Java reads exist; prove LSPosed injection, policy snapshot, and transform under enforcing SELinux. |
