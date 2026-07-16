@@ -23,6 +23,7 @@ namespace echidna::utils
         mutations += other.mutations;
         bypasses += other.bypasses;
         install_events += other.install_events;
+        install_failures += other.install_failures;
         installed = other.installed;
     }
 
@@ -34,6 +35,7 @@ namespace echidna::utils
         mutations = 0;
         bypasses = 0;
         install_events = 0;
+        install_failures = 0;
     }
 
     void TelemetryAccumulator::recordBlock(TelemetryRoute route,
@@ -66,7 +68,10 @@ namespace echidna::utils
         counters.install_events.fetch_add(1, std::memory_order_relaxed);
         if (!success)
         {
-            counters.failures.fetch_add(1, std::memory_order_relaxed);
+            // An attach failure is an INSTALL failure, not a block-processing
+            // failure. Keep it out of the block `failures` counter so the two
+            // remain independently observable.
+            counters.install_failures.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
@@ -83,6 +88,7 @@ namespace echidna::utils
         delta.mutations = counters.mutations.exchange(0, std::memory_order_acq_rel);
         delta.bypasses = counters.bypasses.exchange(0, std::memory_order_acq_rel);
         delta.install_events = counters.install_events.exchange(0, std::memory_order_acq_rel);
+        delta.install_failures = counters.install_failures.exchange(0, std::memory_order_acq_rel);
         delta.installed = counters.installed.load(std::memory_order_relaxed) != 0;
         return delta;
     }

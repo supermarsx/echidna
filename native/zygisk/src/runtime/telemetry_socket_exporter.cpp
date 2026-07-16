@@ -95,7 +95,12 @@ namespace echidna::runtime
             {
                 return "bypassed";
             }
-            if (delta.failures != 0)
+            // Block-processing failures and install/attach failures both surface
+            // as the wire "error" state. They are counted separately in the
+            // accumulator (delta.failures vs delta.install_failures), but the v2
+            // wire vocabulary has a single error state and the strict consumer
+            // pins the frame key-set, so this must not introduce a new state.
+            if (delta.failures != 0 || delta.install_failures != 0)
             {
                 return "error";
             }

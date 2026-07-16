@@ -145,6 +145,31 @@ int main()
     Check(installed.find(R"("state":"processing")") == std::string::npos,
           "successful unchanged blocks must never claim processing");
 
+    // F1: an install/attach failure (install_failures, block failures == 0) must
+    // still surface as the wire "error" state so the error signal is preserved
+    // now that install failures no longer fold into the block failures counter.
+    utils::TelemetryDelta install_failure;
+    install_failure.route = utils::TelemetryRoute::kAAudio;
+    install_failure.install_events = 1;
+    install_failure.install_failures = 1;
+    install_failure.installed = false;
+    Check(install_failure.pending(),
+          "an install failure is unsent evidence that must be exportable");
+    const std::string install_failure_frame =
+        runtime::EncodeTelemetryV2(install_failure, 9, 1236, "com.example", 42);
+    Check(install_failure_frame.find(R"("state":"error")") != std::string::npos,
+          "an install failure must still be reported as the error state");
+    // F2 is deferred: the v2 wire remains blocks/frames/failures/mutations only,
+    // because the control-service consumer pins the exact delta key-set. The
+    // native-internal install_failures counter must NOT leak onto the wire.
+    Check(install_failure_frame.find("install_failures") == std::string::npos &&
+              install_failure_frame.find("bypasses") == std::string::npos &&
+              install_failure_frame.find("installed") == std::string::npos &&
+              install_failure_frame.find("install_events") == std::string::npos,
+          "the v2 delta wire must stay additive-compatible (no new serialized keys)");
+    Check(install_failure_frame.find(R"("failures":0)") != std::string::npos,
+          "the block failures wire counter excludes install failures after F1");
+
     if (g_failures != 0)
     {
         return 1;
