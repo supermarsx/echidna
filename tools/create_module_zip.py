@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import stat
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
 
@@ -22,20 +23,33 @@ def normalized_members(values: list[str]) -> set[str]:
     return result
 
 
+def canonical_member_plan(
+    source: Path, candidates: Iterable[Path]
+) -> list[tuple[str, Path]]:
+    """Map paths to ZIP member names before applying canonical ordering."""
+    return sorted(
+        (
+            (path.relative_to(source).as_posix(), path)
+            for path in candidates
+        ),
+        key=lambda candidate: candidate[0],
+    )
+
+
 def create_zip(source: Path, output: Path, executables: set[str], read_only: set[str]) -> None:
     source = source.resolve()
     output = output.resolve()
     if not source.is_dir():
         raise ValueError(f"module staging directory is missing: {source}")
-    candidates = sorted(source.rglob("*"))
-    symlinks = [path for path in candidates if path.is_symlink()]
+    candidates = canonical_member_plan(source, source.rglob("*"))
+    symlinks = [(member, path) for member, path in candidates if path.is_symlink()]
     if symlinks:
         raise ValueError(
             "module staging must not contain symlinks: "
-            + ", ".join(path.relative_to(source).as_posix() for path in symlinks)
+            + ", ".join(member for member, _path in symlinks)
         )
-    files = [path for path in candidates if path.is_file()]
-    members = {path.relative_to(source).as_posix() for path in files}
+    files = [(member, path) for member, path in candidates if path.is_file()]
+    members = {member for member, _path in files}
     unknown = sorted((executables | read_only) - members)
     if unknown:
         raise ValueError("mode manifest names missing module members: " + ", ".join(unknown))
@@ -46,8 +60,7 @@ def create_zip(source: Path, output: Path, executables: set[str], read_only: set
     with zipfile.ZipFile(
         output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9, strict_timestamps=True
     ) as archive:
-        for path in files:
-            member = path.relative_to(source).as_posix()
+        for member, path in files:
             info = zipfile.ZipInfo(member, FIXED_TIME)
             info.create_system = 3
             mode = 0o755 if member in executables else 0o444 if member in read_only else 0o644
