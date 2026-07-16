@@ -26,10 +26,11 @@ against: **overstating proof.**
 
 | Status | Sections (by primary disposition) |
 | --- | --- |
-| **Landed-t6** | §3, §9, §10, §18, §19 — the landable subset of this task (5 sections materially advanced). |
-| **Pre-existing** | §1, §2 (host half), §4, §5, §6, §8, §11, §12, §13, §14 (config half), §15, §16, §20, §21, §22 |
+| **Landed-t6** | §3, §9, §10, §18, §19 — the landable subset of that task (5 sections materially advanced). |
+| **Landed-t8** | §13 (consolidated threat-model doc, t8-e3); §18-F2 wire schema v3 (t8-e2); in-app installer under §15/§20 (t8-e1). |
+| **Pre-existing** | §1, §2 (host half), §4, §5, §6, §8, §11, §12, §13 (controls), §14 (config half), §15, §16, §20, §21, §22 |
 | **Device-gated** | §2 (E2E half), §7, §17 (operation), §23 (M3/M5), plus the live-proof half of §4/§5/§6/§14 |
-| **Open** | §18-F2 (wire schema v3), and named next-steps inside §7, §16, §23 |
+| **Open** | named next-steps inside §7, §16, §23 |
 | **N/A-here** | §17 (procuring/racking physical hardware), org-process items in §20 |
 
 Most sections are **mixed**: a host-verifiable core that is Pre-existing or
@@ -41,7 +42,12 @@ is surprised): §2 end-to-end artifact proof, §4/§5/§6 live capture, §7 lega
 preprocessor on-device, §14 enforcing-SELinux propagation to hooked apps, §17
 physical-device lab, and §23 milestones M3/M5 are all **Device-gated** — the code
 and host tests exist, the on-device proof does not. §18-F2 (richer telemetry on
-the wire) is **Open**, deliberately blocked on a security control (see §18).
+the wire, via a coordinated schema-v3) and the in-app installer (§15/§20) are
+**Landed under task t8** (t8-e2 / t8-e1) — merged to main and verified by
+GATE-3 (native + app + service tests green, clang-format-18 + mkdocs-strict
+clean). The *live* install action stays **Device-gated** (a rooted device must
+run the module install), and turnkey bundled-zip install remains a separate
+follow-up (t8-e5).
 
 ---
 
@@ -243,7 +249,7 @@ memory the AAudio contract forbids mutating in place.
 
 ## 13 — Formal threat model
 
-**Status: Pre-existing (controls) + Open (a single written threat-model doc).**
+**Status: Pre-existing (controls) + Landed-t8 (consolidated threat-model doc).**
 
 - The security controls a threat model demands are implemented and were treated
   as hardening features: authenticated UID-scoped transports, fail-closed
@@ -253,8 +259,12 @@ memory the AAudio contract forbids mutating in place.
   **Pre-existing** (t2). Rationale captured in `docs/design-rationale.md` /
   `docs/limitations.md`.
 - A **single consolidated formal threat-model document** (assets, adversaries,
-  trust boundaries, STRIDE-style enumeration) is not yet written as one artifact.
-  **Open** (documentation task; controls already exist to describe).
+  trust boundaries, control-vs-residual, STRIDE cross-check) now exists as one
+  artifact: [`threat-model.md`](threat-model.md). Every "Implemented" control
+  cites a real file; open/device-gated risks (single-holder socket, all-zero
+  plugin key, enforcing-SELinux propagation, libc-read RT, installer surface,
+  supply-chain attestation) are enumerated honestly. **Landed-t8 (t8-e3).** It
+  explicitly records that **no external security review has been performed.**
 
 ## 14 — Tighten SELinux
 
@@ -282,6 +292,20 @@ memory the AAudio contract forbids mutating in place.
 - **Magisk-Manager flash + reboot + watchdog/recovery-marker behavior on a real
   device — Device-gated** (`magisk --install-module` returned *Incomplete Magisk
   install* on the rooted emulator; [Verification §2](../verification.md#2-still-not-verified-device-gated)).
+- **In-app guided installer (detect Magisk/root → install bundled zip → reboot
+  prompt → confirm active) — Landed-t8 (t8-e1).** Previously the only install
+  path was manual flashing (`docs/magisk_release.md`); the companion could not
+  drive install/uninstall. t8-e1 wires `installModule`/`uninstallModule` into the
+  AIDL client + a guided UI (`ui/install/**`, `EngineModuleArchive`, Dashboard
+  install CTA). It **fails closed** when Magisk is absent and does **not** widen
+  the Binder UID gate — `EchidnaControlService` stays `exported="false"`, so the
+  new privileged methods are same-UID-only exactly like their control-command
+  siblings (GATE-3 security review; [threat-model §3.4](threat-model.md#34-installer-release-supply-chain)).
+  Verified: `:app:assembleDebug` + app unit tests (incl. `InstallEngineViewModelTest`,
+  `ControlServiceClientTest`). The live install action itself stays
+  **Device-gated** (needs a rooted device), and a turnkey **bundled-zip** install
+  is a separate follow-up (**t8-e5**) — today the installer offers a SAF `.zip`
+  picker rather than an APK-bundled module.
 
 ## 16 — Strengthen CI & automated testing
 
@@ -310,7 +334,7 @@ memory the AAudio contract forbids mutating in place.
 
 ## 18 — Observability without damaging the audio path
 
-**Status: Landed-t6 (state model + F1 counter) + Open (F2 wire schema).**
+**Status: Landed-t6 (state model + F1 counter) + Landed-t8 (F2 wire schema v3, t8-e2).**
 
 - Telemetry is realtime-safe and cannot retain PCM: lock-free relaxed-atomic
   `recordBlock`/`recordInstall`, fixed `64·kCount`-byte footprint, frame *counts*
@@ -327,15 +351,25 @@ memory the AAudio contract forbids mutating in place.
   Evidence: `native/zygisk/src/utils/telemetry_accumulator.{h,cpp}`,
   `telemetry_accumulator_test.cpp` Section D + exporter test asserting no new wire
   keys.
-- **F2 (exporter should emit `bypasses` / `installed` / `install_events`) —
-  Open, deliberately.** The `type:"telemetry"` v2 frame is validated by a
-  **strict exact-key-set validator** in `AuthenticatedTelemetry.kt` (a §13
-  hardening control, `schemaVersion` pinned `2..2`); appending keys makes it
-  reject *every* frame. Correct fix is a **coordinated schema-v3 evolution**
-  (native `EncodeTelemetryV2` emits + the Kotlin validator accepts v3 + thread
-  fields through frame/store/baseJson; app-side `TelemetryParser.kt` is already
-  lenient). **Do not weaken the strict validator.** (t6-e8 finding;
-  [`evidence-state-model.md` §7-F2](evidence-state-model.md#7-findings-reported-not-applied-in-this-track)).
+- **F2 (exporter should emit `bypasses` / `installed` / `install_events` /
+  `install_failures`) — Landed-t8 (t8-e2).** The `type:"telemetry"` v2 frame is
+  validated by a **strict exact-key-set validator** in `AuthenticatedTelemetry.kt`
+  (a §13 hardening control, previously `schemaVersion` pinned `2..2`); appending
+  keys to a v2 frame still makes it reject *every* frame. t8-e2 lands the
+  **coordinated schema-v3 evolution** instead of weakening that check: v3 is a
+  strict **superset** of v2 — `deltas` gains `bypasses` / `installEvents` /
+  `installFailures` (edges) and `root` gains `installed` (level), with
+  `schemaVersion` 3. Native `EncodeTelemetry` emits v3; `AuthenticatedTelemetry.kt`
+  accepts **both** v2 and v3, each against its *own* strict key-set
+  (`schemaVersion` range widened to `2..3`, unknown/mixed keys still rejected,
+  peer-cred + published-identity + seq/gen anti-replay untouched); fields thread
+  through frame/store/`baseJson`; the app-side Diagnostics surface reads them
+  (`TelemetryParser.kt`, `AdvancedDiagnosticsSection.kt`). Verified by GATE-3:
+  `telemetry_accumulator_test` / `telemetry_socket_exporter_test` /
+  `profile_sync_server_test` (host + WSL), `AuthenticatedTelemetryTest` (unknown-key,
+  mixed-key, replay, and `schemaVersion` bound cases), app `AuthenticatedTelemetryParsingTest`.
+  **The strict validator was not weakened.** (t6-e8 finding;
+  [`evidence-state-model.md` §7-F2](evidence-state-model.md#7-findings)).
 
 ## 19 — Define failure behavior precisely
 
@@ -364,6 +398,10 @@ memory the AAudio contract forbids mutating in place.
   with progress), Whitelist Editor (display names + search), Settings, QS tile,
   Compatibility Wizard. Honest "module not active" / idle states throughout; no
   faked telemetry. **Pre-existing** (t2 + the t5 UI batch: t5-e1..e13).
+- **Guided in-app engine installer** (root/Magisk detect → install module →
+  reboot prompt → confirm active) closes the last "you must flash it yourself"
+  UX gap. **Landed-t8 (t8-e1)** — see §15; the live install action stays
+  Device-gated and a turnkey APK-bundled zip is a follow-up (t8-e5).
 - Operator-facing **org process / support playbooks** beyond the in-app
   diagnostics export — **N/A-here** (process, not code).
 
