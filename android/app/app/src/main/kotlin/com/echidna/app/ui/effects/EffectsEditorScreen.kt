@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -38,6 +39,7 @@ import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,9 +55,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.echidna.app.model.EffectModule
 import com.echidna.app.model.MusicalKey
 import com.echidna.app.model.MusicalScale
+import com.echidna.app.model.WarningSeverity
+import com.echidna.app.ui.components.AlertSeverity
+import com.echidna.app.ui.components.PersistentDismissibleAlert
+import com.echidna.app.ui.components.rememberDismissedAlertsStore
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import java.util.Locale
+
+/** Stable namespace prefix for dismissed preset-warning alert keys. */
+private const val WARNING_KEY_PREFIX = "effects.preset_warning:"
 
 /**
  * Effects Editor — presents the active preset's effect chain as an ordered, numbered list of
@@ -78,6 +87,18 @@ fun EffectsEditorScreen(viewModel: EffectsEditorViewModel) {
         EffectsEditorViewModel.CANONICAL_ORDER.filter { it !in present }
     }
     var expandedId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // Preset warnings are advisory, live-condition notes that recompute as the user edits the
+    // preset. Each is individually dismissible, keyed on its message (the condition), and the
+    // dismissed set is reconciled to the currently-active warnings so a warning that is edited
+    // away and later re-triggered reappears rather than being permanently silenced.
+    val alertStore = rememberDismissedAlertsStore()
+    val warningKeys = remember(warnings) {
+        warnings.map { "$WARNING_KEY_PREFIX${it.message}" }.toSet()
+    }
+    LaunchedEffect(warningKeys) {
+        alertStore.reconcileActive(warningKeys, WARNING_KEY_PREFIX)
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -104,22 +125,21 @@ fun EffectsEditorScreen(viewModel: EffectsEditorViewModel) {
                 )
             }
         }
-        if (warnings.isNotEmpty()) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Preset Warnings", style = MaterialTheme.typography.titleMedium)
-                        warnings.forEach { warning ->
-                            val color = when (warning.severity) {
-                                com.echidna.app.model.WarningSeverity.INFO -> MaterialTheme.colorScheme.primary
-                                com.echidna.app.model.WarningSeverity.WARNING -> MaterialTheme.colorScheme.tertiary
-                                com.echidna.app.model.WarningSeverity.CRITICAL -> MaterialTheme.colorScheme.error
-                            }
-                            Text(warning.message, color = color, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
+        items(items = warnings, key = { "$WARNING_KEY_PREFIX${it.message}" }) { warning ->
+            // A dismiss-only advisory: there is no single destination for a preset-tuning note,
+            // so onAction is left null (a follow-up may route CRITICAL notes to the offending
+            // effect card — see t8-e7).
+            PersistentDismissibleAlert(
+                alertKey = "$WARNING_KEY_PREFIX${warning.message}",
+                store = alertStore,
+                title = "Preset warning",
+                message = warning.message,
+                severity = when (warning.severity) {
+                    WarningSeverity.INFO -> AlertSeverity.INFO
+                    WarningSeverity.WARNING -> AlertSeverity.WARNING
+                    WarningSeverity.CRITICAL -> AlertSeverity.ERROR
+                },
+            )
         }
         itemsIndexed(items = orderedModules, key = { _, module -> module.id }) { index, module ->
             EffectChainCard(

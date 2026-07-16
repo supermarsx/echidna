@@ -28,7 +28,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -66,6 +65,9 @@ import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
 import com.echidna.app.model.TelemetrySnapshot
 import com.echidna.app.model.WhitelistBindings
+import com.echidna.app.ui.components.AlertSeverity
+import com.echidna.app.ui.components.PersistentDismissibleAlert
+import com.echidna.app.ui.components.rememberDismissedAlertsStore
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -311,19 +313,37 @@ private fun AdvisoryAlertsSection(
     onLaunchCompatibility: () -> Unit,
     onLaunchWhitelist: () -> Unit
 ) {
+    // Advisory alerts are live and condition-driven. Each is individually dismissible and keyed
+    // on its condition (category + title); the dismissed set is reconciled to the currently-active
+    // conditions so a dismissed advisory returns if its condition clears and later recurs, rather
+    // than being permanently silenced (important for the safety-relevant fails-closed advisories).
+    val alertStore = rememberDismissedAlertsStore()
+    val activeKeys = remember(alerts) { alerts.map(::advisoryAlertKey).toSet() }
+    LaunchedEffect(activeKeys) {
+        alertStore.reconcileActive(activeKeys, ADVISORY_KEY_PREFIX)
+    }
     SettingsSection(title = "Advisory Alerts") {
         Text(
             text = "Alerts never block controls. They call out install, bridge, hardware, and " +
-                "hook-scope conditions that can interfere with Echidna.",
+                "hook-scope conditions that can interfere with Echidna. Dismiss one to hide it; " +
+                "it returns if the condition clears and later recurs.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         if (alerts.isEmpty()) {
             StatusPill(text = "No active advisories")
         } else {
-            alerts.forEachIndexed { index, alert ->
-                if (index > 0) HorizontalDivider()
-                AlertRow(alert)
+            alerts.forEach { alert ->
+                val action = advisoryAction(alert.category, onLaunchCompatibility, onLaunchWhitelist)
+                PersistentDismissibleAlert(
+                    alertKey = advisoryAlertKey(alert),
+                    store = alertStore,
+                    title = alert.title,
+                    message = alert.detail,
+                    severity = advisorySeverity(alert.category),
+                    actionLabel = action?.first,
+                    onAction = action?.second,
+                )
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -335,6 +355,35 @@ private fun AdvisoryAlertsSection(
             }
         }
     }
+}
+
+/** Stable namespace prefix for dismissed advisory-alert keys. */
+private const val ADVISORY_KEY_PREFIX = "settings.advisory:"
+
+/** Condition-stable dismiss key for an advisory alert (category + title). */
+private fun advisoryAlertKey(alert: AdvisoryAlert): String =
+    "$ADVISORY_KEY_PREFIX${alert.category}|${alert.title}"
+
+private fun advisorySeverity(category: String): AlertSeverity = when (category) {
+    "Incomplete install", "Incomplete bridge", "Bridge risk" -> AlertSeverity.ERROR
+    else -> AlertSeverity.WARNING
+}
+
+/**
+ * Directing action for an advisory, where an obvious in-app destination already exists.
+ * "Hook scope" → the Per-App Whitelist; probe/bridge/hardware advisories → the Compatibility
+ * Wizard (re-probe). Install-related advisories are left dismiss-only: their destinations
+ * (Install engine / open Magisk) are owned by t8-e1 / to be wired by t8-e7.
+ */
+private fun advisoryAction(
+    category: String,
+    onLaunchCompatibility: () -> Unit,
+    onLaunchWhitelist: () -> Unit
+): Pair<String, () -> Unit>? = when (category) {
+    "Hook scope" -> "Open Whitelist" to onLaunchWhitelist
+    "Bridge status", "Bridge risk", "Bridge note", "Hardware compatibility" ->
+        "Run Wizard" to onLaunchCompatibility
+    else -> null
 }
 
 @Composable
@@ -398,39 +447,6 @@ private fun AlertPreferencesSection(
             valueRange = 1f..100f,
             steps = 98
         )
-    }
-}
-
-@Composable
-private fun AlertRow(alert: AdvisoryAlert) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Icon(
-            Icons.Filled.Warning,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.error,
-            modifier = Modifier.size(22.dp)
-        )
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                text = alert.title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = alert.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = alert.category,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
     }
 }
 

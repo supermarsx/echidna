@@ -165,6 +165,12 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.11.1")
     testImplementation("androidx.test.ext:junit:1.1.5")
+    // Compose UI test under Robolectric (JVM) for the DismissibleAlert component tests added by
+    // t8-e4: dismiss hides + persists, action button invokes onAction, dismiss-only renders.
+    // Versions come from the compose-bom applied to the test classpath below.
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.compose.ui:ui-test-manifest")
 
     // Instrumentation tests (src/androidTest): profile-switch-while-hooked, tuner
     // accuracy, QS-tile persistence, service-binding. Compose UI test versions come
