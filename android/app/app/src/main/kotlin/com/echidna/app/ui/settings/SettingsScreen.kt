@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.PlayArrow
@@ -75,7 +76,8 @@ import kotlin.math.roundToInt
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onLaunchCompatibility: () -> Unit,
-    onLaunchWhitelist: () -> Unit
+    onLaunchWhitelist: () -> Unit,
+    onLaunchInstaller: () -> Unit
 ) {
     val engineStatus by viewModel.engineStatus.collectAsStateWithLifecycle()
     val presets by viewModel.presets.collectAsStateWithLifecycle()
@@ -165,6 +167,10 @@ fun SettingsScreen(
             }
 
             SettingsTab.ENGINE -> {
+                EngineModuleSection(
+                    moduleInstalled = moduleStatus?.magiskModuleInstalled == true,
+                    onLaunchInstaller = onLaunchInstaller
+                )
                 EngineSection(
                     settings = settings,
                     onEngineMode = viewModel::setDspEngineMode,
@@ -485,6 +491,31 @@ private fun StartupSection(
             OutlinedButton(onClick = onLaunchWhitelist, modifier = Modifier.weight(1f)) {
                 Text("Per-App Whitelist", maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+    }
+}
+
+@Composable
+private fun EngineModuleSection(
+    moduleInstalled: Boolean,
+    onLaunchInstaller: () -> Unit
+) {
+    SettingsSection(title = "Engine module") {
+        Text(
+            text = if (moduleInstalled) {
+                "The Echidna Magisk/Zygisk engine module is installed. Open the installer to update " +
+                    "or remove it."
+            } else {
+                "The Echidna engine module is not installed. Open the guided installer to set it up " +
+                    "(requires root with Magisk and Zygisk)."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(onClick = onLaunchInstaller, modifier = Modifier.fillMaxWidth()) {
+            Icon(imageVector = Icons.Filled.Download, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(if (moduleInstalled) "Install or update engine" else "Install engine")
         }
     }
 }

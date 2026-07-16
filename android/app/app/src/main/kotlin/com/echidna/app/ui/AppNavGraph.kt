@@ -76,6 +76,9 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
             },
             onLaunchWhitelist = {
                 navController.navigate(AppDestination.WhitelistEditor.route)
+            },
+            onLaunchInstaller = {
+                navController.navigate(AppDestination.InstallEngine.route)
             }
         )
     }
