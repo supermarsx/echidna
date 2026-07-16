@@ -68,9 +68,9 @@ namespace echidna::utils
         counters.install_events.fetch_add(1, std::memory_order_relaxed);
         if (!success)
         {
-            // An attach failure is an INSTALL failure, not a block-processing
-            // failure. Keep it out of the block `failures` counter so the two
-            // remain independently observable.
+            // An attach failure is NOT a block-processing failure: keep it in the
+            // dedicated install_failures counter so the wire `failures` counter is
+            // never inflated by a hook that never attached.
             counters.install_failures.fetch_add(1, std::memory_order_relaxed);
         }
     }

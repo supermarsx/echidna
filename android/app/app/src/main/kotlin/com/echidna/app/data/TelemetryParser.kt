@@ -56,6 +56,13 @@ internal object TelemetryParser {
         } else {
             emptyList()
         }
+        // schema-v3 aggregates; absent (0/false) for a legacy or v2-only snapshot.
+        val totalBypasses = if (scopedV2) root.optLong("totalBypasses", 0L).coerceAtLeast(0L) else 0L
+        val totalInstallEvents =
+            if (scopedV2) root.optLong("totalInstallEvents", 0L).coerceAtLeast(0L) else 0L
+        val totalInstallFailures =
+            if (scopedV2) root.optLong("totalInstallFailures", 0L).coerceAtLeast(0L) else 0L
+        val anyRouteInstalled = scopedV2 && root.optBoolean("anyRouteInstalled", false)
 
         return TelemetrySnapshot(
             totalCallbacks = totalCallbacks,
@@ -75,7 +82,11 @@ internal object TelemetryParser {
             hooks = hooks,
             verification = if (scopedV2) rootVerification else TELEMETRY_VERIFICATION_UNVERIFIED,
             currentPolicyGeneration = currentPolicyGeneration,
-            routes = routes
+            routes = routes,
+            totalBypasses = totalBypasses,
+            totalInstallEvents = totalInstallEvents,
+            totalInstallFailures = totalInstallFailures,
+            anyRouteInstalled = anyRouteInstalled,
         )
     }
 
@@ -239,6 +250,10 @@ internal object TelemetryParser {
                 frames = item.optLong("frames", 0L).coerceAtLeast(0L),
                 failures = item.optLong("failures", 0L).coerceAtLeast(0L),
                 mutations = mutations,
+                bypasses = item.optLong("bypasses", 0L).coerceAtLeast(0L),
+                installEvents = item.optLong("installEvents", 0L).coerceAtLeast(0L),
+                installFailures = item.optLong("installFailures", 0L).coerceAtLeast(0L),
+                installed = item.optBoolean("installed", false),
                 verification = routeVerification,
             )
         }

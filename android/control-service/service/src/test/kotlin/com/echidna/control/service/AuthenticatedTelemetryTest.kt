@@ -96,6 +96,84 @@ class AuthenticatedTelemetryWireTest {
         assertTrue(limiter.allow(2_000L))
     }
 
+    // --- Schema v3 -------------------------------------------------------------
+
+    @Test
+    fun `strict parser accepts v3 and threads the added evidence fields`() {
+        val parsed = AuthenticatedTelemetryWire.parse(
+            validJsonV3(
+                bypasses = 2L,
+                installEvents = 4L,
+                installFailures = 5L,
+                installed = true,
+            ),
+        )
+
+        assertEquals(2L, parsed?.deltas?.bypasses)
+        assertEquals(4L, parsed?.deltas?.installEvents)
+        assertEquals(5L, parsed?.deltas?.installFailures)
+        assertEquals(true, parsed?.installed)
+        // v2 fields still parse unchanged in a v3 frame.
+        assertEquals(1L, parsed?.deltas?.mutations)
+        assertEquals("aaudio", parsed?.route?.wireName)
+    }
+
+    @Test
+    fun `strict parser still rejects unknown keys under v3 on root and deltas`() {
+        assertNull(AuthenticatedTelemetryWire.parse(validJsonV3(extraRoot = ",\"uid\":10001")))
+        assertNull(AuthenticatedTelemetryWire.parse(validJsonV3(extraDelta = ",\"attacker\":1")))
+        // The latched level must be a real boolean, not a coercible string.
+        assertNull(
+            AuthenticatedTelemetryWire.parse(
+                validJsonV3().replace("\"installed\":false", "\"installed\":\"true\""),
+            ),
+        )
+    }
+
+    @Test
+    fun `version and its key-set must agree exactly`() {
+        // schemaVersion 3 but a v2 key-set (missing the added fields) is rejected.
+        assertNull(AuthenticatedTelemetryWire.parse(validJson().replace("\"schemaVersion\":2", "\"schemaVersion\":3")))
+        // schemaVersion 2 but carrying v3 delta keys is rejected.
+        assertNull(
+            AuthenticatedTelemetryWire.parse(
+                validJson(mutations = 0L, state = "bypassed")
+                    .replace(
+                        "\"mutations\":0",
+                        "\"mutations\":0,\"bypasses\":1,\"installEvents\":0,\"installFailures\":0",
+                    ),
+            ),
+        )
+        // An unsupported future version is rejected outright.
+        assertNull(AuthenticatedTelemetryWire.parse(validJsonV3().replace("\"schemaVersion\":3", "\"schemaVersion\":4")))
+    }
+
+    @Test
+    fun `v3 rejects a block-outcome partition that exceeds the block count`() {
+        assertNull(
+            AuthenticatedTelemetryWire.parse(
+                validJsonV3(blocks = 2L, mutations = 1L, bypasses = 1L, failures = 1L),
+            ),
+        )
+        // Exactly summing to blocks is still valid.
+        assertEquals(
+            2L,
+            AuthenticatedTelemetryWire.parse(
+                validJsonV3(blocks = 2L, mutations = 1L, bypasses = 1L, failures = 0L),
+            )?.deltas?.blocks,
+        )
+    }
+
+    @Test
+    fun `v2 frames remain accepted with the added counters defaulted to zero`() {
+        val parsed = AuthenticatedTelemetryWire.parse(validJson())
+
+        assertEquals(0L, parsed?.deltas?.bypasses)
+        assertEquals(0L, parsed?.deltas?.installEvents)
+        assertEquals(0L, parsed?.deltas?.installFailures)
+        assertEquals(false, parsed?.installed)
+    }
+
     private fun assertThrowsIOException(block: () -> Unit) {
         try {
             block()
@@ -192,6 +270,56 @@ class AuthenticatedTelemetryStoreTest {
     }
 
     @Test
+    fun `v3 counters aggregate into the entry and snapshot json and still reject replay`() {
+        var now = 4_000L
+        val store = AuthenticatedTelemetryStore(clockMs = { now })
+        val peer = AuthenticatedPeer(uid = 10_055, pid = 202)
+
+        assertEquals(
+            TelemetryRecordResult.ACCEPTED,
+            store.record(
+                v3Frame(sequence = 1L, bypasses = 2L, installEvents = 3L, installFailures = 1L),
+                peer,
+                7L,
+            ),
+        )
+        now += 10L
+        assertEquals(
+            TelemetryRecordResult.ACCEPTED,
+            store.record(
+                v3Frame(sequence = 2L, bypasses = 1L, installEvents = 1L, installFailures = 4L),
+                peer,
+                7L,
+            ),
+        )
+        // A replayed sequence is still refused after v3 fields were added.
+        assertEquals(
+            TelemetryRecordResult.STALE_SEQUENCE,
+            store.record(v3Frame(sequence = 2L), peer, 7L),
+        )
+
+        val snapshot = store.snapshot(7L)
+        val entry = snapshot.entries.single()
+        assertEquals(3L, entry.bypasses)
+        assertEquals(4L, entry.installEvents)
+        assertEquals(5L, entry.installFailures)
+        assertTrue(entry.installed)
+        assertEquals(3L, snapshot.totalBypasses)
+        assertEquals(4L, snapshot.totalInstallEvents)
+        assertEquals(5L, snapshot.totalInstallFailures)
+        assertTrue(snapshot.anyInstalled)
+
+        val json = snapshot.toDiagnosticsJson(includeTrends = false, legacy = null).toString()
+        assertTrue(json.contains("\"totalBypasses\":3"))
+        assertTrue(json.contains("\"totalInstallEvents\":4"))
+        assertTrue(json.contains("\"totalInstallFailures\":5"))
+        assertTrue(json.contains("\"bypasses\":3"))
+        assertTrue(json.contains("\"installEvents\":4"))
+        assertTrue(json.contains("\"installFailures\":5"))
+        assertTrue(json.contains("\"installed\":true"))
+    }
+
+    @Test
     fun `caller attested routes remain diagnostic while mixed trusted routes retain proof`() {
         var now = 5_000L
         val peer = AuthenticatedPeer(uid = 10_001, pid = 99)
@@ -267,5 +395,57 @@ private fun frame(
         generation = generation,
         state = state,
         mutations = mutations,
+    ),
+)!!
+
+private fun validJsonV3(
+    sequence: Long = 1L,
+    process: String = "com.example.voice",
+    route: String = "aaudio",
+    generation: Long = 7L,
+    state: String = "processing",
+    blocks: Long = 9L,
+    frames: Long = 1728L,
+    failures: Long = 0L,
+    mutations: Long = 1L,
+    bypasses: Long = 0L,
+    installEvents: Long = 0L,
+    installFailures: Long = 0L,
+    installed: Boolean = false,
+    extraRoot: String = "",
+    extraDelta: String = "",
+): String = """
+    {
+      "schemaVersion":3,
+      "type":"telemetry",
+      "sequence":$sequence,
+      "senderMonotonicMs":1234,
+      "process":"$process",
+      "route":"$route",
+      "generation":$generation,
+      "state":"$state",
+      "deltas":{"blocks":$blocks,"frames":$frames,"failures":$failures,"mutations":$mutations,"bypasses":$bypasses,"installEvents":$installEvents,"installFailures":$installFailures$extraDelta},
+      "installed":$installed
+      $extraRoot
+    }
+""".trimIndent()
+
+private fun v3Frame(
+    sequence: Long,
+    process: String = "com.example.voice",
+    generation: Long = 7L,
+    bypasses: Long = 1L,
+    installEvents: Long = 2L,
+    installFailures: Long = 0L,
+    installed: Boolean = true,
+): AuthenticatedTelemetryFrame = AuthenticatedTelemetryWire.parse(
+    validJsonV3(
+        sequence = sequence,
+        process = process,
+        generation = generation,
+        bypasses = bypasses,
+        installEvents = installEvents,
+        installFailures = installFailures,
+        installed = installed,
     ),
 )!!

@@ -21,18 +21,12 @@ namespace echidna::utils
         kCount,
     };
 
-    // Mutually exclusive per-block classifications. Every processed block is
-    // exactly one of these; they never overlap. `kUnchanged` is the implicit
-    // remainder (processed, but the DSP produced output bit-equal to input),
-    // so it has no dedicated counter and is derived as
-    // blocks - mutations - bypasses - failures. This distinction is deliberate:
-    // "processed" (blocks) is not "mutated" (mutations).
     enum class TelemetryBlockOutcome : uint8_t
     {
-        kUnchanged, // processed, output == input (no audible change)
-        kMutated,   // processed, output != input (audio actually altered)
-        kBypassed,  // admitted but intentionally not processed (bypass/policy)
-        kFailure,   // block could not be processed; original audio preserved
+        kUnchanged,
+        kMutated,
+        kBypassed,
+        kFailure,
     };
 
     struct TelemetryDelta
@@ -53,16 +47,8 @@ namespace echidna::utils
         // consumer can tell "the route never attached" from "a block failed to
         // process". This is an edge (drained by take()), like install_events.
         uint32_t install_failures{0};
-        // Latched hook/install LEVEL (route-presence). Unlike the counters
-        // above, this is a current-state bit, not a drainable edge: take()
-        // reports it but does NOT clear it, and it does not, on its own, make
-        // the delta pending() (route-presence != route-use). All the uint32_t
-        // fields are edges (deltas since the last take()).
         bool installed{false};
 
-        // True only when there is unsent USE evidence to export. Note the
-        // latched `installed` level is intentionally excluded: an installed
-        // route that has processed nothing must not spuriously emit.
         [[nodiscard]] bool pending() const noexcept
         {
             return blocks != 0 || frames != 0 || failures != 0 || mutations != 0 ||
@@ -78,19 +64,9 @@ namespace echidna::utils
     public:
         TelemetryAccumulator() noexcept = default;
 
-        // Realtime-safe: lock-free relaxed atomics only, no allocation, no
-        // logging, no PCM retained. `frames` is a COUNT; sample data is never
-        // passed in or stored, so telemetry cannot leak audio content.
         void recordBlock(TelemetryRoute route,
                          uint32_t frames,
                          TelemetryBlockOutcome outcome) noexcept;
-        // Records a hook install/attach LEVEL transition for a route. This is
-        // orthogonal to block processing: it never touches blocks/frames/
-        // mutations/bypasses, so an install ("hooked") signal never implies a
-        // "mutated" signal. A failed install (success=false) increments the
-        // dedicated `install_failures` counter, NOT the block `failures`
-        // counter, so an attach failure is never mistaken for a block-processing
-        // failure downstream.
         void recordInstall(TelemetryRoute route, bool success) noexcept;
         [[nodiscard]] TelemetryDelta take(TelemetryRoute route) noexcept;
 

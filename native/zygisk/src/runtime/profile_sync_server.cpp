@@ -791,7 +791,7 @@ namespace echidna::runtime
             const uint64_t monotonic_ms = monotonic_ms_raw > 0
                                               ? static_cast<uint64_t>(monotonic_ms_raw)
                                               : 0;
-            const std::string payload = EncodeTelemetryV2(pending[selected],
+            const std::string payload = EncodeTelemetryV3(pending[selected],
                                                           candidate_sequence,
                                                           monotonic_ms,
                                                           process_name_,

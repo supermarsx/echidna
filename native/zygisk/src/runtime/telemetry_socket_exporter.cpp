@@ -97,9 +97,9 @@ namespace echidna::runtime
             }
             // Block-processing failures and install/attach failures both surface
             // as the wire "error" state. They are counted separately in the
-            // accumulator (delta.failures vs delta.install_failures), but the v2
-            // wire vocabulary has a single error state and the strict consumer
-            // pins the frame key-set, so this must not introduce a new state.
+            // accumulator (delta.failures vs delta.install_failures); the v2 wire
+            // exposes only the former, while v3 exposes both, but either kind of
+            // failure must still read as "error".
             if (delta.failures != 0 || delta.install_failures != 0)
             {
                 return "error";
@@ -162,6 +162,63 @@ namespace echidna::runtime
         payload.append(R"(,"mutations":)");
         payload.append(std::to_string(delta.mutations));
         payload.append("}}");
+        if (payload.size() > kTelemetryV2MaxFrameBytes)
+        {
+            return {};
+        }
+        return payload;
+    }
+
+    std::string EncodeTelemetryV3(const utils::TelemetryDelta &delta,
+                                  uint32_t sequence,
+                                  uint64_t sender_monotonic_ms,
+                                  std::string_view process,
+                                  uint64_t generation)
+    {
+        if (!delta.pending() || sequence == 0 || process.empty() || generation == 0 ||
+            sender_monotonic_ms > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
+            generation > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+        {
+            return {};
+        }
+
+        // v3 is a strict superset of the v2 frame: every v2 field is emitted in the
+        // same order, then the additional evidence fields are appended so they ride
+        // INSIDE the same authenticated envelope (peer-credential socket + strict
+        // exact-key-set validation + replay/generation checks) as the v2 fields.
+        // The new deltas carry the drainable edges the accumulator already tracks
+        // (bypasses/installEvents/installFailures); the latched route-presence level
+        // is a root boolean (installed). No v2 field is removed or reordered.
+        std::string payload;
+        payload.reserve(640);
+        payload.append(R"({"schemaVersion":3,"type":"telemetry","sequence":)");
+        payload.append(std::to_string(sequence));
+        payload.append(R"(,"senderMonotonicMs":)");
+        payload.append(std::to_string(sender_monotonic_ms));
+        payload.append(R"(,"process":)");
+        AppendJsonString(&payload, process);
+        payload.append(R"(,"route":")");
+        payload.append(utils::TelemetryRouteName(delta.route));
+        payload.append(R"(","generation":)");
+        payload.append(std::to_string(generation));
+        payload.append(R"(,"state":")");
+        payload.append(StateFor(delta));
+        payload.append(R"(","deltas":{"blocks":)");
+        payload.append(std::to_string(delta.blocks));
+        payload.append(R"(,"frames":)");
+        payload.append(std::to_string(delta.frames));
+        payload.append(R"(,"failures":)");
+        payload.append(std::to_string(delta.failures));
+        payload.append(R"(,"mutations":)");
+        payload.append(std::to_string(delta.mutations));
+        payload.append(R"(,"bypasses":)");
+        payload.append(std::to_string(delta.bypasses));
+        payload.append(R"(,"installEvents":)");
+        payload.append(std::to_string(delta.install_events));
+        payload.append(R"(,"installFailures":)");
+        payload.append(std::to_string(delta.install_failures));
+        payload.append(R"(},"installed":)");
+        payload.append(delta.installed ? "true}" : "false}");
         if (payload.size() > kTelemetryV2MaxFrameBytes)
         {
             return {};

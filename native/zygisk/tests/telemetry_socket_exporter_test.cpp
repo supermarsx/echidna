@@ -145,9 +145,61 @@ int main()
     Check(installed.find(R"("state":"processing")") == std::string::npos,
           "successful unchanged blocks must never claim processing");
 
-    // F1: an install/attach failure (install_failures, block failures == 0) must
-    // still surface as the wire "error" state so the error signal is preserved
-    // now that install failures no longer fold into the block failures counter.
+    // --- Schema v3: the additive evidence frame ---------------------------------
+    // A v3 frame is a strict superset of v2 that also carries the bypasses/
+    // installEvents/installFailures deltas and the latched `installed` level, all
+    // inside the same length-prefixed, peer-authenticated envelope.
+    utils::TelemetryDelta v3_delta;
+    v3_delta.route = utils::TelemetryRoute::kAAudio;
+    v3_delta.blocks = 9;
+    v3_delta.frames = 1728;
+    v3_delta.failures = 1;
+    v3_delta.mutations = 3;
+    v3_delta.bypasses = 2;
+    v3_delta.install_events = 4;
+    v3_delta.install_failures = 5;
+    v3_delta.installed = true;
+    const std::string v3 =
+        runtime::EncodeTelemetryV3(v3_delta, 11, 1236, "com.example:capture", 42);
+    Check(v3.find(R"("schemaVersion":3)") != std::string::npos,
+          "v3 frame must advertise schemaVersion 3");
+    // Every v2 field is still present, in the same order, ahead of the new fields.
+    const char *v2_order[] = {"\"blocks\":9", "\"frames\":1728",
+                              "\"failures\":1", "\"mutations\":3"};
+    size_t cursor = 0;
+    for (const char *needle : v2_order)
+    {
+        const size_t at = v3.find(needle, cursor);
+        Check(at != std::string::npos, "v3 must preserve every v2 delta field");
+        if (at != std::string::npos)
+        {
+            cursor = at;
+        }
+    }
+    Check(v3.find(R"("bypasses":2)") != std::string::npos &&
+              v3.find(R"("installEvents":4)") != std::string::npos &&
+              v3.find(R"("installFailures":5)") != std::string::npos,
+          "v3 deltas must add bypasses/installEvents/installFailures edges");
+    Check(v3.find(R"(,"installed":true})") != std::string::npos,
+          "v3 must append the latched installed level at the root");
+    Check(v3.find(R"("mutations":3)") < v3.find(R"("bypasses":2)"),
+          "v3 must append the new deltas after the v2 deltas (no reorder)");
+
+    // The new fields ride inside the framed, best-effort send path just like v2 —
+    // they are authenticated by the same length-prefixed peer-credential channel,
+    // not appended outside the frame.
+    g_frame.clear();
+    Check(runtime::SendTelemetryV2Frame(1, v3, CaptureSend) ==
+              runtime::TelemetrySendResult::kComplete,
+          "v3 frame must transit the framed authenticated send path");
+    std::memcpy(&network_length, g_frame.data(), sizeof(network_length));
+    Check(ntohl(network_length) == v3.size() &&
+              std::string(g_frame.begin() + sizeof(network_length), g_frame.end()) == v3,
+          "v3 wire frame must length-prefix and carry the exact v3 payload");
+
+    // F1: an install/attach failure is counted in install_failures, NOT the block
+    // `failures` counter. It must still read as the "error" state, the v3 frame
+    // must expose it, and the v2 frame of the same delta must NOT leak new keys.
     utils::TelemetryDelta install_failure;
     install_failure.route = utils::TelemetryRoute::kAAudio;
     install_failure.install_events = 1;
@@ -155,20 +207,25 @@ int main()
     install_failure.installed = false;
     Check(install_failure.pending(),
           "an install failure is unsent evidence that must be exportable");
-    const std::string install_failure_frame =
-        runtime::EncodeTelemetryV2(install_failure, 9, 1236, "com.example", 42);
-    Check(install_failure_frame.find(R"("state":"error")") != std::string::npos,
-          "an install failure must still be reported as the error state");
-    // F2 is deferred: the v2 wire remains blocks/frames/failures/mutations only,
-    // because the control-service consumer pins the exact delta key-set. The
-    // native-internal install_failures counter must NOT leak onto the wire.
-    Check(install_failure_frame.find("install_failures") == std::string::npos &&
-              install_failure_frame.find("bypasses") == std::string::npos &&
-              install_failure_frame.find("installed") == std::string::npos &&
-              install_failure_frame.find("install_events") == std::string::npos,
-          "the v2 delta wire must stay additive-compatible (no new serialized keys)");
-    Check(install_failure_frame.find(R"("failures":0)") != std::string::npos,
-          "the block failures wire counter excludes install failures after F1");
+    const std::string v3_install_fail =
+        runtime::EncodeTelemetryV3(install_failure, 12, 1237, "com.example", 42);
+    Check(v3_install_fail.find(R"("state":"error")") != std::string::npos &&
+              v3_install_fail.find(R"("installFailures":1)") != std::string::npos &&
+              v3_install_fail.find(R"("failures":0)") != std::string::npos,
+          "v3 install failure must read error, expose installFailures, keep block "
+          "failures at 0");
+    const std::string v2_install_fail =
+        runtime::EncodeTelemetryV2(install_failure, 12, 1237, "com.example", 42);
+    Check(v2_install_fail.find(R"("state":"error")") != std::string::npos &&
+              v2_install_fail.find(R"("failures":0)") != std::string::npos &&
+              v2_install_fail.find("installFailures") == std::string::npos &&
+              v2_install_fail.find("bypasses") == std::string::npos &&
+              v2_install_fail.find("installEvents") == std::string::npos &&
+              v2_install_fail.find(R"(,"installed":)") == std::string::npos,
+          "v2 frame must stay the exact legacy key-set (no v3 keys leak)");
+
+    Check(runtime::EncodeTelemetryV3({}, 11, 1236, "com.example", 42).empty(),
+          "an empty (non-pending) v3 delta must fail closed like v2");
 
     if (g_failures != 0)
     {

@@ -108,6 +108,8 @@ fun AdvancedDiagnosticsSection(
                     }
                     HookStatusGroup(telemetry.hooks, telemetryLive)
                     HorizontalDivider()
+                    HookAttachGroup(telemetry, telemetryLive)
+                    HorizontalDivider()
                     AudioPipelineGroup(moduleStatus, telemetry, latencyMode, telemetryLive)
                     HorizontalDivider()
                     PerformanceGroup(metrics, telemetry, telemetryLive)
@@ -177,6 +179,30 @@ private fun HookAdvancedRow(hook: HookTelemetry) {
 }
 
 @Composable
+private fun HookAttachGroup(telemetry: TelemetrySnapshot, telemetryLive: Boolean) {
+    GroupHeader(
+        title = "Hook attach",
+        description = "Install/attach level and events, kept separate from block processing " +
+            "so an attach failure is never mistaken for a block-processing failure."
+    )
+    MetricRow(
+        label = "Any route attached",
+        value = if (telemetryLive) if (telemetry.anyRouteInstalled) "yes" else "no" else null,
+        description = "Whether at least one audio route currently reports an installed hook."
+    )
+    MetricRow(
+        label = "Install / attach events",
+        value = if (telemetryLive) telemetry.totalInstallEvents.toString() else null,
+        description = "Hook attach level transitions observed — not audio block counts."
+    )
+    MetricRow(
+        label = "Install / attach failures",
+        value = if (telemetryLive) telemetry.totalInstallFailures.toString() else null,
+        description = "Attach attempts that failed, counted apart from block-processing failures."
+    )
+}
+
+@Composable
 private fun AudioPipelineGroup(
     moduleStatus: ModuleStatus?,
     telemetry: TelemetrySnapshot,
@@ -192,6 +218,11 @@ private fun AudioPipelineGroup(
         label = "Audio callbacks processed",
         value = if (telemetryLive) telemetry.totalCallbacks.toString() else null,
         description = "Total audio blocks the engine has processed since start."
+    )
+    MetricRow(
+        label = "Bypassed blocks",
+        value = if (telemetryLive) telemetry.totalBypasses.toString() else null,
+        description = "Blocks admitted but intentionally left untransformed (bypass / policy)."
     )
     MetricRow(
         label = "XRuns / underruns",

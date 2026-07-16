@@ -30,6 +30,16 @@ private val TELEMETRY_ROOT_KEYS = setOf(
 )
 private val TELEMETRY_DELTA_KEYS = setOf("blocks", "frames", "failures", "mutations")
 
+// Schema v3 is a strict superset of v2: it adds the latched `installed` level at
+// the root and the bypasses/installEvents/installFailures edges inside `deltas`.
+// Each version is validated against its OWN exact key-set, so unknown fields are
+// still rejected — the v3 fields are accepted only because they are declared here,
+// never tolerated as arbitrary extra keys. This preserves the §13 threat-model
+// property that the strict validator rejects anything it does not explicitly know.
+private val TELEMETRY_ROOT_KEYS_V3 = TELEMETRY_ROOT_KEYS + "installed"
+private val TELEMETRY_DELTA_KEYS_V3 =
+    TELEMETRY_DELTA_KEYS + setOf("bypasses", "installEvents", "installFailures")
+
 internal enum class AuthenticatedTelemetryRoute(val wireName: String) {
     AAUDIO("aaudio"),
     AUDIORECORD("audiorecord"),
@@ -73,6 +83,10 @@ internal data class AuthenticatedTelemetryDeltas(
     val frames: Long,
     val failures: Long,
     val mutations: Long,
+    // v3-only edges; default 0 for a v2 frame, which never carries them.
+    val bypasses: Long = 0L,
+    val installEvents: Long = 0L,
+    val installFailures: Long = 0L,
 )
 
 internal data class AuthenticatedTelemetryFrame(
@@ -83,6 +97,8 @@ internal data class AuthenticatedTelemetryFrame(
     val generation: Long,
     val state: AuthenticatedTelemetryState,
     val deltas: AuthenticatedTelemetryDeltas,
+    // v3-only latched hook/install level; false for a v2 frame.
+    val installed: Boolean = false,
     val audioSessionId: Int = 0,
     val verification: AuthenticatedTelemetryVerification =
         AuthenticatedTelemetryVerification.AUTHENTICATED_SOCKET_V2,
@@ -122,8 +138,13 @@ internal object AuthenticatedTelemetryWire {
     fun parse(json: String): AuthenticatedTelemetryFrame? {
         if (!StrictJsonValidator.isValid(json)) return null
         val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
-        if (root.keysSet() != TELEMETRY_ROOT_KEYS) return null
-        if (strictLong(root, "schemaVersion", 2L, 2L) != 2L) return null
+        // Accept v2 (back-compat) and v3, each against its OWN exact key-set. This
+        // is safe schema evolution: v2's validation is byte-for-byte unchanged and
+        // v3 is an equally strict validator, so no path tolerates unknown keys.
+        val schemaVersion = strictLong(root, "schemaVersion", 2L, 3L) ?: return null
+        val isV3 = schemaVersion == 3L
+        val expectedRootKeys = if (isV3) TELEMETRY_ROOT_KEYS_V3 else TELEMETRY_ROOT_KEYS
+        if (root.keysSet() != expectedRootKeys) return null
         if (root.optString("type", "") != "telemetry") return null
 
         val sequence = strictLong(root, "sequence", 0L, UINT32_MAX) ?: return null
@@ -140,13 +161,30 @@ internal object AuthenticatedTelemetryWire {
             ?: return null
         val state = AuthenticatedTelemetryState.fromWire(root.optString("state", ""))
             ?: return null
+        val installed = if (isV3) strictBoolean(root, "installed") ?: return null else false
         val deltasObject = root.optJSONObject("deltas") ?: return null
-        if (deltasObject.keysSet() != TELEMETRY_DELTA_KEYS) return null
+        val expectedDeltaKeys = if (isV3) TELEMETRY_DELTA_KEYS_V3 else TELEMETRY_DELTA_KEYS
+        if (deltasObject.keysSet() != expectedDeltaKeys) return null
         val deltas = AuthenticatedTelemetryDeltas(
             blocks = strictLong(deltasObject, "blocks", 0L, UINT32_MAX) ?: return null,
             frames = strictLong(deltasObject, "frames", 0L, UINT32_MAX) ?: return null,
             failures = strictLong(deltasObject, "failures", 0L, UINT32_MAX) ?: return null,
             mutations = strictLong(deltasObject, "mutations", 0L, UINT32_MAX) ?: return null,
+            bypasses = if (isV3) {
+                strictLong(deltasObject, "bypasses", 0L, UINT32_MAX) ?: return null
+            } else {
+                0L
+            },
+            installEvents = if (isV3) {
+                strictLong(deltasObject, "installEvents", 0L, UINT32_MAX) ?: return null
+            } else {
+                0L
+            },
+            installFailures = if (isV3) {
+                strictLong(deltasObject, "installFailures", 0L, UINT32_MAX) ?: return null
+            } else {
+                0L
+            },
         )
         if (state == AuthenticatedTelemetryState.PROCESSING) {
             if (deltas.mutations == 0L || deltas.blocks == 0L || deltas.frames == 0L) return null
@@ -154,6 +192,11 @@ internal object AuthenticatedTelemetryWire {
             return null
         }
         if (deltas.mutations > deltas.blocks) return null
+        // The three block outcomes partition `blocks` (each processed block is
+        // mutated, bypassed, failed, or unchanged), so they can never exceed it.
+        // installFailures is an attach-level edge, NOT a block outcome, so it is
+        // deliberately excluded from this bound.
+        if (deltas.mutations + deltas.bypasses + deltas.failures > deltas.blocks) return null
         return AuthenticatedTelemetryFrame(
             sequence = sequence,
             senderMonotonicMs = senderMonotonicMs,
@@ -162,6 +205,7 @@ internal object AuthenticatedTelemetryWire {
             generation = generation,
             state = state,
             deltas = deltas,
+            installed = installed,
         )
     }
 
@@ -170,6 +214,12 @@ internal object AuthenticatedTelemetryWire {
         if (value is Float || value is Double || value !is Number) return null
         val parsed = value.toString().toLongOrNull() ?: return null
         return parsed.takeIf { it in min..max }
+    }
+
+    /** Requires a genuine JSON boolean; a coercible string/number is rejected. */
+    private fun strictBoolean(root: JSONObject, key: String): Boolean? {
+        val value = runCatching { root.get(key) }.getOrNull() ?: return null
+        return value as? Boolean
     }
 
     private fun isValidProcessName(process: String): Boolean {
@@ -384,6 +434,10 @@ private data class MutableTelemetryEntry(
     var frames: Long,
     var failures: Long,
     var mutations: Long,
+    var bypasses: Long,
+    var installEvents: Long,
+    var installFailures: Long,
+    var installed: Boolean,
 )
 
 internal data class AuthenticatedTelemetryEntry(
@@ -401,6 +455,10 @@ internal data class AuthenticatedTelemetryEntry(
     val frames: Long,
     val failures: Long,
     val mutations: Long,
+    val bypasses: Long,
+    val installEvents: Long,
+    val installFailures: Long,
+    val installed: Boolean,
     val audioSessionId: Int,
     val verification: String,
 )
@@ -426,6 +484,10 @@ internal data class AuthenticatedTelemetrySnapshot(
     val totalFrames: Long get() = entries.saturatingSum { it.frames }
     val totalFailures: Long get() = entries.saturatingSum { it.failures }
     val totalMutations: Long get() = entries.saturatingSum { it.mutations }
+    val totalBypasses: Long get() = entries.saturatingSum { it.bypasses }
+    val totalInstallEvents: Long get() = entries.saturatingSum { it.installEvents }
+    val totalInstallFailures: Long get() = entries.saturatingSum { it.installFailures }
+    val anyInstalled: Boolean get() = entries.any { it.installed }
 
     fun toLiveJson(legacy: TelemetrySnapshot?): String {
         val root = baseJson(includeIdentities = true)
@@ -489,6 +551,10 @@ internal data class AuthenticatedTelemetrySnapshot(
             .put("totalFrames", totalFrames)
             .put("totalFailures", totalFailures)
             .put("totalMutations", totalMutations)
+            .put("totalBypasses", totalBypasses)
+            .put("totalInstallEvents", totalInstallEvents)
+            .put("totalInstallFailures", totalInstallFailures)
+            .put("anyRouteInstalled", anyInstalled)
         val routes = JSONArray()
         entries.forEach { entry ->
             val item = JSONObject()
@@ -503,6 +569,10 @@ internal data class AuthenticatedTelemetrySnapshot(
                 .put("frames", entry.frames)
                 .put("failures", entry.failures)
                 .put("mutations", entry.mutations)
+                .put("bypasses", entry.bypasses)
+                .put("installEvents", entry.installEvents)
+                .put("installFailures", entry.installFailures)
+                .put("installed", entry.installed)
                 .put("verification", entry.verification)
             if (includeIdentities) {
                 item.put("uid", entry.uid)
@@ -609,6 +679,10 @@ internal class AuthenticatedTelemetryStore(
             frames = 0L,
             failures = 0L,
             mutations = 0L,
+            bypasses = 0L,
+            installEvents = 0L,
+            installFailures = 0L,
+            installed = false,
         )
         next.state = frame.state
         next.sequence = frame.sequence
@@ -619,6 +693,11 @@ internal class AuthenticatedTelemetryStore(
         next.frames = saturatingAdd(next.frames, frame.deltas.frames)
         next.failures = saturatingAdd(next.failures, frame.deltas.failures)
         next.mutations = saturatingAdd(next.mutations, frame.deltas.mutations)
+        next.bypasses = saturatingAdd(next.bypasses, frame.deltas.bypasses)
+        next.installEvents = saturatingAdd(next.installEvents, frame.deltas.installEvents)
+        next.installFailures = saturatingAdd(next.installFailures, frame.deltas.installFailures)
+        // `installed` is a latched level, not an edge: take the newest frame's value.
+        next.installed = frame.installed
         entries[key] = next
         TelemetryRecordResult.ACCEPTED
     }
@@ -644,6 +723,10 @@ internal class AuthenticatedTelemetryStore(
                 frames = value.frames,
                 failures = value.failures,
                 mutations = value.mutations,
+                bypasses = value.bypasses,
+                installEvents = value.installEvents,
+                installFailures = value.installFailures,
+                installed = value.installed,
                 audioSessionId = key.audioSessionId,
                 verification = key.verification.wireName,
             )

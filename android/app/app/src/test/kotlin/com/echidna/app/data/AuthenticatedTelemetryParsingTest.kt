@@ -175,6 +175,76 @@ class AuthenticatedTelemetryParsingTest {
     }
 
     @Test
+    fun `schema-v3 snapshot counters are surfaced honestly into the model`() {
+        val snapshot = TelemetryParser.parse(
+            """
+                {
+                  "schemaVersion":2,
+                  "type":"telemetrySnapshot",
+                  "verification":"authenticated_socket_v2",
+                  "currentPolicyGeneration":11,
+                  "processing":true,
+                  "totalCallbacks":9,
+                  "totalBypasses":2,
+                  "totalInstallEvents":4,
+                  "totalInstallFailures":5,
+                  "anyRouteInstalled":true,
+                  "routes":[{
+                    "process":"com.example.voice",
+                    "route":"aaudio",
+                    "generation":11,
+                    "state":"processing",
+                    "sequence":9,
+                    "ageMs":10,
+                    "recentMutation":true,
+                    "blocks":9,
+                    "frames":1728,
+                    "failures":0,
+                    "mutations":3,
+                    "bypasses":2,
+                    "installEvents":4,
+                    "installFailures":5,
+                    "installed":true,
+                    "verification":"authenticated_socket_v2"
+                  }]
+                }
+            """.trimIndent(),
+        )!!
+
+        assertEquals(2L, snapshot.totalBypasses)
+        assertEquals(4L, snapshot.totalInstallEvents)
+        assertEquals(5L, snapshot.totalInstallFailures)
+        assertTrue(snapshot.anyRouteInstalled)
+        val route = snapshot.routes.single()
+        assertEquals(2L, route.bypasses)
+        assertEquals(4L, route.installEvents)
+        assertEquals(5L, route.installFailures)
+        assertTrue(route.installed)
+        // v3 additive fields must not disturb the existing verified-processing proof.
+        assertTrue(snapshot.isVerifiedProcessing)
+    }
+
+    @Test
+    fun `pre-v3 snapshot without the added counters defaults them to zero`() {
+        val snapshot = TelemetryParser.parse(
+            snapshotJson(
+                currentGeneration = 11L,
+                routeGeneration = 11L,
+                state = "processing",
+                recentMutation = true,
+                mutations = 3L,
+            ),
+        )!!
+
+        assertEquals(0L, snapshot.totalBypasses)
+        assertEquals(0L, snapshot.totalInstallEvents)
+        assertEquals(0L, snapshot.totalInstallFailures)
+        assertFalse(snapshot.anyRouteInstalled)
+        assertEquals(0L, snapshot.routes.single().bypasses)
+        assertFalse(snapshot.routes.single().installed)
+    }
+
+    @Test
     fun `explicit unknown route verification never inherits trusted root verification`() {
         val snapshot = TelemetryParser.parse(
             snapshotJson(

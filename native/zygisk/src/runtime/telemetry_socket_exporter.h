@@ -36,6 +36,18 @@ namespace echidna::runtime
                                                 std::string_view process,
                                                 uint64_t generation);
 
+    /**
+     * Encodes the schema-v3 telemetry frame: a strict superset of v2 that also
+     * carries bypasses/installEvents/installFailures deltas and the latched
+     * `installed` level, all inside the same authenticated (peer-credential,
+     * strict-key-set, replay-checked) envelope as the v2 fields.
+     */
+    [[nodiscard]] std::string EncodeTelemetryV3(const utils::TelemetryDelta &delta,
+                                                uint32_t sequence,
+                                                uint64_t sender_monotonic_ms,
+                                                std::string_view process,
+                                                uint64_t generation);
+
     /** Encodes the process-bound acknowledgement used by capture-owner handoffs. */
     [[nodiscard]] std::string EncodeCaptureOwnerAckV1(std::string_view process,
                                                       uint64_t generation,

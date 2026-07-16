@@ -32,6 +32,11 @@ data class RuntimeRouteTelemetry(
     val frames: Long,
     val failures: Long,
     val mutations: Long,
+    // schema-v3 additive counters; 0/false when the producer only emits v2.
+    val bypasses: Long = 0L,
+    val installEvents: Long = 0L,
+    val installFailures: Long = 0L,
+    val installed: Boolean = false,
     val verification: String = TELEMETRY_VERIFICATION_UNVERIFIED,
 )
 
@@ -53,7 +58,12 @@ data class TelemetrySnapshot(
     val hooks: List<HookTelemetry>,
     val verification: String = "unverified",
     val currentPolicyGeneration: Long = 0L,
-    val routes: List<RuntimeRouteTelemetry> = emptyList()
+    val routes: List<RuntimeRouteTelemetry> = emptyList(),
+    // schema-v3 aggregates surfaced from the authenticated snapshot; 0 when absent.
+    val totalBypasses: Long = 0L,
+    val totalInstallEvents: Long = 0L,
+    val totalInstallFailures: Long = 0L,
+    val anyRouteInstalled: Boolean = false,
 ) {
     val hasVerifiedRuntimeTelemetry: Boolean
         get() = currentPolicyGeneration > 0L && routes.any {
