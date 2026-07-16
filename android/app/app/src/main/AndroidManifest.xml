@@ -45,7 +45,7 @@
         <service
             android:name=".system.EchidnaQuickSettingsTileService"
             android:exported="false"
-            android:icon="@drawable/ic_tile"
+            android:icon="@drawable/ic_echidna_mono"
             android:label="Echidna"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
@@ -62,6 +62,45 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- Compact control widget: master toggle + panic + honest status. -->
+        <receiver
+            android:name=".system.EchidnaControlWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_control_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_control_info" />
+        </receiver>
+
+        <!-- Preset widget: active preset + cycle. -->
+        <receiver
+            android:name=".system.EchidnaPresetWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_preset_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_preset_info" />
+        </receiver>
+
+        <!-- Large hub widget: status + preset + quick toggles. -->
+        <receiver
+            android:name=".system.EchidnaQuickControlsWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_quick_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_quick_info" />
         </receiver>
 
         <receiver

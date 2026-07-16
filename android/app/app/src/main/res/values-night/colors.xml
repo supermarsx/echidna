@@ -1,0 +1,10 @@
+<resources>
+    <!-- Widget neutral palette — dark theme (non-dynamic fallback). Matches the app's dark M3 look. -->
+    <color name="widget_surface">#FF1B1B1F</color>
+    <color name="widget_surface_variant">#FF2C2B30</color>
+    <color name="widget_on_surface">#FFE6E1E5</color>
+    <color name="widget_on_surface_variant">#FFC9C5CF</color>
+    <color name="widget_accent">#FFD0BCFF</color>
+    <color name="widget_on_accent">#FF381E72</color>
+    <color name="widget_outline">#33FFFFFF</color>
+</resources>

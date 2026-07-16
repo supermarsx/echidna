@@ -11,4 +11,25 @@
     <string name="notification_toggle">Toggle</string>
     <string name="notification_cycle">Cycle Preset</string>
     <string name="notification_open">Open App</string>
+
+    <!-- Home-screen widgets -->
+    <string name="widget_control_label">Echidna Control</string>
+    <string name="widget_control_description">Master toggle, panic and a live engine-status indicator.</string>
+    <string name="widget_preset_label">Echidna Preset</string>
+    <string name="widget_preset_description">Show the active preset and cycle between presets.</string>
+    <string name="widget_quick_label">Echidna Quick Controls</string>
+    <string name="widget_quick_description">Engine status, preset and quick toggles for master, bypass and sidetone.</string>
+
+    <string name="widget_preset_heading">Preset</string>
+    <string name="widget_master">Master</string>
+    <string name="widget_bypass">Bypass</string>
+    <string name="widget_sidetone">Sidetone</string>
+    <string name="widget_panic">Panic</string>
+    <string name="widget_on">On</string>
+    <string name="widget_off">Off</string>
+    <string name="widget_controls_disabled">Widget controls disabled in Settings</string>
+    <string name="widget_prev_preset">Previous preset</string>
+    <string name="widget_next_preset">Next preset</string>
+    <string name="widget_open_app">Open Echidna</string>
+    <string name="qs_tile_label">Echidna</string>
 </resources>

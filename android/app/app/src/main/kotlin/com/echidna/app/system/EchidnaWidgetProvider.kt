@@ -36,6 +36,11 @@ class EchidnaWidgetProvider : AppWidgetProvider() {
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(ComponentName(context, EchidnaWidgetProvider::class.java))
             ids.forEach { id -> updateWidget(context, manager, id) }
+            // Single fan-out point: the repository already calls this on every state change, so
+            // refresh the newer widget family here too, keeping all Echidna widgets coherent.
+            EchidnaControlWidgetProvider.updateAll(context)
+            EchidnaPresetWidgetProvider.updateAll(context)
+            EchidnaQuickControlsWidgetProvider.updateAll(context)
         }
 
         private fun updateWidget(context: Context, manager: AppWidgetManager, id: Int) {

@@ -1,0 +1,34 @@
+<!-- Adaptive-icon foreground: the Echidna brand mark scaled into the 108dp icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="3"
+        android:scaleY="3"
+        android:translateX="18"
+        android:translateY="18">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M3,17
+                C4.5,15.5 6,14.8 7.6,14.4
+                C8.2,11.6 10.6,9.6 13.6,9.6
+                C17.1,9.6 19.6,12.3 19.6,15.6
+                L19.6,17.4
+                C19.6,18.1 19.1,18.6 18.4,18.6
+                L6,18.6
+                C4.7,18.6 3.6,18 3,17 Z
+                M7.1,16.2
+                A0.6,0.6 0 1,0 5.9,16.2
+                A0.6,0.6 0 1,0 7.1,16.2 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M8.2,12.9 L7.6,9.3 L9.8,11.9 Z
+                M10.2,11.1 L10.2,7.2 L11.8,10.3 Z
+                M12.6,10.0 L13.5,6.5 L14.3,10.0 Z
+                M15.0,10.4 L16.6,7.2 L16.4,11.4 Z
+                M16.9,12.0 L19.2,9.6 L18.1,13.2 Z" />
+    </group>
+</vector>

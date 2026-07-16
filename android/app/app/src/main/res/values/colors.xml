@@ -1,3 +1,20 @@
 <resources>
     <color name="ic_launcher_background">#121212</color>
+
+    <!-- Widget neutral palette (light fallback; overridden by -night and Material You -v31). -->
+    <color name="widget_surface">#FFF4F3F7</color>
+    <color name="widget_surface_variant">#FFE6E2EC</color>
+    <color name="widget_on_surface">#FF1C1B1F</color>
+    <color name="widget_on_surface_variant">#FF49454F</color>
+    <color name="widget_accent">#FF6750A4</color>
+    <color name="widget_on_accent">#FFFFFFFF</color>
+    <color name="widget_outline">#33000000</color>
+
+    <!-- Semantic engine-status colours. Theme-independent so they read the same everywhere and
+         match the in-app EngineStatusCard exactly. -->
+    <color name="widget_status_active">#FF4CAF50</color>
+    <color name="widget_status_standby">#FF42A5F5</color>
+    <color name="widget_status_bypassed">#FFFFB300</color>
+    <color name="widget_status_notinstalled">#FF9E9E9E</color>
+    <color name="widget_status_error">#FFEF5350</color>
 </resources>
