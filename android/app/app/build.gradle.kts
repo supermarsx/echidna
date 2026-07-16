@@ -34,6 +34,31 @@ fun releaseSigningValue(propertyKey: String, envKey: String): String? =
 val releaseStoreFile: String? = releaseSigningValue("storeFile", "RELEASE_STORE_FILE")
 val hasReleaseKeystore: Boolean = releaseStoreFile != null
 
+// --- Turnkey engine module bundle --------------------------------------------
+// The flashable all-ABI Magisk module zip is produced OUTSIDE the APK build by the
+// existing native tooling (tools/build_native_ndk.sh + tools/build_magisk_module.sh)
+// into <repo>/out/echidna-magisk.zip. The stageEngineModuleAsset task (below) copies
+// it into a build-generated assets directory that is wired onto the main source set,
+// so the in-app installer (EngineModuleArchive) can install it directly ("turnkey").
+//
+// Both the source zip (/out/) and this generated location (under the Gradle build dir)
+// are gitignored — a ~15 MB per-ABI binary is NEVER committed. When the zip is absent
+// (a "lite" build produced without running the native tooling) nothing is staged and
+// the installer falls back to the SAF .zip picker, exactly as EngineModuleArchive
+// already handles a missing asset.
+//
+// APK size / ABI note: the bundled zip carries all three module ABIs (arm64-v8a,
+// armeabi-v7a, x86_64) because a Magisk module is installed onto the device and Magisk
+// selects the matching ABI at runtime, so the zip must be self-contained. This roughly
+// doubles the universal APK (~21 MB -> ~37 MB). Gradle ABI *splits* partition only the
+// APK's own JNI libs, not shared assets, so a split cannot carry a different per-ABI zip
+// without product flavors; to avoid changing the assembleDebug/Release task surface that
+// the rest of the app build depends on, this ships a single universal build with the full
+// bundle and documents the tradeoff. A per-ABI "lite vs full" flavor split is a follow-up.
+val engineModuleZip: java.io.File = rootProject.file("../../out/echidna-magisk.zip")
+val engineModuleAssetsDir = layout.buildDirectory.dir("generated/echidna/assets")
+val engineModuleAssetName = "echidna-magisk.zip"
+
 android {
     namespace = "com.echidna.app"
     compileSdk = 34
@@ -122,6 +147,14 @@ android {
         }
     }
 
+    // Stage the generated engine-module archive (see stageEngineModuleAsset below) onto the main
+    // assets source set so it lands in the APK at the exact name EngineModuleArchive expects
+    // (echidna-magisk.zip in the assets root). The directory is under the Gradle build output
+    // (gitignored) so no ~15 MB binary is ever tracked.
+    sourceSets {
+        getByName("main").assets.srcDir(engineModuleAssetsDir)
+    }
+
     testOptions {
         // Robolectric (used by t2-e18's JVM unit tests that touch Android framework
         // classes) needs merged Android resources on the unit-test classpath.
@@ -183,6 +216,46 @@ dependencies {
     // Compose test manifest (activity for createAndroidComposeRule) — already provided
     // by the debugImplementation("androidx.compose.ui:ui-test-manifest") line above.
 }
+
+// Stage the bundled engine module zip into the generated assets dir at build time. Runs before any
+// asset merge so the archive is packaged into the APK. Honest about absence: with no zip present it
+// clears the asset (lite build) instead of failing the build.
+val stageEngineModuleAsset = tasks.register("stageEngineModuleAsset") {
+    description = "Stages the flashable Echidna Magisk module zip into the APK assets when present."
+    group = "echidna"
+    val srcZip = engineModuleZip
+    val destDirProvider = engineModuleAssetsDir
+    // Re-run when the source appears/disappears or its contents change.
+    inputs.property("zipPresent", srcZip.isFile)
+    inputs.property("zipLength", if (srcZip.isFile) srcZip.length() else 0L)
+    inputs.property("zipModified", if (srcZip.isFile) srcZip.lastModified() else 0L)
+    outputs.dir(destDirProvider)
+    doLast {
+        val destDir = destDirProvider.get().asFile
+        destDir.mkdirs()
+        val dest = destDir.resolve(engineModuleAssetName)
+        if (srcZip.isFile) {
+            srcZip.copyTo(dest, overwrite = true)
+            logger.lifecycle(
+                "stageEngineModuleAsset: bundled ${srcZip.length()} bytes -> assets/$engineModuleAssetName (turnkey install)"
+            )
+        } else {
+            dest.delete()
+            logger.lifecycle(
+                "stageEngineModuleAsset: no zip at ${srcZip.path} — building a lite APK (installer uses the SAF .zip picker). " +
+                    "Run tools/build_native_ndk.sh + tools/build_magisk_module.sh to produce it."
+            )
+        }
+    }
+}
+
+// Asset-merge tasks (mergeDebugAssets / mergeReleaseAssets / test variants) must see the staged
+// archive, so make every asset merge depend on the staging task.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(stageEngineModuleAsset)
+}
+// preBuild dependency covers any variant/tooling path that reads assets before an explicit merge.
+tasks.named("preBuild").configure { dependsOn(stageEngineModuleAsset) }
 
 tasks.register("verifyDebugNativePackaging") {
     dependsOn("assembleDebug")
