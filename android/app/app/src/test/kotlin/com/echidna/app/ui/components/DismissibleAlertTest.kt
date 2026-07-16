@@ -129,4 +129,63 @@ class DismissibleAlertTest {
         }
         composeRule.onNodeWithTag(AlertTestTags.CARD).assertDoesNotExist()
     }
+
+    @Test
+    fun `permanent dismiss button shows by default and records a permanent dismissal`() {
+        val store = DismissedAlertsStore(context)
+        composeRule.setContent {
+            MaterialTheme {
+                PersistentDismissibleAlert(
+                    alertKey = "perm.alert",
+                    store = store,
+                    message = "Permanently dismissable",
+                    severity = AlertSeverity.WARNING,
+                )
+            }
+        }
+        // The "Don't remind" affordance is present alongside the plain dismiss.
+        composeRule.onNodeWithTag(AlertTestTags.PERMANENT_DISMISS).assertExists()
+        composeRule.onNodeWithTag(AlertTestTags.PERMANENT_DISMISS).performClick()
+        composeRule.waitForIdle()
+
+        // Hidden, and recorded as permanent so reconcile can never bring it back.
+        composeRule.onNodeWithTag(AlertTestTags.CARD).assertDoesNotExist()
+        assertTrue(store.isPermanentlyDismissed("perm.alert"))
+    }
+
+    @Test
+    fun `permanent dismiss can be disabled`() {
+        val store = DismissedAlertsStore(context)
+        composeRule.setContent {
+            MaterialTheme {
+                PersistentDismissibleAlert(
+                    alertKey = "temp.only",
+                    store = store,
+                    message = "Temp only",
+                    severity = AlertSeverity.INFO,
+                    allowPermanentDismiss = false,
+                )
+            }
+        }
+        composeRule.onNodeWithTag(AlertTestTags.PERMANENT_DISMISS).assertDoesNotExist()
+        composeRule.onNodeWithTag(AlertTestTags.DISMISS).assertExists()
+    }
+
+    @Test
+    fun `permanently dismissed alert stays hidden even under a different temp key`() {
+        val store = DismissedAlertsStore(context)
+        store.setPermanentlyDismissed("perm.stable", true)
+        composeRule.setContent {
+            MaterialTheme {
+                PersistentDismissibleAlert(
+                    alertKey = "temp.changing",
+                    store = store,
+                    permanentAlertKey = "perm.stable",
+                    message = "Should stay gone",
+                    severity = AlertSeverity.ERROR,
+                )
+            }
+        }
+        composeRule.onNodeWithTag(AlertTestTags.CARD).assertDoesNotExist()
+    }
 }

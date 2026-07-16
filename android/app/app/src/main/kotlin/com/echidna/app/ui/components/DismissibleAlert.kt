@@ -55,9 +55,14 @@ enum class AlertSeverity { INFO, WARNING, ERROR }
  * This composable is **stateless** — it never hides itself. The caller owns visibility (see
  * [PersistentDismissibleAlert] for the persisted, self-hiding variant).
  *
+ * When [onDismissPermanent] is provided the row also shows a **"Don't remind"** affordance next to
+ * the plain dismiss, giving the user a memorized-forever dismissal distinct from the temporary one.
+ *
  * @param actionLabel label for the optional directing-action button; null for dismiss-only.
  * @param onAction invoked when the action button is tapped; must be non-null with [actionLabel].
  * @param dismissLabel text of the dismiss affordance (defaults to "Dismiss").
+ * @param onDismissPermanent invoked for the permanent "don't remind" affordance; null hides it.
+ * @param permanentDismissLabel text of the permanent affordance (defaults to "Don't remind").
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -70,6 +75,8 @@ fun DismissibleAlert(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     dismissLabel: String = "Dismiss",
+    onDismissPermanent: (() -> Unit)? = null,
+    permanentDismissLabel: String = "Don't remind",
 ) {
     val colors = severity.colors()
     Card(
@@ -127,6 +134,15 @@ fun DismissibleAlert(
                 }
                 Spacer(Modifier.width(8.dp))
             }
+            if (onDismissPermanent != null) {
+                TextButton(
+                    onClick = onDismissPermanent,
+                    modifier = Modifier.testTag(AlertTestTags.PERMANENT_DISMISS),
+                ) {
+                    Text(permanentDismissLabel)
+                }
+                Spacer(Modifier.width(4.dp))
+            }
             TextButton(
                 onClick = onDismiss,
                 modifier = Modifier.testTag(AlertTestTags.DISMISS),
@@ -142,9 +158,15 @@ fun DismissibleAlert(
  * [alertKey], and removes itself from the layout once dismissed.
  *
  * The initial visibility is decided synchronously from [store] during composition (keyed on
- * [alertKey]) so a previously-dismissed alert never flashes on launch. For condition-driven
- * alerts, callers should build [alertKey] from the condition and call
- * [DismissedAlertsStore.reconcileActive] so the alert reappears when the condition recurs.
+ * [alertKey] and [permanentAlertKey]) so a previously-dismissed alert never flashes on launch. For
+ * condition-driven alerts, callers should build [alertKey] from the condition and call
+ * [DismissedAlertsStore.reconcileActive] so the temporary dismissal reappears when the condition
+ * recurs.
+ *
+ * When [allowPermanentDismiss] is true (the default) a "don't remind" affordance is shown; picking
+ * it records a *permanent* dismissal under [permanentAlertKey] (defaults to [alertKey]) that
+ * `reconcileActive` never clears, so the alert never returns. A caller that wants a safety-relevant
+ * alert to re-appear only on a material state change encodes that state into [permanentAlertKey].
  */
 @Composable
 fun PersistentDismissibleAlert(
@@ -157,10 +179,16 @@ fun PersistentDismissibleAlert(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     dismissLabel: String = "Dismiss",
+    allowPermanentDismiss: Boolean = true,
+    permanentAlertKey: String = alertKey,
+    permanentDismissLabel: String = "Don't remind",
 ) {
-    // rememberSaveable keyed on alertKey: recomputes (re-reads the store) whenever the condition
-    // key changes, so a resolved-then-recurring condition shows again.
-    var dismissed by rememberSaveable(alertKey) { mutableStateOf(store.isDismissed(alertKey)) }
+    // rememberSaveable keyed on both keys: recomputes (re-reads the store) whenever either changes,
+    // so a resolved-then-recurring condition, or a material state change encoded in the permanent
+    // key, shows the alert again.
+    var dismissed by rememberSaveable(alertKey, permanentAlertKey) {
+        mutableStateOf(store.isDismissed(alertKey) || store.isPermanentlyDismissed(permanentAlertKey))
+    }
     AnimatedVisibility(
         visible = !dismissed,
         exit = shrinkVertically() + fadeOut(),
@@ -177,6 +205,15 @@ fun PersistentDismissibleAlert(
             actionLabel = actionLabel,
             onAction = onAction,
             dismissLabel = dismissLabel,
+            onDismissPermanent = if (allowPermanentDismiss) {
+                {
+                    store.setPermanentlyDismissed(permanentAlertKey, true)
+                    dismissed = true
+                }
+            } else {
+                null
+            },
+            permanentDismissLabel = permanentDismissLabel,
         )
     }
 }
@@ -193,6 +230,7 @@ object AlertTestTags {
     const val CARD = "dismissible_alert_card"
     const val ACTION = "dismissible_alert_action"
     const val DISMISS = "dismissible_alert_dismiss"
+    const val PERMANENT_DISMISS = "dismissible_alert_permanent_dismiss"
 }
 
 private data class SeverityColors(val container: Color, val onContainer: Color, val accent: Color)

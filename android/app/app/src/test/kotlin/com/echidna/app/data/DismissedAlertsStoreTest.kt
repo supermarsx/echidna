@@ -75,4 +75,50 @@ class DismissedAlertsStoreTest {
         afterRestart.reconcileActive(setOf("ns.live"), keyPrefix = "ns.")
         assertTrue(afterRestart.isDismissed("ns.live"))
     }
+
+    @Test
+    fun `permanent dismissal persists and is reported by both accessors`() {
+        DismissedAlertsStore(context).setPermanentlyDismissed("perm.key", true)
+        val afterRestart = DismissedAlertsStore(context)
+        assertTrue(afterRestart.isDismissed("perm.key"))
+        assertTrue(afterRestart.isPermanentlyDismissed("perm.key"))
+    }
+
+    @Test
+    fun `permanent dismissal is never cleared by reconcile - never reappears`() {
+        val store = DismissedAlertsStore(context)
+        // Permanent "don't remind" on a condition-keyed alert.
+        store.setPermanentlyDismissed("ns.perm", true)
+
+        // Reconcile with the condition NOT active (would clear a temporary dismissal) must leave the
+        // permanent one untouched, so the alert never comes back even when the condition recurs.
+        store.reconcileActive(emptySet(), keyPrefix = "ns.")
+
+        assertTrue(store.isDismissed("ns.perm"))
+        assertTrue(store.isPermanentlyDismissed("ns.perm"))
+    }
+
+    @Test
+    fun `temporary and permanent dismissals are independent`() {
+        val store = DismissedAlertsStore(context)
+        store.setDismissed("ns.temp", true)
+        // A plain temporary dismissal is not a permanent one.
+        assertTrue(store.isDismissed("ns.temp"))
+        assertFalse(store.isPermanentlyDismissed("ns.temp"))
+
+        // Reconciling away the temp condition clears the temp dismissal entirely.
+        store.reconcileActive(emptySet(), keyPrefix = "ns.")
+        assertFalse(store.isDismissed("ns.temp"))
+    }
+
+    @Test
+    fun `clear removes both temporary and permanent dismissals`() {
+        val store = DismissedAlertsStore(context)
+        store.setDismissed("a", true)
+        store.setPermanentlyDismissed("b", true)
+        store.clear()
+        assertFalse(store.isDismissed("a"))
+        assertFalse(store.isDismissed("b"))
+        assertFalse(store.isPermanentlyDismissed("b"))
+    }
 }
