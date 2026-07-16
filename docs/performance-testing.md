@@ -39,7 +39,7 @@ emission; Python 3.10 or newer is required.
 
 The compact post-handoff comparison is tracked as
 `tools/perf/audio_pipeline_post_handoff_comparison.json`. It records report hashes, the exact host
-and methodology, a bundle hash of the production DSP and PCM bridge sources, grouped
+and methodology, a canonical-LF bundle hash of the production DSP and PCM bridge sources, grouped
 latency/deadline/throughput results, functional audio metrics, and the predeclared
 material-regression policy without committing the large raw reports. Verify that the evidence still
 matches the benchmark, report schema, and production processing sources with:

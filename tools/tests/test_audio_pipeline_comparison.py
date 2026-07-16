@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,37 @@ class AudioPipelineComparisonTest(unittest.TestCase):
         stale["harness"]["production_source_file_count"] += 1
         with self.assertRaisesRegex(comparison.ComparisonError, "inventory"):
             comparison.verify_comparison(stale)
+
+    def test_source_hashes_are_line_ending_stable_and_content_sensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "native/dsp/source.cpp"
+            source.parent.mkdir(parents=True)
+            with mock.patch.object(comparison, "REPO_ROOT", root):
+                source.write_bytes(b"int value = 1;\r\nreturn value;\r\n")
+                crlf_source_hash = comparison.source_sha256(source)
+                crlf_bundle_hash = comparison.production_source_bundle_sha256([source])
+
+                source.write_bytes(b"int value = 1;\nreturn value;\n")
+                self.assertEqual(crlf_source_hash, comparison.source_sha256(source))
+                self.assertEqual(
+                    crlf_bundle_hash,
+                    comparison.production_source_bundle_sha256([source]),
+                )
+
+                source.write_bytes(b"int value = 2;\nreturn value;\n")
+                self.assertNotEqual(crlf_source_hash, comparison.source_sha256(source))
+                self.assertNotEqual(
+                    crlf_bundle_hash,
+                    comparison.production_source_bundle_sha256([source]),
+                )
+
+    def test_source_hash_rejects_non_utf8_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.cpp"
+            source.write_bytes(b"\xff\xfe")
+            with self.assertRaisesRegex(comparison.ComparisonError, "not UTF-8"):
+                comparison.source_sha256(source)
 
     def test_malformed_group_inventory_is_rejected(self) -> None:
         malformed = copy.deepcopy(self.artifact)

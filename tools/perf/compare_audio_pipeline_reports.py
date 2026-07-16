@@ -102,6 +102,22 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_source_bytes(path: Path) -> bytes:
+    try:
+        contents = path.read_bytes()
+    except OSError as error:
+        raise ComparisonError(f"cannot hash {path}: {error}") from error
+    try:
+        contents.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ComparisonError(f"cannot hash {path}: source is not UTF-8: {error}") from error
+    return contents.replace(b"\r\n", b"\n")
+
+
+def source_sha256(path: Path) -> str:
+    return hashlib.sha256(canonical_source_bytes(path)).hexdigest()
+
+
 def production_source_files() -> list[Path]:
     files: set[Path] = set()
     for root in PRODUCTION_SOURCE_ROOTS:
@@ -120,10 +136,7 @@ def production_source_bundle_sha256(files: list[Path]) -> str:
         relative = path.relative_to(REPO_ROOT).as_posix().encode("utf-8")
         digest.update(len(relative).to_bytes(4, "big"))
         digest.update(relative)
-        try:
-            contents = path.read_bytes()
-        except OSError as error:
-            raise ComparisonError(f"cannot hash {path}: {error}") from error
+        contents = canonical_source_bytes(path)
         digest.update(len(contents).to_bytes(8, "big"))
         digest.update(contents)
     return digest.hexdigest()
@@ -569,9 +582,9 @@ def build_comparison(
         },
         "harness": {
             "benchmark_source": str(BENCHMARK_SOURCE.relative_to(REPO_ROOT)).replace("\\", "/"),
-            "benchmark_source_sha256": sha256(BENCHMARK_SOURCE),
+            "benchmark_source_sha256": source_sha256(BENCHMARK_SOURCE),
             "report_schema": str(REPORT_SCHEMA.relative_to(REPO_ROOT)).replace("\\", "/"),
-            "report_schema_sha256": sha256(REPORT_SCHEMA),
+            "report_schema_sha256": source_sha256(REPORT_SCHEMA),
             "production_source_file_count": len(source_files),
             "production_source_bundle_sha256": production_source_bundle_sha256(source_files),
             "environment": current["environment"],
@@ -652,11 +665,11 @@ def verify_comparison(artifact: dict[str, Any]) -> None:
         fail("report schema path changed")
     if require_sha256(
         harness.get("benchmark_source_sha256"), "harness.benchmark_source_sha256"
-    ) != sha256(BENCHMARK_SOURCE):
+    ) != source_sha256(BENCHMARK_SOURCE):
         fail("comparison is stale for the current benchmark source")
     if require_sha256(
         harness.get("report_schema_sha256"), "harness.report_schema_sha256"
-    ) != sha256(REPORT_SCHEMA):
+    ) != source_sha256(REPORT_SCHEMA):
         fail("comparison is stale for the current report schema")
     source_files = production_source_files()
     if harness.get("production_source_file_count") != len(source_files):
