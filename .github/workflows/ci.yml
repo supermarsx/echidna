@@ -245,11 +245,8 @@ jobs:
       - name: Configure native test build
         run: cmake -S native -B build/native-tests -G Ninja -DBUILD_TESTING=ON
 
-      - name: Build smoke harness and DSP tests
-        run: >
-          cmake --build build/native-tests
-          --target zygisk_dsp_smoke_test capture_buffer_router_test
-          config_shared_memory_test dsp_effects_test dsp_preset_test dsp_engine_test
+      - name: Build complete native test suite
+        run: cmake --build build/native-tests
 
       - name: Run hook/DSP smoke harness
         run: ./build/native-tests/zygisk_dsp_smoke_test
