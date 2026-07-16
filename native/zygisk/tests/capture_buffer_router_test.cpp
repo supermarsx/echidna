@@ -3,11 +3,15 @@
 #include "echidna/dsp/api.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -17,6 +21,9 @@
 
 namespace
 {
+    std::atomic<uint64_t> g_allocations{0};
+    std::atomic<bool> g_track_allocations{false};
+
     constexpr double kPi = 3.14159265358979323846;
     constexpr uint32_t kSampleRate = 48000;
 
@@ -374,6 +381,103 @@ namespace
         CHECK(pcm == original, "frame alignment failure must preserve input");
     }
 
+    // §9 real-time safety: the shared in-place capture router (used by the
+    // AudioRecord and libc_read routes) must never allocate on the hot path.
+    // It leases one of a fixed pool of pre-allocated scratch slots and runs the
+    // caller's process_block against caller-provided memory only.
+    void TestRouterRealtimePathAllocatesNothing()
+    {
+        std::vector<int16_t> pcm16 = MakeInt16Tone(1000.0, 512, 0.2);
+        std::vector<float> pcm32 = MakeFloatTone(1000.0, 512, 0.2);
+
+        // Warm up once outside the tracked region so any first-touch lazy state
+        // is already resident (HalfGain itself performs no allocation).
+        CHECK(echidna::hooks::RouteInt16CaptureBufferInPlace(
+                  pcm16.data(), pcm16.size() * sizeof(int16_t), kSampleRate, 1, HalfGain),
+              "int16 warmup route must process");
+        CHECK(echidna::hooks::RouteFloatCaptureBufferInPlace(
+                  pcm32.data(), static_cast<uint32_t>(pcm32.size()), kSampleRate, 1, HalfGain),
+              "float warmup route must process");
+
+        const uint64_t before = g_allocations.load(std::memory_order_relaxed);
+        g_track_allocations.store(true, std::memory_order_release);
+        bool all_ok = true;
+        for (int i = 0; i < 512; ++i)
+        {
+            all_ok = all_ok &&
+                     echidna::hooks::RouteInt16CaptureBufferInPlace(
+                         pcm16.data(), pcm16.size() * sizeof(int16_t), kSampleRate, 1, HalfGain);
+            all_ok = all_ok &&
+                     echidna::hooks::RouteFloatCaptureBufferInPlace(
+                         pcm32.data(), static_cast<uint32_t>(pcm32.size()), kSampleRate, 1, HalfGain);
+        }
+        g_track_allocations.store(false, std::memory_order_release);
+        CHECK(all_ok, "router must stay available under sustained real-time churn");
+        CHECK(g_allocations.load(std::memory_order_relaxed) == before,
+              "int16/float capture routing must allocate no memory on the hot path");
+    }
+
+    // Blocking transform used to pin every scratch lease simultaneously so the
+    // exhaustion path can be exercised deterministically.
+    std::atomic<uint32_t> g_leases_in_flight{0};
+    std::atomic<bool> g_release_leases{false};
+
+    echidna_result_t BlockingHalfGain(const float *input,
+                                      float *output,
+                                      uint32_t frames,
+                                      uint32_t sample_rate,
+                                      uint32_t channels)
+    {
+        g_leases_in_flight.fetch_add(1, std::memory_order_acq_rel);
+        while (!g_release_leases.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+        return HalfGain(input, output, frames, sample_rate, channels);
+    }
+
+    // §9 + §19: when every pre-allocated scratch slot is leased, a further
+    // capture must fail closed WITHOUT allocating and WITHOUT touching the
+    // application buffer (fail-open audio: the original PCM is preserved).
+    void TestScratchExhaustionFailsClosedUnchanged()
+    {
+        constexpr uint32_t kSlots = 4; // Mirrors kScratchSlotCount in the router.
+        g_leases_in_flight.store(0, std::memory_order_release);
+        g_release_leases.store(false, std::memory_order_release);
+
+        std::vector<std::vector<float>> buffers(kSlots, MakeFloatTone(1000.0, 128, 0.2));
+        std::vector<std::thread> holders;
+        for (uint32_t i = 0; i < kSlots; ++i)
+        {
+            holders.emplace_back([&buffers, i]()
+                                 { (void)echidna::hooks::RouteFloatCaptureBufferInPlace(
+                                       buffers[i].data(),
+                                       static_cast<uint32_t>(buffers[i].size()),
+                                       kSampleRate,
+                                       1,
+                                       BlockingHalfGain); });
+        }
+        while (g_leases_in_flight.load(std::memory_order_acquire) < kSlots)
+        {
+            std::this_thread::yield();
+        }
+
+        // All scratch slots are now pinned; a fresh capture must fail closed.
+        std::vector<float> overflow = MakeFloatTone(1000.0, 128, 0.2);
+        const auto original = overflow;
+        const bool routed = echidna::hooks::RouteFloatCaptureBufferInPlace(
+            overflow.data(), static_cast<uint32_t>(overflow.size()), kSampleRate, 1, HalfGain);
+        CHECK(!routed, "capture must fail closed when every scratch slot is leased");
+        CHECK(overflow == original,
+              "scratch exhaustion must leave the application buffer untouched (fail-open audio)");
+
+        g_release_leases.store(true, std::memory_order_release);
+        for (auto &holder : holders)
+        {
+            holder.join();
+        }
+    }
+
 #ifndef _WIN32
     void TestGuardPageBoundary()
     {
@@ -413,6 +517,25 @@ namespace
 
 } // namespace
 
+void *operator new(std::size_t size)
+{
+    if (g_track_allocations.load(std::memory_order_relaxed))
+    {
+        g_allocations.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (void *memory = std::malloc(size))
+    {
+        return memory;
+    }
+    throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
+
 int main()
 {
     TestInt16RouterProcessesBuffer();
@@ -422,6 +545,8 @@ int main()
     TestFormatMatrixAndSentinelBounds();
     TestFailuresNeverCommitPartialOutput();
     TestFrameAlignmentFailsClosed();
+    TestRouterRealtimePathAllocatesNothing();
+    TestScratchExhaustionFailsClosedUnchanged();
 #ifndef _WIN32
     TestGuardPageBoundary();
 #endif

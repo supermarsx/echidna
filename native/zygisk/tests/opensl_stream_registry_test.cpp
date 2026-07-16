@@ -2,9 +2,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <new>
+#include <thread>
 
 namespace
 {
@@ -38,6 +41,9 @@ namespace
     std::atomic<uint32_t> gDestroys{0};
     std::atomic<bool> gFailCreate{false};
     std::atomic<bool> gFailUpdate{false};
+    std::atomic<bool> gBlockProcess{false};
+    std::atomic<bool> gProcessEntered{false};
+    std::atomic<bool> gReleaseProcess{false};
 
     void ResetFake()
     {
@@ -56,6 +62,9 @@ namespace
         gDestroys = 0;
         gFailCreate = false;
         gFailUpdate = false;
+        gBlockProcess = false;
+        gProcessEntered = false;
+        gReleaseProcess = false;
     }
 
     echidna_result_t FakeCreate(const echidna_stream_config_t *config,
@@ -96,6 +105,12 @@ namespace
             state.format != format || frames == 0 || frames > state.max_frames)
         {
             return ECHIDNA_RESULT_NOT_INITIALISED;
+        }
+        gProcessEntered.store(true, std::memory_order_release);
+        while (gBlockProcess.load(std::memory_order_acquire) &&
+               !gReleaseProcess.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
         }
         const size_t samples = static_cast<size_t>(frames) * state.channels;
         if (format == ECHIDNA_PCM_FORMAT_SIGNED_16)
@@ -265,6 +280,78 @@ namespace
                   echidna::hooks::OpenSlProcessResult::kUnavailable,
               "closed recorder identities must remain stale");
     }
+
+    // §19 fail-open: when admission is closed (policy revoke) or a recorder has
+    // no live handle, the OpenSL callback route must return the buffer exactly
+    // as the platform delivered it — never silence, never a partial mutation.
+    void TestFailOpenPreservesWholeBufferUnchanged()
+    {
+        ResetFake();
+        echidna::hooks::OpenSlStreamRegistry registry;
+        const auto api = Api();
+        Check(registry.publishProfile(1, true, "gain", api), "fail-open profile publishes");
+        Check(registry.open(0x9000, Config(2, ECHIDNA_PCM_FORMAT_SIGNED_16), api),
+              "fail-open recorder opens");
+
+        const std::array<int16_t, 8> pristine{-30000, 12345, -1, 0, 32767,
+                                              -32768, 4096, -4096};
+
+        // Unknown recorder identity while admission is OPEN: no matching handle,
+        // so nothing may be written and the route reports unavailable.
+        std::array<int16_t, 8> stranger = pristine;
+        Check(registry.process(0xABCD, stranger.data(), 4) ==
+                  echidna::hooks::OpenSlProcessResult::kUnavailable,
+              "unmatched recorder identity is unavailable");
+        Check(std::memcmp(stranger.data(), pristine.data(), sizeof(pristine)) == 0,
+              "unavailable route never mutates the application buffer");
+
+        // Revoke admission: the DSP must not run, the buffer stays byte-exact.
+        Check(registry.publishProfile(2, false, {}, api), "policy revoke publishes");
+        std::array<int16_t, 8> revoked = pristine;
+        Check(registry.process(0x9000, revoked.data(), 4) ==
+                  echidna::hooks::OpenSlProcessResult::kBypassed,
+              "revoked admission bypasses instead of processing");
+        Check(std::memcmp(revoked.data(), pristine.data(), sizeof(pristine)) == 0,
+              "bypassed OpenSL buffer is byte-for-byte the platform capture");
+        registry.close(0x9000);
+    }
+
+    // §9: close() must quiesce an in-flight callback before destroying the DSP
+    // handle, so a live recorder callback can never touch a freed handle.
+    void TestCloseQuiescesInFlightCallback()
+    {
+        ResetFake();
+        echidna::hooks::OpenSlStreamRegistry registry;
+        const auto api = Api();
+        Check(registry.publishProfile(1, true, "gain", api), "quiesce profile publishes");
+        Check(registry.open(0x7000, Config(1, ECHIDNA_PCM_FORMAT_SIGNED_16), api),
+              "quiesce recorder opens");
+
+        gBlockProcess = true;
+        int16_t sample = 100;
+        std::atomic<bool> close_done{false};
+        std::thread processor([&]()
+                              { (void)registry.process(0x7000, &sample, 1); });
+        while (!gProcessEntered.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+        std::thread closer([&]()
+                           {
+            registry.close(0x7000);
+            close_done.store(true, std::memory_order_release); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        Check(!close_done.load(std::memory_order_acquire),
+              "close must wait for the in-flight callback before destroying the handle");
+        gReleaseProcess = true;
+        processor.join();
+        closer.join();
+        Check(close_done.load() && gDestroys == 1,
+              "close quiesces the callback and destroys exactly one handle");
+        Check(registry.process(0x7000, &sample, 1) ==
+                  echidna::hooks::OpenSlProcessResult::kUnavailable,
+              "closed recorder identity is stale after quiesce");
+    }
 } // namespace
 
 void *operator new(std::size_t size)
@@ -290,6 +377,8 @@ int main()
 {
     TestExhaustionPublicationAndNoCallbackAllocations();
     TestCreateFailureAndStaleIdentity();
+    TestFailOpenPreservesWholeBufferUnchanged();
+    TestCloseQuiescesInFlightCallback();
     if (gFailures != 0)
     {
         std::fprintf(stderr,

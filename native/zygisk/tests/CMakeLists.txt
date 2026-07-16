@@ -41,7 +41,7 @@ add_executable(capture_buffer_router_test
     capture_buffer_router_test.cpp
     ../src/audio/pcm_buffer_processor.cpp
     ../src/hooks/capture_buffer_router.cpp)
-target_link_libraries(capture_buffer_router_test PRIVATE ech_dsp)
+target_link_libraries(capture_buffer_router_test PRIVATE ech_dsp Threads::Threads)
 target_include_directories(capture_buffer_router_test
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../../dsp/include
@@ -128,6 +128,7 @@ target_compile_features(opensl_lifecycle_test PRIVATE cxx_std_20)
 add_executable(opensl_stream_registry_test
     opensl_stream_registry_test.cpp
     ../src/hooks/opensl_stream_registry.cpp)
+target_link_libraries(opensl_stream_registry_test PRIVATE Threads::Threads)
 target_include_directories(opensl_stream_registry_test
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src

@@ -348,6 +348,61 @@ namespace
         registry.close(pcm);
     }
 
+    // §9 + §19: the byte-oriented read path (pcm_read / pcm_mmap_read) resolves
+    // its frame count and processes in place with no allocation, and a revoked
+    // admission leaves the whole capture buffer byte-for-byte unchanged.
+    void TestByteReadPathNoAllocationAndFailOpen()
+    {
+        Reset();
+        TinyAlsaStreamRegistry registry;
+        const auto api = Api();
+        CHECK(registry.publishProfile(1, true, "gain", api), "byte-path profile admits");
+        void *pcm = reinterpret_cast<void *>(uintptr_t{0x8000});
+        CHECK(registry.open(pcm, Contract(1, ECHIDNA_PCM_FORMAT_SIGNED_16, 8), api),
+              "byte-path stream opens");
+
+        std::array<int16_t, 8> samples{11, -22, 33, -44, 55, -66, 77, -88};
+        const uint32_t bytes = static_cast<uint32_t>(samples.size() * sizeof(int16_t));
+
+        // Warm up the lookup + process path before measuring allocations.
+        {
+            echidna::utils::ScopedTelemetryRoute route(
+                echidna::utils::TelemetryRoute::kTinyAlsa);
+            CHECK(registry.processBytes(pcm, samples.data(), bytes) ==
+                      TinyAlsaProcessResult::kProcessed,
+                  "byte-path warmup processes");
+        }
+
+        const uint64_t before = gAllocations.load();
+        gTrackAllocations = true;
+        uint32_t frames = 0;
+        bool ok = registry.framesForBytes(pcm, bytes, &frames) && frames == 8;
+        for (int i = 0; i < 256; ++i)
+        {
+            ok = ok && registry.processBytes(pcm, samples.data(), bytes) ==
+                           TinyAlsaProcessResult::kProcessed;
+        }
+        gTrackAllocations = false;
+        CHECK(ok, "byte-path frame resolution and processing stay available");
+        CHECK(gAllocations.load() == before,
+              "tinyalsa byte-read lookup and processing allocate no memory");
+
+        // Revoke admission and confirm fail-open: buffer untouched, no DSP entry.
+        const uint32_t processes_before = gProcesses.load();
+        CHECK(registry.publishProfile(2, false, {}, api), "byte-path revoke publishes");
+        const std::array<int16_t, 8> pristine{-30000, 12345, -1, 0,
+                                              32767, -32768, 4096, -4096};
+        std::array<int16_t, 8> revoked = pristine;
+        CHECK(registry.processBytes(pcm, revoked.data(), bytes) ==
+                  TinyAlsaProcessResult::kBypassed,
+              "revoked byte-path bypasses instead of processing");
+        CHECK(revoked == pristine,
+              "bypassed tinyalsa capture is byte-for-byte unchanged");
+        CHECK(gProcesses.load() == processes_before,
+              "bypassed capture never enters the DSP");
+        registry.close(pcm);
+    }
+
     void TestInvalidOpenNeverAllocates()
     {
         Reset();
@@ -369,6 +424,7 @@ int main()
     TestMixedStreamsShortReadsAndExactMutation();
     TestProfileRevokeFailureAndRecovery();
     TestCloseRacePointerReuseAndNoAllocation();
+    TestByteReadPathNoAllocationAndFailOpen();
     TestInvalidOpenNeverAllocates();
     if (gFailures != 0)
     {
