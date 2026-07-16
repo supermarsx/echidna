@@ -214,5 +214,19 @@ namespace echidna
             return user_id * kAndroidUserUidRange + app_id;
         }
 
+        std::string ProfileSyncSocketNameForUid(int64_t publisher_uid)
+        {
+            if (publisher_uid < 0)
+            {
+                return {};
+            }
+            const int64_t user_id = publisher_uid / kAndroidUserUidRange;
+            if (user_id == 0)
+            {
+                return "echidna_profiles";
+            }
+            return "echidna_profiles_u" + std::to_string(user_id);
+        }
+
     } // namespace utils
 } // namespace echidna

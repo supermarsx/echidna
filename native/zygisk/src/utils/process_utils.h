@@ -37,5 +37,8 @@ namespace echidna
         /** Maps a system-user package UID to the target Android user profile. */
         int64_t PackageUidForTargetUser(int64_t package_uid, int64_t target_uid);
 
+        /** Abstract profile-sync socket scoped to the publisher's Android user. */
+        std::string ProfileSyncSocketNameForUid(int64_t publisher_uid);
+
     } // namespace utils
 } // namespace echidna

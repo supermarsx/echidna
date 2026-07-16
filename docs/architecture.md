@@ -232,8 +232,10 @@ the private identity table.
 
 `PublishedPolicyRegistry` is the read-only process-local source shared by the two transports:
 
-- **Zygisk:** `ProfileSyncBridge` owns the abstract `AF_UNIX` socket `echidna_profiles`. A client
-  must send the v3 Zygisk hello with its exact process name. The publisher binds the full
+- **Zygisk:** `ProfileSyncBridge` owns an Android-user-scoped abstract `AF_UNIX` socket. User 0 keeps
+  the compatibility name `echidna_profiles`; other users use `echidna_profiles_u<userId>` so two
+  companion instances cannot collide or accept each other's readers. A client must send the v3
+  Zygisk hello with its exact process name. The publisher binds the full
   `SO_PEERCRED` UID to the current policy's published package/user/signing identity; PID identifies
   only that socket incarnation. The native reader independently accepts only the companion UID
   cached before specialization. Frames are bounded, length-prefixed UTF-8. Each reader receives only
@@ -254,6 +256,8 @@ work-profile users distinct. Resolution is intentionally limited to packages vis
 companion's Android user (including its launcher-scoped `<queries>` declaration); missing
 visibility, uninstall/reinstall UID drift, or signer drift revokes admission without adding
 `QUERY_ALL_PACKAGES`, privileged permissions, `/proc` inspection, or SELinux exceptions.
+The companion APK must be installed and started inside each Android user/profile that should receive
+policy; cross-user service or policy access is never attempted.
 
 ### Shared-memory fallback and telemetry
 

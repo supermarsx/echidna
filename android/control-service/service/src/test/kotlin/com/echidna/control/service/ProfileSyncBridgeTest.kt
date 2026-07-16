@@ -13,6 +13,13 @@ import org.junit.Test
 
 class ProfileSyncBridgeTest {
     @Test
+    fun `abstract socket names isolate Android users while preserving user zero compatibility`() {
+        assertEquals("echidna_profiles", profileSyncSocketNameForUid(10_234))
+        assertEquals("echidna_profiles_u1", profileSyncSocketNameForUid(110_234))
+        assertEquals("echidna_profiles_u10", profileSyncSocketNameForUid(1_010_234))
+    }
+
+    @Test
     fun `only exact process-bound v3 zygisk hello negotiates acknowledged handoff`() {
         val hello = "${PROFILE_SYNC_V3_ZYGISK_PREFIX}com.example.recorder:worker\n"
         assertEquals(

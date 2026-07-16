@@ -423,8 +423,10 @@ same-generation conflict, malformed/duplicate keys, incomplete controls, invalid
 identity-free store, and current install-identity drift fail closed. Transport views omit the
 internal identity table.
 
-Zygisk readers negotiate on the service-owned abstract `AF_UNIX` socket `echidna_profiles`. The
-publisher binds the v3 process claim and full `SO_PEERCRED` UID to the current published identity,
+Zygisk readers negotiate on a service-owned, per-user abstract `AF_UNIX` socket. User 0 retains
+`echidna_profiles`; nonzero users use `echidna_profiles_u<userId>` to prevent cross-user listener
+collisions. The companion must be installed and started in the target Android user. The publisher
+binds the v3 process claim and full `SO_PEERCRED` UID to the current published identity,
 while native code accepts only the companion UID resolved before specialization. PID belongs only to
 that socket incarnation. Disconnect revokes processing, keeps the generation watermark, and
 reconnects with bounded backoff so a late publisher can activate safely.

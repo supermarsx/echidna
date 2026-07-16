@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 
 private const val SYNC_TAG = "EchidnaProfileSync"
-private const val SOCKET_NAME = "echidna_profiles"
+private const val PROFILE_SYNC_SOCKET_BASE = "echidna_profiles"
 private const val MAX_CLIENTS = 16
 private const val MAX_PENDING_HANDSHAKES = 16
 private const val HANDSHAKE_TIMEOUT_MS = 750
@@ -210,7 +210,7 @@ internal class ProfileSyncBridge(
     private val handoffCoordinator = CaptureOwnerHandoffRegistry.get()
     private val publisher = ProfileSnapshotPublisher(
         context.applicationContext,
-        SOCKET_NAME,
+        profileSyncSocketNameForUid(context.applicationInfo.uid),
         telemetryStore,
         handoffCoordinator,
     )
@@ -226,6 +226,12 @@ internal class ProfileSyncBridge(
     override fun close() {
         publisher.close()
     }
+}
+
+internal fun profileSyncSocketNameForUid(uid: Int): String {
+    require(uid >= 0) { "publisher UID must be non-negative" }
+    val userId = androidUserId(uid)
+    return if (userId == 0) PROFILE_SYNC_SOCKET_BASE else "${PROFILE_SYNC_SOCKET_BASE}_u$userId"
 }
 
 private class ProfileSnapshotPublisher(

@@ -30,7 +30,6 @@
 
 namespace
 {
-    constexpr const char *kSocketName = "echidna_profiles";
     constexpr const char *kLogTag = "echidna_profile_sync";
     constexpr int kInitialReadTimeoutMs = 750;
 
@@ -147,6 +146,13 @@ namespace
             errno = EINVAL;
             return -1;
         }
+        const std::string socket_name =
+            echidna::utils::ProfileSyncSocketNameForUid(expected_uid);
+        if (socket_name.empty())
+        {
+            errno = EINVAL;
+            return -1;
+        }
         const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0)
         {
@@ -155,7 +161,7 @@ namespace
 
         sockaddr_un address{};
         address.sun_family = AF_UNIX;
-        const size_t name_length = std::strlen(kSocketName);
+        const size_t name_length = socket_name.size();
         if (name_length + 1 >= sizeof(address.sun_path))
         {
             ::close(fd);
@@ -163,7 +169,7 @@ namespace
             return -1;
         }
         address.sun_path[0] = '\0';
-        std::memcpy(address.sun_path + 1, kSocketName, name_length);
+        std::memcpy(address.sun_path + 1, socket_name.data(), name_length);
         const auto address_length = static_cast<socklen_t>(
             offsetof(sockaddr_un, sun_path) + 1 + name_length);
         std::string hello;

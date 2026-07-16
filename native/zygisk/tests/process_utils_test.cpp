@@ -54,12 +54,23 @@ namespace
                   std::numeric_limits<int64_t>::max()) == -1);
     }
 
+    void TestProfileSyncSocketNamesAreUserScoped()
+    {
+        CHECK(echidna::utils::ProfileSyncSocketNameForUid(10234) == "echidna_profiles");
+        CHECK(echidna::utils::ProfileSyncSocketNameForUid(110234) ==
+              "echidna_profiles_u1");
+        CHECK(echidna::utils::ProfileSyncSocketNameForUid(1010234) ==
+              "echidna_profiles_u10");
+        CHECK(echidna::utils::ProfileSyncSocketNameForUid(-1).empty());
+    }
+
 } // namespace
 
 int main()
 {
     TestStrictPackageUidParsing();
     TestAndroidUserProjection();
+    TestProfileSyncSocketNamesAreUserScoped();
     if (g_failures != 0)
     {
         std::fprintf(stderr, "process_utils_test: %d failure(s)\n", g_failures);
