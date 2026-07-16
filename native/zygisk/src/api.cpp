@@ -250,42 +250,6 @@ namespace
         return true;
     }
 
-    /** Quick pitch estimation using zero crossing counts for diagnostics. */
-    float EstimatePitchHz(const float *data,
-                          uint32_t frames,
-                          uint32_t channels,
-                          uint32_t sample_rate)
-    {
-        if (!data || frames == 0 || channels == 0 || sample_rate == 0)
-        {
-            return 0.0f;
-        }
-        size_t zero_crossings = 0;
-        const size_t step = static_cast<size_t>(channels);
-        const size_t samples = static_cast<size_t>(frames) * step;
-        float previous = data[0];
-        for (size_t i = step; i < samples; i += step)
-        {
-            const float sample = data[i];
-            if ((previous >= 0.0f && sample < 0.0f) || (previous < 0.0f && sample >= 0.0f))
-            {
-                zero_crossings += 1;
-            }
-            previous = sample;
-        }
-        if (zero_crossings == 0)
-        {
-            return 0.0f;
-        }
-        const float cycles = static_cast<float>(zero_crossings) / 2.0f;
-        return (cycles * static_cast<float>(sample_rate)) / static_cast<float>(frames);
-    }
-
-    float FrequencyForMidi(float midi)
-    {
-        return 440.0f * std::pow(2.0f, (midi - 69.0f) / 12.0f);
-    }
-
     /** Attempt to extract a short "name" value from a JSON preset string. */
     std::string ExtractPresetName(const char *json, size_t length)
     {
@@ -639,11 +603,6 @@ echidna_result_t echidna_process_block(const float *input,
     echidna_result_t result = ECHIDNA_RESULT_OK;
     auto telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kUnchanged;
     LevelStats input_levels = CalculateLevels(input, sample_count);
-    LevelStats output_levels;
-    float detected_pitch = 0.0f;
-    float target_pitch = 0.0f;
-    float formant_shift_cents = 0.0f;
-    float formant_width = 0.0f;
     if (!input_levels.finite)
     {
         state.setStatus(echidna::state::InternalStatus::kError);
@@ -657,7 +616,6 @@ echidna_result_t echidna_process_block(const float *input,
     if (bypassed)
     {
         telemetry_outcome = echidna::utils::TelemetryBlockOutcome::kBypassed;
-        output_levels = input_levels;
         if (output && output != input)
         {
             std::memcpy(output, input, sizeof(float) * sample_count);
@@ -714,7 +672,8 @@ echidna_result_t echidna_process_block(const float *input,
                 }
                 else
                 {
-                    output_levels = CalculateLevels(process_output, sample_count, input);
+                    const LevelStats output_levels =
+                        CalculateLevels(process_output, sample_count, input);
                     if (!output_levels.finite)
                     {
                         result = ECHIDNA_RESULT_ERROR;
@@ -734,22 +693,6 @@ echidna_result_t echidna_process_block(const float *input,
                     if (output_levels.finite && output && process_output != output)
                     {
                         std::memcpy(output, process_output, sizeof(float) * sample_count);
-                    }
-                    detected_pitch = output_levels.finite
-                                         ? EstimatePitchHz(process_output,
-                                                           frames,
-                                                           channel_count,
-                                                           sample_rate)
-                                         : 0.0f;
-                    if (detected_pitch > 0.0f)
-                    {
-                        const float midi =
-                            69.0f + 12.0f * std::log2(detected_pitch / 440.0f);
-                        const float rounded_midi = std::round(midi);
-                        target_pitch = FrequencyForMidi(rounded_midi);
-                        formant_shift_cents = (midi - rounded_midi) * 100.0f;
-                        formant_width =
-                            std::clamp(std::fabs(formant_shift_cents), 0.0f, 600.0f);
                     }
                 }
             }
