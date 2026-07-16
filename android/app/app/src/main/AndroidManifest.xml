@@ -12,6 +12,10 @@
          which only returns visible packages without this declaration. Scoped to
          launcher activities rather than QUERY_ALL_PACKAGES (Play-policy-hostile). -->
     <queries>
+        <!-- The policy provider must resolve the headless LSPosed shim package to pin its
+             UID/signing identity. It has no launcher activity, so the intent query below does
+             not make it visible on Android 11+. -->
+        <package android:name="com.echidna.lsposed" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
