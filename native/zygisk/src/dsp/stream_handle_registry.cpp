@@ -1,8 +1,10 @@
 #include "dsp/stream_handle_registry.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <new>
@@ -97,14 +99,10 @@ namespace echidna::dsp_runtime
         {
             return false;
         }
-        for (uint32_t reserved : config.reserved)
-        {
-            if (reserved != 0)
-            {
-                return false;
-            }
-        }
-        return true;
+        return std::all_of(std::begin(config.reserved),
+                           std::end(config.reserved),
+                           [](uint32_t reserved)
+                           { return reserved == 0; });
     }
 
     bool StreamHandleRegistry::decodeHandle(echidna_stream_handle_t handle,

@@ -1,5 +1,6 @@
 #include "runtime/telemetry_socket_exporter.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
@@ -79,15 +80,9 @@ namespace echidna::runtime
             {
                 return false;
             }
-            for (const unsigned char byte : process)
-            {
-                if (!alpha_numeric(byte) && byte != '_' && byte != '.' && byte != ':' &&
-                    byte != '-')
-                {
-                    return false;
-                }
-            }
-            return true;
+            return std::all_of(process.begin(), process.end(), [&](unsigned char byte)
+                               { return alpha_numeric(byte) || byte == '_' ||
+                                        byte == '.' || byte == ':' || byte == '-'; });
         }
 
         const char *StateFor(const utils::TelemetryDelta &delta)

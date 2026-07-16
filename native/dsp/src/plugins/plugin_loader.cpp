@@ -518,57 +518,54 @@ namespace echidna::dsp::plugins
         {
             return false;
         }
-        for (const char *hex_key : kTrustedKeys)
-        {
-            // Guard against a mis-provisioned key: the decode below reads two hex
-            // characters per byte, so a key shorter than 64 chars would read out
-            // of bounds. Skip such keys (fail closed) rather than trust garbage.
-            if (hex_key == nullptr || std::strlen(hex_key) < 64)
+        return std::any_of(
+            kTrustedKeys.begin(), kTrustedKeys.end(), [&](const char *hex_key)
             {
-                continue;
-            }
-            std::array<uint8_t, 32> public_key{};
-            for (size_t i = 0; i < public_key.size(); ++i)
-            {
-                char high = hex_key[i * 2];
-                char low = hex_key[i * 2 + 1];
-                uint8_t value = 0;
-                if (high >= '0' && high <= '9')
+                // Guard against a mis-provisioned key: the decode below reads two
+                // hex characters per byte, so a key shorter than 64 chars would
+                // read out of bounds. Skip such keys (fail closed) rather than
+                // trust garbage.
+                if (hex_key == nullptr || std::strlen(hex_key) < 64)
                 {
-                    value = static_cast<uint8_t>(high - '0') << 4;
+                    return false;
                 }
-                else if (high >= 'a' && high <= 'f')
+                std::array<uint8_t, 32> public_key{};
+                for (size_t i = 0; i < public_key.size(); ++i)
                 {
-                    value = static_cast<uint8_t>(high - 'a' + 10) << 4;
+                    char high = hex_key[i * 2];
+                    char low = hex_key[i * 2 + 1];
+                    uint8_t value = 0;
+                    if (high >= '0' && high <= '9')
+                    {
+                        value = static_cast<uint8_t>(high - '0') << 4;
+                    }
+                    else if (high >= 'a' && high <= 'f')
+                    {
+                        value = static_cast<uint8_t>(high - 'a' + 10) << 4;
+                    }
+                    else if (high >= 'A' && high <= 'F')
+                    {
+                        value = static_cast<uint8_t>(high - 'A' + 10) << 4;
+                    }
+                    else
+                    {
+                        value = 0;
+                    }
+                    if (low >= '0' && low <= '9')
+                    {
+                        value |= static_cast<uint8_t>(low - '0');
+                    }
+                    else if (low >= 'a' && low <= 'f')
+                    {
+                        value |= static_cast<uint8_t>(low - 'a' + 10);
+                    }
+                    else if (low >= 'A' && low <= 'F')
+                    {
+                        value |= static_cast<uint8_t>(low - 'A' + 10);
+                    }
+                    public_key[i] = value;
                 }
-                else if (high >= 'A' && high <= 'F')
-                {
-                    value = static_cast<uint8_t>(high - 'A' + 10) << 4;
-                }
-                else
-                {
-                    value = 0;
-                }
-                if (low >= '0' && low <= '9')
-                {
-                    value |= static_cast<uint8_t>(low - '0');
-                }
-                else if (low >= 'a' && low <= 'f')
-                {
-                    value |= static_cast<uint8_t>(low - 'a' + 10);
-                }
-                else if (low >= 'A' && low <= 'F')
-                {
-                    value |= static_cast<uint8_t>(low - 'A' + 10);
-                }
-                public_key[i] = value;
-            }
-            if (VerifyEd25519(payload, signature, public_key))
-            {
-                return true;
-            }
-        }
-        return false;
+                return VerifyEd25519(payload, signature, public_key); });
 #else
         (void)binary_path;
         (void)signature_path;

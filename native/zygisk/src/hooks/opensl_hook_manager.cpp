@@ -266,8 +266,8 @@ namespace echidna::hooks
             return nullptr;
         }
 
-        void RetireCallbackTokens(QueueContext *queue,
-                                  CallbackToken *keep = nullptr,
+        void RetireCallbackTokens(const QueueContext *queue,
+                                  const CallbackToken *keep = nullptr,
                                   bool wait = false)
         {
             if (!queue)

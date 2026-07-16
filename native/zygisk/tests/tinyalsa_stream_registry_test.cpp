@@ -1,6 +1,7 @@
 #include "hooks/tinyalsa_stream_registry.h"
 #include "utils/telemetry_accumulator.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -72,10 +73,7 @@ namespace
 
     void Reset()
     {
-        for (auto &handle : gHandles)
-        {
-            handle = {};
-        }
+        std::fill(gHandles.begin(), gHandles.end(), HandleState{});
         gNextHandle = 1;
         gCreates = 0;
         gProcesses = 0;
@@ -121,7 +119,7 @@ namespace
         {
             return ECHIDNA_RESULT_INVALID_ARGUMENT;
         }
-        auto &state = gHandles[handle];
+        const auto &state = gHandles[handle];
         if (!state.active || !state.admitted || state.format != format ||
             frames == 0 || frames > state.max_frames)
         {

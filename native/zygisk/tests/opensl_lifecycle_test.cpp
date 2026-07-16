@@ -671,6 +671,8 @@ namespace
 
         const int creates_before_realize = gCreateCalls;
         flow.recorder.realize_result = kMockFailure;
+        Check(flow.recorder.realize_result == kMockFailure,
+              "recorder Realize failure mock must be configured before invocation");
         Check((*recorder)->Realize(recorder, 0) == kMockFailure,
               "recorder Realize failure must be forwarded without replacing its handle");
         flow.recorder.realize_result = SL_RESULT_SUCCESS;

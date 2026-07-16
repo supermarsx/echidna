@@ -421,6 +421,7 @@ namespace
     struct FakeEngine
     {
         uint32_t channels{0};
+        uint32_t processed_blocks{0};
     };
     std::atomic<bool> g_fake_block{false};
     std::atomic<bool> g_fake_entered{false};
@@ -446,8 +447,9 @@ namespace
                                  float *output,
                                  size_t frames)
     {
-        const auto *fake = reinterpret_cast<const FakeEngine *>(engine);
-        g_fake_entered = true;
+        auto *fake = reinterpret_cast<FakeEngine *>(engine);
+        ++fake->processed_blocks;
+        g_fake_entered = fake->processed_blocks != 0;
         while (g_fake_block.load(std::memory_order_acquire) &&
                !g_fake_release.load(std::memory_order_acquire))
         {

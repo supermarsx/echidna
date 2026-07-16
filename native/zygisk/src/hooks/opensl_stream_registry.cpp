@@ -1,5 +1,7 @@
 #include "hooks/opensl_stream_registry.h"
 
+#include <algorithm>
+#include <iterator>
 #include <thread>
 #include <utility>
 
@@ -51,14 +53,10 @@ namespace echidna::hooks
         {
             return false;
         }
-        for (uint32_t reserved : config.reserved)
-        {
-            if (reserved != 0)
-            {
-                return false;
-            }
-        }
-        return true;
+        return std::all_of(std::begin(config.reserved),
+                           std::end(config.reserved),
+                           [](uint32_t reserved)
+                           { return reserved == 0; });
     }
 
     bool OpenSlStreamRegistry::acquireAdmission()

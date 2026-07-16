@@ -13,6 +13,7 @@
 #define ANDROID_LOG_WARN 0
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <string_view>
@@ -70,14 +71,10 @@ namespace echidna::hooks
         bool TargetMapsTinyAlsa()
         {
             utils::ProcMapsScanner scanner;
-            for (const auto &region : scanner.regions())
-            {
-                if (IsTinyAlsaExecutableMapping(region.path, region.permissions))
-                {
-                    return true;
-                }
-            }
-            return false;
+            const auto &regions = scanner.regions();
+            return std::any_of(regions.begin(), regions.end(), [](const auto &region)
+                               { return IsTinyAlsaExecutableMapping(
+                                     region.path, region.permissions); });
         }
 
         bool ProcessingAllowed()
