@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Warning
@@ -32,13 +33,18 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.echidna.app.system.MagiskLauncher
 
 private val GreenAccent = Color(0xFF4CAF50)
 private val AmberAccent = Color(0xFFFFB300)
@@ -85,6 +91,8 @@ fun InstallEngineScreen(
         state.message?.takeIf { !state.busy }?.let { message ->
             MessageCard(phase = state.phase, message = message)
         }
+
+        OpenMagiskButton()
 
         when (state.phase) {
             InstallPhase.INSTALL_REBOOT, InstallPhase.UNINSTALL_REBOOT -> {
@@ -336,6 +344,40 @@ private fun ActionsCard(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun OpenMagiskButton() {
+    val context = LocalContext.current
+    var showFallback by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(
+            onClick = {
+                val intent = MagiskLauncher.resolveLaunchIntent(context.packageManager)
+                showFallback = if (intent != null) {
+                    // Launch succeeded → clear any prior fallback notice; if the launch itself
+                    // throws (rare), fall back to guidance rather than crashing.
+                    !runCatching { context.startActivity(intent) }.isSuccess
+                } else {
+                    true
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(imageVector = Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Open Magisk")
+        }
+        if (showFallback) {
+            Text(
+                text = "Couldn't open Magisk automatically. If Magisk is hidden or repackaged, " +
+                    "open it manually from your app drawer to enable Zygisk or manage modules.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
