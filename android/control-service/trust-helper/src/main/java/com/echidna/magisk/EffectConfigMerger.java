@@ -14,9 +14,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 
 import org.w3c.dom.Attr;
 import org.w3c.dom.Document;
@@ -25,6 +29,7 @@ import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
 /** Deterministic, fail-closed merger for legacy Android audio-effect registries. */
 public final class EffectConfigMerger {
@@ -33,6 +38,12 @@ public final class EffectConfigMerger {
     public static final String EFFECT_NAME = "echidna_preprocessor";
     public static final String TYPE_UUID = "c83e3db3-d4f5-5f2c-a095-8775c1edfc6d";
     public static final String IMPLEMENTATION_UUID = "3e66a36e-dee9-5d81-a0d6-49fc3b863530";
+    private static final String AUDIO_EFFECTS_NAMESPACE =
+            "http://schemas.android.com/audio/audio_effects_conf/v2_0";
+    private static final String XINCLUDE_NAMESPACE = "http://www.w3.org/2001/XInclude";
+    private static final int MAX_CONFIG_UTF8_BYTES = 4 * 1024 * 1024;
+    private static final Pattern XML_ENCODING = Pattern.compile(
+            "(?i)(?:^|\\s)encoding\\s*=\\s*(['\"])([^'\"]+)\\1");
 
     private EffectConfigMerger() {}
 
@@ -69,6 +80,10 @@ public final class EffectConfigMerger {
                 || source.indexOf('\ufffd') >= 0) {
             throw new IllegalArgumentException("effect config is empty or is not strict UTF-8");
         }
+        if (source.length() > MAX_CONFIG_UTF8_BYTES
+                || source.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG_UTF8_BYTES) {
+            throw new IllegalArgumentException("effect config exceeds the supported size");
+        }
         if (format == Format.XML) {
             return mergeXml(source);
         }
@@ -84,24 +99,42 @@ public final class EffectConfigMerger {
     }
 
     private static Result mergeXml(String source) throws Exception {
+        rejectForbiddenXmlDeclarations(source);
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
-        factory.setXIncludeAware(false);
+        disableXInclude(factory);
         factory.setExpandEntityReferences(false);
-        setRequiredFeature(factory, "http://apache.org/xml/features/disallow-doctype-decl", true);
-        setRequiredFeature(factory, "http://xml.org/sax/features/external-general-entities", false);
-        setRequiredFeature(factory, "http://xml.org/sax/features/external-parameter-entities", false);
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        setOptionalSecurityFeature(
+                factory, "http://apache.org/xml/features/disallow-doctype-decl", true);
+        setOptionalSecurityFeature(
+                factory, "http://xml.org/sax/features/external-general-entities", false);
+        setOptionalSecurityFeature(
+                factory, "http://xml.org/sax/features/external-parameter-entities", false);
+        setOptionalSecurityFeature(
+                factory, "http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        disableOptionalExternalAccess(factory, XMLConstants.ACCESS_EXTERNAL_DTD);
+        disableOptionalExternalAccess(factory, XMLConstants.ACCESS_EXTERNAL_SCHEMA);
 
         InputSource input = new InputSource(
                 new ByteArrayInputStream(source.getBytes(StandardCharsets.UTF_8)));
         input.setEncoding("UTF-8");
-        Document document = factory.newDocumentBuilder().parse(input);
+        DocumentBuilder builder = factory.newDocumentBuilder();
+        builder.setEntityResolver((publicId, systemId) -> {
+            throw new SAXException("external XML entities are forbidden");
+        });
+        Document document = builder.parse(input);
         validateSupportedNodes(document);
         Element root = document.getDocumentElement();
         if (root == null || !"audio_effects_conf".equals(localName(root))) {
             throw new IllegalArgumentException("XML root must be audio_effects_conf");
+        }
+        String namespace = root.getNamespaceURI();
+        if (namespace != null && !namespace.isEmpty()
+                && !AUDIO_EFFECTS_NAMESPACE.equals(namespace)) {
+            throw new IllegalArgumentException("unsupported audio-effects XML namespace");
+        }
+        if (!"2.0".equals(root.getAttribute("version"))) {
+            throw new IllegalArgumentException("unsupported audio-effects XML version");
         }
         Element libraries = requireSingleDirectChild(root, "libraries");
         Element effects = requireSingleDirectChild(root, "effects");
@@ -144,11 +177,99 @@ public final class EffectConfigMerger {
         return new Result(changed ? canonical : source, changed);
     }
 
-    private static void setRequiredFeature(
-            DocumentBuilderFactory factory, String feature, boolean value) throws Exception {
-        factory.setFeature(feature, value);
-        if (factory.getFeature(feature) != value) {
-            throw new IllegalStateException("XML parser did not accept secure feature " + feature);
+    private static void rejectForbiddenXmlDeclarations(String source) {
+        if (source.indexOf('\ufeff') >= 0 || source.indexOf('\ufffe') >= 0) {
+            throw new IllegalArgumentException("XML byte-order marks are unsupported");
+        }
+        int cursor = 0;
+        while (cursor < source.length()) {
+            int markup = source.indexOf('<', cursor);
+            if (markup < 0) {
+                return;
+            }
+            if (source.startsWith("<!--", markup)) {
+                int end = source.indexOf("-->", markup + 4);
+                if (end < 0) {
+                    return;
+                }
+                cursor = end + 3;
+                continue;
+            }
+            if (source.startsWith("<![CDATA[", markup)) {
+                int end = source.indexOf("]]>", markup + 9);
+                if (end < 0) {
+                    return;
+                }
+                cursor = end + 3;
+                continue;
+            }
+            if (source.regionMatches(true, markup, "<!DOCTYPE", 0, 9)
+                    || source.regionMatches(true, markup, "<!ENTITY", 0, 8)) {
+                throw new IllegalArgumentException("DOCTYPE and ENTITY declarations are forbidden");
+            }
+            if (source.startsWith("<?", markup)
+                    && source.regionMatches(true, markup + 2, "xml", 0, 3)) {
+                int end = source.indexOf("?>", markup + 5);
+                if (markup != 0 || !source.startsWith("<?xml", markup) || end < 0) {
+                    throw new IllegalArgumentException("XML declaration is malformed or misplaced");
+                }
+                validateXmlEncoding(source.substring(markup + 5, end));
+                cursor = end + 2;
+                continue;
+            }
+            cursor = markup + 1;
+        }
+    }
+
+    private static void validateXmlEncoding(String declaration) {
+        Matcher matcher = XML_ENCODING.matcher(declaration);
+        boolean found = false;
+        while (matcher.find()) {
+            if (found || !"UTF-8".equalsIgnoreCase(matcher.group(2))) {
+                throw new IllegalArgumentException("XML encoding must be UTF-8");
+            }
+            found = true;
+        }
+        if (!found && declaration.toLowerCase(Locale.ROOT).contains("encoding")) {
+            throw new IllegalArgumentException("XML encoding declaration is malformed");
+        }
+    }
+
+    private static void setOptionalSecurityFeature(
+            DocumentBuilderFactory factory, String feature, boolean value) {
+        try {
+            factory.setFeature(feature, value);
+            if (factory.getFeature(feature) != value) {
+                throw new ParserConfigurationException(
+                        "XML parser did not accept secure feature " + feature);
+            }
+        } catch (ParserConfigurationException unsupported) {
+            // Android parsers expose different SAX feature sets by API level. Security does not
+            // depend on these optional controls: declarations are rejected before parsing and
+            // the EntityResolver below rejects every attempted external lookup.
+        }
+    }
+
+    private static void disableXInclude(DocumentBuilderFactory factory) {
+        try {
+            factory.setXIncludeAware(false);
+        } catch (UnsupportedOperationException unsupported) {
+            // JAXP requires this exception when the implementation has no XInclude support.
+            // Android's built-in parser follows that contract, so there is nothing to disable.
+            return;
+        }
+        if (factory.isXIncludeAware()) {
+            throw new IllegalStateException("XML parser did not disable XInclude processing");
+        }
+    }
+
+    private static void disableOptionalExternalAccess(
+            DocumentBuilderFactory factory, String attribute) {
+        try {
+            factory.setAttribute(attribute, "");
+        } catch (IllegalArgumentException | UnsupportedOperationException unsupported) {
+            // These JAXP 1.5 properties are not implemented by every Android parser. The
+            // rejecting EntityResolver and pre-parse declaration ban remain mandatory.
         }
     }
 
@@ -285,6 +406,9 @@ public final class EffectConfigMerger {
     }
 
     private static void validateElementNodes(Element element) {
+        if (XINCLUDE_NAMESPACE.equals(element.getNamespaceURI())) {
+            throw new IllegalArgumentException("XInclude elements are forbidden");
+        }
         NodeList children = element.getChildNodes();
         for (int index = 0; index < children.getLength(); index++) {
             Node child = children.item(index);
