@@ -129,7 +129,9 @@ namespace echidna::effects::legacy
             {
                 return false;
             }
-            struct stat before{};
+            struct stat before
+            {
+            };
             const bool safe =
                 ::fstat(fd, &before) == 0 && S_ISREG(before.st_mode) &&
                 before.st_size == static_cast<off_t>(key->size()) &&
@@ -161,7 +163,9 @@ namespace echidna::effects::legacy
                 received += static_cast<size_t>(result);
             }
 
-            struct stat after{};
+            struct stat after
+            {
+            };
             const bool unchanged =
                 ::fstat(fd, &after) == 0 && after.st_dev == before.st_dev &&
                 after.st_ino == before.st_ino && after.st_size == before.st_size &&

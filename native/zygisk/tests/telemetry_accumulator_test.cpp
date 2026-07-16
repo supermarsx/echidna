@@ -20,7 +20,7 @@ namespace
             ++g_failures;
         }
     }
-}
+} // namespace
 
 void *operator new(std::size_t size)
 {

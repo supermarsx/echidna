@@ -44,7 +44,7 @@ namespace
     {
         return static_cast<ssize_t>(size / 2);
     }
-}
+} // namespace
 
 int main()
 {
@@ -100,7 +100,7 @@ int main()
               "loaded telemetry frame must use the independent best-effort send path");
     }
     Check(runtime::SendTelemetryV2Frame(1, active_ack, CaptureSend) ==
-              runtime::TelemetrySendResult::kComplete &&
+                  runtime::TelemetrySendResult::kComplete &&
               g_send_count == 9,
           "critical ACK must remain sendable after eight loaded telemetry frames");
 

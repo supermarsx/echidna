@@ -366,7 +366,7 @@ namespace
         CHECK(ReceiveFrame(client, &acknowledgement),
               "installed native route must acknowledge the active generation");
         CHECK(acknowledgement.find(R"("process":"com.example.app:capture")") !=
-                  std::string::npos &&
+                      std::string::npos &&
                   acknowledgement.find(R"("generation":100)") != std::string::npos &&
                   acknowledgement.find(R"("handoffToken":7001)") != std::string::npos &&
                   acknowledgement.find(R"("active":true)") != std::string::npos,
@@ -672,8 +672,7 @@ namespace
         std::thread stopper([&]()
                             {
                                 stop_entered.store(true, std::memory_order_release);
-                                server.stop();
-                            });
+                                server.stop(); });
         CHECK(WaitUntil([&]()
                         { return stop_entered.load(std::memory_order_acquire); },
                         2s),

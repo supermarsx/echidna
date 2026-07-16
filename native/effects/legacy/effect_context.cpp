@@ -910,8 +910,8 @@ namespace echidna::effects::legacy
             static_cast<uint32_t>(sizeof(effect_param_t) + parameter_size);
         const uint32_t required = static_cast<uint32_t>(
             snapshot_known ? kTelemetrySnapshotReplyBytes
-                           : proof_known ? kTelemetryProofReplyBytes
-                                         : prefix_bytes);
+            : proof_known  ? kTelemetryProofReplyBytes
+                           : prefix_bytes);
         const uint32_t capacity = *reply_size;
         *reply_size = required;
 

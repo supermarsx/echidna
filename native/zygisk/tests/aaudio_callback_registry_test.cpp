@@ -12,7 +12,7 @@ namespace
 {
     std::atomic<uint64_t> gAllocationCount{0};
     std::atomic<bool> gTrackAllocations{false};
-}
+} // namespace
 
 void *operator new(std::size_t size)
 {
@@ -260,7 +260,8 @@ namespace
         std::atomic<bool> began_invocation{false};
         std::atomic<bool> release{false};
 
-        std::thread callback_thread([&]() {
+        std::thread callback_thread([&]()
+                                    {
             echidna::hooks::AAudioCallbackTarget target;
             const bool began = registry.beginInvocation(old_token, nullptr, &target);
             began_invocation.store(began, std::memory_order_relaxed);
@@ -272,8 +273,7 @@ namespace
             if (began)
             {
                 registry.endInvocation(old_token);
-            }
-        });
+            } });
         while (!ready.load(std::memory_order_acquire))
         {
             std::this_thread::yield();

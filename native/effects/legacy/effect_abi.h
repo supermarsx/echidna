@@ -37,7 +37,7 @@
 #define EFFECT_CONTROL_API_VERSION EFFECT_MAKE_API_VERSION(2, 0)
 #define EFFECT_LIBRARY_API_VERSION EFFECT_MAKE_API_VERSION(3, 0)
 #define EFFECT_LIBRARY_API_VERSION_3_0 EFFECT_MAKE_API_VERSION(3, 0)
-#define AUDIO_EFFECT_LIBRARY_TAG \
+#define AUDIO_EFFECT_LIBRARY_TAG                                               \
     ((static_cast<uint32_t>('A') << 24) | (static_cast<uint32_t>('E') << 16) | \
      (static_cast<uint32_t>('L') << 8) | static_cast<uint32_t>('T'))
 

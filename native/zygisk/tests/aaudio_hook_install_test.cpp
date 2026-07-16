@@ -50,9 +50,9 @@ namespace
                 (outcomes & RoleBit(AAudioHookRole::kSetDataCallback)) != 0;
             const bool read_ok = (outcomes & RoleBit(AAudioHookRole::kRead)) != 0;
             const bool support_complete = close_ok &&
-                (read_ok || (delete_ok && callback_ok));
+                                          (read_ok || (delete_ok && callback_ok));
             const bool open_ok = support_complete &&
-                (outcomes & RoleBit(AAudioHookRole::kOpen)) != 0;
+                                 (outcomes & RoleBit(AAudioHookRole::kOpen)) != 0;
 
             CHECK(installed.anyRouteComplete() == (support_complete && open_ok),
                   "only an open plus a complete lifecycle route may activate");
@@ -211,7 +211,7 @@ namespace
         std::atomic<bool> done{false};
         std::atomic<bool> invalid{false};
         std::thread reader([&]()
-        {
+                           {
             while (!start.load(std::memory_order_acquire))
             {
                 std::this_thread::yield();
@@ -224,8 +224,7 @@ namespace
                 {
                     invalid.store(true, std::memory_order_release);
                 }
-            }
-        });
+            } });
         start.store(true, std::memory_order_release);
         for (size_t iteration = 0; iteration < 100000; ++iteration)
         {

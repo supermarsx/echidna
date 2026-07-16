@@ -6,15 +6,15 @@
 
 #include "effect_abi.h"
 
-#define CHECK_TRUE(condition)                                                   \
-    do                                                                          \
-    {                                                                           \
-        if (!(condition))                                                       \
-        {                                                                       \
-            std::cerr << __FILE__ << ':' << __LINE__                            \
-                      << ": check failed: " #condition << '\n';                \
-            return 1;                                                           \
-        }                                                                       \
+#define CHECK_TRUE(condition)                                   \
+    do                                                          \
+    {                                                           \
+        if (!(condition))                                       \
+        {                                                       \
+            std::cerr << __FILE__ << ':' << __LINE__            \
+                      << ": check failed: " #condition << '\n'; \
+            return 1;                                           \
+        }                                                       \
     } while (false)
 
 inline effect_config_t MakeEffectConfig(

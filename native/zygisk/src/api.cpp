@@ -773,13 +773,13 @@ echidna_result_t echidna_stream_process(echidna_stream_handle_t handle,
     bool mutated = false;
     bool stream_bypassed = false;
     const echidna_result_t result = GetStreamRegistry().process(handle,
-                                                               input,
-                                                               output,
-                                                               frames,
-                                                               format,
-                                                               bypassed,
-                                                               &mutated,
-                                                               &stream_bypassed);
+                                                                input,
+                                                                output,
+                                                                frames,
+                                                                format,
+                                                                bypassed,
+                                                                &mutated,
+                                                                &stream_bypassed);
     const auto outcome = result != ECHIDNA_RESULT_OK
                              ? echidna::utils::TelemetryBlockOutcome::kFailure
                          : stream_bypassed

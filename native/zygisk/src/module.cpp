@@ -191,10 +191,8 @@ namespace
         while (g_activation_gate.running())
         {
             g_activation_changed.wait(lock, []()
-                                      {
-                                          return !g_activation_gate.running() ||
-                                                 g_activation_gate.shouldAttemptInstall();
-                                      });
+                                      { return !g_activation_gate.running() ||
+                                               g_activation_gate.shouldAttemptInstall(); });
             if (!g_activation_gate.running())
             {
                 break;

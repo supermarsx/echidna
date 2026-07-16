@@ -229,7 +229,9 @@ namespace echidna::effects::legacy
             {
                 return false;
             }
-            struct stat status{};
+            struct stat status
+            {
+            };
             const bool safe = ::fstat(fd, &status) == 0 && S_ISREG(status.st_mode) &&
                               status.st_uid == required_owner_uid &&
                               (status.st_mode & 0022) == 0 &&
@@ -258,7 +260,9 @@ namespace echidna::effects::legacy
                 }
                 received += static_cast<size_t>(result);
             }
-            struct stat after{};
+            struct stat after
+            {
+            };
             const bool unchanged = ::fstat(fd, &after) == 0 &&
                                    after.st_dev == status.st_dev &&
                                    after.st_ino == status.st_ino &&

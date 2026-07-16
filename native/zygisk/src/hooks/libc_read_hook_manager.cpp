@@ -45,7 +45,9 @@ namespace echidna::hooks
 
         bool IsRawAudioDevice(int fd)
         {
-            struct stat status{};
+            struct stat status
+            {
+            };
             if (fd < 0 || fstat(fd, &status) != 0 || !S_ISCHR(status.st_mode))
             {
                 return false;

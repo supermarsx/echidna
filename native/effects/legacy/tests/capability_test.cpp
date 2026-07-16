@@ -54,15 +54,15 @@ using echidna::effects::legacy::TelemetryProofKeyOptions;
 using echidna::effects::legacy::TelemetryProofNonce;
 using echidna::effects::legacy::TelemetryProofSigner;
 
-#define REQUIRE(condition)                                                      \
-    do                                                                          \
-    {                                                                           \
-        if (!(condition))                                                       \
-        {                                                                       \
-            std::cerr << __FILE__ << ':' << __LINE__                            \
-                      << ": requirement failed: " #condition << '\n';          \
-            return false;                                                       \
-        }                                                                       \
+#define REQUIRE(condition)                                            \
+    do                                                                \
+    {                                                                 \
+        if (!(condition))                                             \
+        {                                                             \
+            std::cerr << __FILE__ << ':' << __LINE__                  \
+                      << ": requirement failed: " #condition << '\n'; \
+            return false;                                             \
+        }                                                             \
     } while (false)
 
 namespace

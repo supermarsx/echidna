@@ -620,10 +620,8 @@ namespace
             return false;
         }
         return std::all_of(value.begin(), value.end(), [](char character)
-                           {
-                               return IsAsciiAlphaNumeric(character) || character == '.' ||
-                                      character == '_' || character == '-';
-                           });
+                           { return IsAsciiAlphaNumeric(character) || character == '.' ||
+                                    character == '_' || character == '-'; });
     }
 
     bool IsValidProcessName(std::string_view value, bool allow_colon)
@@ -633,10 +631,8 @@ namespace
             return false;
         }
         return std::all_of(value.begin(), value.end(), [allow_colon](char character)
-                           {
-                               return IsAsciiAlphaNumeric(character) || character == '.' ||
-                                      character == '_' || (allow_colon && character == ':');
-                           });
+                           { return IsAsciiAlphaNumeric(character) || character == '.' ||
+                                    character == '_' || (allow_colon && character == ':'); });
     }
 
     std::string_view BasePackage(std::string_view process)
@@ -950,7 +946,7 @@ namespace echidna::runtime
         if (const JsonValue *owner = ResolveExactThenBase(*owners, process_name))
         {
             snapshot->capture_owner = owner->text == "zygisk" ? CaptureOwner::kZygisk
-                                                               : CaptureOwner::kLsposed;
+                                                              : CaptureOwner::kLsposed;
         }
 
         const std::string_view package_name = BasePackage(process_name);

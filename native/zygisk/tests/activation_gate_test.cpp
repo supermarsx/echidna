@@ -101,8 +101,7 @@ namespace
                                   lock.unlock();
                                   // Production takes the activation mutex before
                                   // this transition; the stopped gate suppresses it.
-                                  gate.markHooksInstalled();
-                              });
+                                  gate.markHooksInstalled(); });
         {
             std::unique_lock lock(mutex);
             changed.wait(lock, [&]()

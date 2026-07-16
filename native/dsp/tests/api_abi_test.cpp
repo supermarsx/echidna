@@ -23,13 +23,13 @@ namespace
     }
 } // namespace
 
-#define CHECK_TRUE(condition)                                                   \
-    do                                                                          \
-    {                                                                           \
-        if (Check((condition), #condition, __LINE__) != 0)                       \
-        {                                                                       \
-            return 1;                                                           \
-        }                                                                       \
+#define CHECK_TRUE(condition)                              \
+    do                                                     \
+    {                                                      \
+        if (Check((condition), #condition, __LINE__) != 0) \
+        {                                                  \
+            return 1;                                      \
+        }                                                  \
     } while (false)
 
 static_assert(std::is_same_v<decltype(&ech_dsp_api_get_version),

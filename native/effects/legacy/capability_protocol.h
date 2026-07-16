@@ -52,11 +52,11 @@ namespace echidna::effects::legacy
     enum class CapabilityStatus : int32_t
     {
         kOk = 0,
-        kMalformed = -22,       // EINVAL
-        kKeyUnavailable = -126, // ENOKEY
+        kMalformed = -22,         // EINVAL
+        kKeyUnavailable = -126,   // ENOKEY
         kSignatureInvalid = -129, // EKEYREJECTED
-        kExpired = -127,        // EKEYEXPIRED
-        kWrongSession = -1,     // EPERM
+        kExpired = -127,          // EKEYEXPIRED
+        kWrongSession = -1,       // EPERM
     };
 
     using CapabilityClock = uint64_t (*)() noexcept;
