@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -53,7 +54,10 @@ import com.echidna.app.model.Preset
 import kotlin.math.roundToInt
 
 @Composable
-fun DashboardScreen(viewModel: DashboardViewModel) {
+fun DashboardScreen(
+    viewModel: DashboardViewModel,
+    onOpenInstall: () -> Unit = {}
+) {
     val masterEnabled by viewModel.masterEnabled.collectAsStateWithLifecycle()
     val bypass by viewModel.bypass.collectAsStateWithLifecycle()
     val activePreset by viewModel.activePreset.collectAsStateWithLifecycle()
@@ -72,7 +76,7 @@ fun DashboardScreen(viewModel: DashboardViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        InstallRiskWarningCard()
+        InstallRiskWarningCard(onOpenInstall = onOpenInstall)
         MasterControlCard(
             enabled = masterEnabled,
             onToggle = { checked ->
@@ -124,38 +128,56 @@ fun DashboardScreen(viewModel: DashboardViewModel) {
 }
 
 @Composable
-private fun InstallRiskWarningCard() {
+private fun InstallRiskWarningCard(onOpenInstall: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(
-                imageVector = Icons.Filled.Warning,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(22.dp)
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "Root module / install risk",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onErrorContainer
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(22.dp)
                 )
-                Text(
-                    text = "Echidna's Android capture-path interception and Magisk/Zygisk module " +
-                        "install path are very hard and will likely not work on many phones. " +
-                        "Do not flash or rely on the module unless you can recover the device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Root module / install risk",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        text = "Echidna's Android capture-path interception and Magisk/Zygisk module " +
+                            "install path are very hard and will likely not work on many phones. " +
+                            "Do not flash or rely on the module unless you can recover the device.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+            // CTA: opens the guided installer, which honestly detects root/Magisk before offering
+            // to install the bundled engine module (replacing the former manual-flash-only advice).
+            Button(
+                onClick = onOpenInstall,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.onErrorContainer,
+                    contentColor = MaterialTheme.colorScheme.errorContainer
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(imageVector = Icons.Filled.Download, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = "Set up / install engine", fontWeight = FontWeight.SemiBold)
             }
         }
     }

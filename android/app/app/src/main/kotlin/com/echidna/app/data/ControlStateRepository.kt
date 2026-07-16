@@ -2,6 +2,7 @@ package com.echidna.app.data
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import com.echidna.app.model.AudioStackProbe
 import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.ControlState
@@ -28,6 +29,7 @@ import com.echidna.app.model.TunerState
 import com.echidna.app.model.WhitelistBindings
 import com.echidna.app.system.ControlServiceClient
 import com.echidna.app.system.ControlServiceSyncSnapshot
+import com.echidna.app.system.EngineModuleArchive
 import com.echidna.app.system.LegacyPreprocessorServiceResult
 import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
@@ -610,6 +612,49 @@ object ControlStateRepository {
                 ?: unavailableCompatibilityResult()
         }
     }
+
+    // --- In-app engine install / uninstall (t8-e1) --------------------------------------------
+    // The privileged EchidnaControlService already runs `magisk --install-module` /
+    // `--remove-modules`; these expose that capability to the guided installer UI and confirm the
+    // outcome through the same status poll the rest of the app trusts (no fabricated success).
+
+    /** True when the in-process control service is bound and ready to accept privileged calls. */
+    fun isServiceBound(): Boolean = ::serviceClient.isInitialized && serviceClient.isBound()
+
+    /**
+     * Forces a fresh privileged module/SELinux/HAL probe and mirrors it into the app state. Returns
+     * the parsed [ModuleStatus] (or null if the service is unavailable), so callers driving the
+     * install/uninstall flow can poll for the module appearing or disappearing.
+     */
+    suspend fun refreshModuleStatus(): ModuleStatus? = withContext(Dispatchers.IO) {
+        if (!::serviceClient.isInitialized) return@withContext null
+        val json = serviceClient.refreshStatus()
+            ?: serviceClient.getModuleStatus()
+            ?: return@withContext null
+        TelemetryParser.parseModuleStatus(json)?.also { applyModuleStatus(it) }
+    }
+
+    /** Requests a privileged install of [archivePath]. The outcome is observed via the status poll. */
+    fun installEngineModule(archivePath: String) {
+        if (::serviceClient.isInitialized) {
+            scope.launch { serviceClient.installModule(archivePath) }
+        }
+    }
+
+    /** Requests a privileged uninstall of the Echidna module. Observed via the status poll. */
+    fun uninstallEngineModule() {
+        if (::serviceClient.isInitialized) {
+            scope.launch { serviceClient.uninstallModule() }
+        }
+    }
+
+    /** Extracts the bundled module archive to a real path, or null when none is bundled. */
+    fun bundledEngineArchivePath(): String? =
+        if (::context.isInitialized) EngineModuleArchive(context).bundledArchivePath() else null
+
+    /** Stages a user-selected archive [uri] into a root-readable path, or null on failure. */
+    fun stageEngineArchive(uri: Uri): String? =
+        if (::context.isInitialized) EngineModuleArchive(context).stageArchive(uri) else null
 
     fun importPreset(json: String): String? {
         val imported = PresetSerializer.fromJson(json) ?: return null

@@ -295,6 +295,29 @@ class ControlServiceClient(
         }
     }
 
+    /**
+     * Requests a privileged `magisk --install-module` of the bundled engine archive. The call is
+     * fire-and-forget on the service side (it dispatches onto the privileged executor); the caller
+     * confirms the outcome by polling [refreshStatus]/[getModuleStatus] afterwards, mirroring how
+     * the existing control commands surface their effect through the status poll.
+     */
+    fun installModule(archivePath: String) {
+        try {
+            service?.installModule(archivePath)
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to request module install", ex)
+        }
+    }
+
+    /** Requests a privileged `magisk --remove-modules echidna`. Outcome is confirmed via the poll. */
+    fun uninstallModule() {
+        try {
+            service?.uninstallModule()
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to request module uninstall", ex)
+        }
+    }
+
     fun setMasterEnabled(enabled: Boolean) {
         try {
             service?.setMasterEnabled(enabled)

@@ -257,6 +257,45 @@ class ControlServiceClientTest {
         assertEquals("policy", replayed.getJSONObject("appBindings").getString("com.example.recorder"))
     }
 
+    @Test
+    fun `installModule forwards the archive path to the bound service`() {
+        val context = RecordingBindingContext()
+        val client = client(context)
+        val service = RecordingControlService()
+        assertTrue(client.bind())
+        context.connectCurrent(service)
+
+        client.installModule("/data/local/tmp/echidna-magisk.zip")
+
+        assertEquals(1, service.installCalls.get())
+        assertEquals("/data/local/tmp/echidna-magisk.zip", service.lastInstallPath)
+    }
+
+    @Test
+    fun `uninstallModule reaches the bound service`() {
+        val context = RecordingBindingContext()
+        val client = client(context)
+        val service = RecordingControlService()
+        assertTrue(client.bind())
+        context.connectCurrent(service)
+
+        client.uninstallModule()
+
+        assertEquals(1, service.uninstallCalls.get())
+    }
+
+    @Test
+    fun `install and uninstall are safely ignored when the service is unbound`() {
+        val context = RecordingBindingContext()
+        val client = client(context)
+
+        // No connection established: the calls must not throw.
+        client.installModule("/tmp/x.zip")
+        client.uninstallModule()
+
+        assertFalse(client.isBound())
+    }
+
     private fun client(
         context: Context,
         legacyPreprocessorSupported: () -> Boolean = { true },
@@ -353,6 +392,9 @@ private class RecordingControlService(
     val syncThreadIds = CopyOnWriteArrayList<Long>()
     val legacyPreprocessorReadCalls = AtomicInteger(0)
     val legacyPreprocessorSetCalls = AtomicInteger(0)
+    val installCalls = AtomicInteger(0)
+    val uninstallCalls = AtomicInteger(0)
+    @Volatile var lastInstallPath: String? = null
     @Volatile var legacyPreprocessorEnabled = initialLegacyPreprocessorEnabled
 
     override fun registerTelemetryListener(listener: IEchidnaTelemetryListener?) {
@@ -370,8 +412,14 @@ private class RecordingControlService(
         return true
     }
 
-    override fun installModule(archivePath: String?) = Unit
-    override fun uninstallModule() = Unit
+    override fun installModule(archivePath: String?) {
+        installCalls.incrementAndGet()
+        lastInstallPath = archivePath
+    }
+
+    override fun uninstallModule() {
+        uninstallCalls.incrementAndGet()
+    }
     override fun refreshStatus(): String = "{}"
     override fun getModuleStatus(): String = "{}"
     override fun updateWhitelist(processName: String?, enabled: Boolean) = Unit

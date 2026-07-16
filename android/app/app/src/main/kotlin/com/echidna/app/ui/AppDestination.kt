@@ -9,6 +9,7 @@ data class AppDestination(val route: String, val label: String) {
         val Settings = AppDestination("settings", "Settings")
         val CompatibilityWizard = AppDestination("compatibility", "Compatibility")
         val WhitelistEditor = AppDestination("whitelist", "Whitelist")
+        val InstallEngine = AppDestination("install", "Install engine")
 
         val bottomDestinations = listOf(Dashboard, PresetManager, EffectsEditor, Diagnostics, Settings)
     }

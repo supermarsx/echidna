@@ -16,6 +16,8 @@ import com.echidna.app.ui.diagnostics.DiagnosticsScreen
 import com.echidna.app.ui.diagnostics.DiagnosticsViewModel
 import com.echidna.app.ui.effects.EffectsEditorScreen
 import com.echidna.app.ui.effects.EffectsEditorViewModel
+import com.echidna.app.ui.install.InstallEngineScreen
+import com.echidna.app.ui.install.InstallEngineViewModel
 import com.echidna.app.ui.preset.PresetManagerScreen
 import com.echidna.app.ui.preset.PresetManagerViewModel
 import com.echidna.app.ui.settings.SettingsScreen
@@ -26,7 +28,17 @@ import com.echidna.app.ui.whitelist.WhitelistEditorViewModel
 fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostController) {
     composable(AppDestination.Dashboard.route) {
         val viewModel: DashboardViewModel = viewModel()
-        DashboardScreen(viewModel = viewModel)
+        DashboardScreen(
+            viewModel = viewModel,
+            onOpenInstall = { navController.navigate(AppDestination.InstallEngine.route) }
+        )
+    }
+    composable(AppDestination.InstallEngine.route) {
+        val viewModel: InstallEngineViewModel = viewModel()
+        InstallEngineScreen(
+            viewModel = viewModel,
+            onClose = { navController.popBackStack() }
+        )
     }
     composable(AppDestination.PresetManager.route) {
         val viewModel: PresetManagerViewModel = viewModel()
