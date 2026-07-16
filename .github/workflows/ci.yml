@@ -363,4 +363,5 @@ jobs:
     with:
       tag: ""
       prerelease: false
+      allow_unsigned_skip: true
     secrets: inherit

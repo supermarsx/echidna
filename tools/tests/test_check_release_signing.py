@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import io
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -51,6 +55,56 @@ class ReleaseSigningConfigurationTest(unittest.TestCase):
 
     def test_complete_configuration_is_accepted(self) -> None:
         self.assertEqual([], checker.validate_environment(FULL_ENVIRONMENT))
+
+    def test_only_completely_absent_configuration_can_skip(self) -> None:
+        self.assertTrue(checker.is_completely_unconfigured({}))
+        self.assertTrue(
+            checker.is_completely_unconfigured(
+                {name: "  " for name in checker.REQUIRED_SIGNING_VARIABLES}
+            )
+        )
+        self.assertFalse(
+            checker.is_completely_unconfigured({"RELEASE_KEY_ALIAS": "release"})
+        )
+
+    def test_automatic_ci_can_skip_absent_but_not_partial_signing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "github-output"
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+                "sys.stdout", new_callable=io.StringIO
+            ) as stdout:
+                result = checker.main(
+                    ["--allow-unconfigured-skip", "--github-output", str(output)]
+                )
+            self.assertEqual(0, result)
+            self.assertIn("::notice title=Release skipped::", stdout.getvalue())
+            self.assertEqual("release_enabled=false\n", output.read_text(encoding="utf-8"))
+
+            partial = {"RELEASE_KEY_ALIAS": "release"}
+            with mock.patch.dict(os.environ, partial, clear=True), mock.patch(
+                "sys.stderr", new_callable=io.StringIO
+            ) as stderr:
+                result = checker.main(["--allow-unconfigured-skip"])
+            self.assertEqual(2, result)
+            self.assertIn("missing required release signing inputs", stderr.getvalue())
+
+    def test_manual_or_tag_mode_rejects_absent_signing(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as stderr:
+            result = checker.main([])
+        self.assertEqual(2, result)
+        self.assertIn("missing required release signing inputs", stderr.getvalue())
+
+    def test_complete_signing_enables_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "github-output"
+            with mock.patch.dict(os.environ, FULL_ENVIRONMENT, clear=True):
+                result = checker.main(
+                    ["--allow-unconfigured-skip", "--github-output", str(output)]
+                )
+            self.assertEqual(0, result)
+            self.assertEqual("release_enabled=true\n", output.read_text(encoding="utf-8"))
 
     def test_malformed_base64_is_rejected_and_wrapped_base64_is_accepted(self) -> None:
         malformed = {**FULL_ENVIRONMENT, "RELEASE_KEYSTORE_BASE64": "not!base64"}
@@ -104,6 +158,19 @@ class ReleaseSigningConfigurationTest(unittest.TestCase):
         self.assertNotIn('cat "$RUNNER_TEMP/release.jks"', workflow)
         self.assertNotIn("Building release with debug-signing fallback", workflow)
         self.assertIn("RELEASE_STORE_FILE: ${{ runner.temp }}/release.jks", workflow)
+        ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("allow_unsigned_skip:", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn(
+            "ALLOW_UNSIGNED_SKIP: ${{ inputs.allow_unsigned_skip || false }}", workflow
+        )
+        self.assertIn("allow_unsigned_skip: true", ci_workflow)
+        self.assertIn("signing_args+=(--allow-unconfigured-skip)", workflow)
+        self.assertGreaterEqual(
+            workflow.count("needs.prepare.outputs.release_enabled == 'true'"), 3
+        )
 
 
 if __name__ == "__main__":

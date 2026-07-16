@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      allow_unsigned_skip:
+        description: "Allow normal CI to skip publication when every signing secret is absent"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
@@ -44,6 +49,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
+      release_enabled: ${{ steps.signing.outputs.release_enabled }}
       tag: ${{ steps.resolve.outputs.tag }}
       tag_source: ${{ steps.resolve.outputs.source }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
@@ -54,6 +60,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      # An unconfigured repository may run normal CI without publishing. Only
+      # that main-push path can skip; tag/manual releases and partial or invalid
+      # signing configuration continue to fail closed.
+      - name: Determine release signing readiness
+        id: signing
+        env:
+          ALLOW_UNSIGNED_SKIP: ${{ inputs.allow_unsigned_skip || false }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          signing_args=()
+          if [ "$ALLOW_UNSIGNED_SKIP" = "true" ]; then
+            signing_args+=(--allow-unconfigured-skip)
+          fi
+          python3 tools/check_release_signing.py "${signing_args[@]}"
+
       # Resolve the release tag:
       #   - CI workflow_call from a main push still reports GITHUB_EVENT_NAME=push
       #     with GITHUB_REF=refs/heads/main -> auto-compute next YY.N, create the ref
@@ -62,6 +88,7 @@ jobs:
       #   - workflow_dispatch without input -> auto-compute next YY.N, create the ref
       - name: Resolve release tag
         id: resolve
+        if: steps.signing.outputs.release_enabled == 'true'
         env:
           RELEASE_TAG_INPUT: ${{ inputs.tag || '' }}
         run: |
@@ -74,19 +101,8 @@ jobs:
             --manual-tag "${RELEASE_TAG_INPUT}" \
             --tags-file "${RUNNER_TEMP}/release-tags.txt"
 
-      # Validate secrets before creating an automatic tag. A failed signing
-      # preflight must not leave an orphan YY.N tag behind, and publishable APKs
-      # must never use Gradle's local Android-debug fallback.
-      - name: Require publishable APK signing inputs
-        env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
-        run: python3 tools/check_release_signing.py
-
       - name: Set up JDK for release signing preflight
+        if: steps.signing.outputs.release_enabled == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -95,6 +111,7 @@ jobs:
       # Importing the selected private-key entry validates the keystore bytes,
       # store password, alias, and key password before an automatic tag exists.
       - name: Validate release keystore credentials
+        if: steps.signing.outputs.release_enabled == 'true'
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -123,6 +140,7 @@ jobs:
             -destkeypass echidna-preflight
 
       - name: Create tag if needed and reject duplicate releases
+        if: steps.signing.outputs.release_enabled == 'true'
         uses: actions/github-script@v9
         env:
           RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
@@ -208,6 +226,7 @@ jobs:
               .write();
 
       - name: Checkout resolved tag
+        if: steps.signing.outputs.release_enabled == 'true'
         run: |
           set -euo pipefail
           git fetch --tags --force
@@ -215,6 +234,7 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        if: steps.signing.outputs.release_enabled == 'true'
         run: |
           set -euo pipefail
           CURRENT="${{ steps.resolve.outputs.tag }}"
@@ -240,6 +260,7 @@ jobs:
     name: "Native per-ABI (NDK) + Magisk module"
     runs-on: ubuntu-latest
     needs: prepare
+    if: needs.prepare.outputs.release_enabled == 'true'
     env:
       ECHIDNA_VERSION: ${{ needs.prepare.outputs.tag }}
       RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
@@ -360,6 +381,7 @@ jobs:
     name: "Signed release APKs"
     runs-on: ubuntu-latest
     needs: [prepare, native]
+    if: needs.prepare.outputs.release_enabled == 'true'
     env:
       ECHIDNA_VERSION: ${{ needs.prepare.outputs.tag }}
     steps:
@@ -483,9 +505,10 @@ jobs:
     needs: [prepare, native, android]
     # Defense in depth: publish only for the supported release entry points.
     if: >-
-      github.ref == 'refs/heads/main' ||
+      needs.prepare.outputs.release_enabled == 'true' &&
+      (github.ref == 'refs/heads/main' ||
       startsWith(github.ref, 'refs/tags/') ||
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'workflow_dispatch')
     steps:
       - name: Download native library package
         uses: actions/download-artifact@v8

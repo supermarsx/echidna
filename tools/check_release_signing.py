@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fail closed when a publishable release lacks complete APK signing inputs."""
+"""Classify release signing inputs without permitting unsigned publication."""
 
 from __future__ import annotations
 
+import argparse
 import base64
 import binascii
 import os
@@ -64,7 +65,38 @@ def validate_environment(environment: Mapping[str, str]) -> list[str]:
     return errors
 
 
-def main() -> int:
+def is_completely_unconfigured(environment: Mapping[str, str]) -> bool:
+    return not any(environment.get(name, "").strip() for name in REQUIRED_SIGNING_VARIABLES)
+
+
+def write_github_output(output_file: str, *, release_enabled: bool) -> None:
+    if not output_file:
+        return
+    with open(output_file, "a", encoding="utf-8") as handle:
+        handle.write(f"release_enabled={str(release_enabled).lower()}\n")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow-unconfigured-skip",
+        action="store_true",
+        help="successfully disable automatic CI publication when every signing input is absent",
+    )
+    parser.add_argument("--github-output", default=os.getenv("GITHUB_OUTPUT", ""))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.allow_unconfigured_skip and is_completely_unconfigured(os.environ):
+        write_github_output(args.github_output, release_enabled=False)
+        print(
+            "::notice title=Release skipped::All release signing inputs are absent; "
+            "automatic CI will skip release build and publication."
+        )
+        return 0
+
     errors = validate_environment(os.environ)
     if errors:
         for error in errors:
@@ -76,6 +108,7 @@ def main() -> int:
         )
         return 2
 
+    write_github_output(args.github_output, release_enabled=True)
     expected = os.environ.get(EXPECTED_CERT_VARIABLE, "").strip()
     print("Release signing inputs are complete.")
     print(

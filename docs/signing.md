@@ -58,11 +58,16 @@ The shim build also requires the dedicated native JNI and DSP outputs from
 - `RELEASE_KEY_PASSWORD`
 - `RELEASE_CERT_SHA256`
 
-Before an automatic tag is created, `tools/check_release_signing.py` rejects missing or partial
-inputs and malformed base64/certificate values. The workflow decodes the keystore with mode `0600`
-under a restrictive umask, uses `keytool -importkeystore` to prove that the selected private-key
-entry, store password, alias, and key password are valid, masks passwords, and removes temporary
-keystores on every path.
+On the normal main-branch CI path, an entirely absent five-secret set disables release publication:
+the reusable workflow emits an explicit notice and skips its build and publish jobs successfully.
+This lets CI remain green in repositories that have not enabled releases. A partial or invalid set
+still fails closed, as does an unconfigured manual or tag-triggered release.
+
+Before an automatic tag is created, `tools/check_release_signing.py` rejects those partial or
+invalid inputs and malformed base64/certificate values. The workflow decodes the keystore with
+mode `0600` under a restrictive umask, uses `keytool -importkeystore` to prove that the selected
+private-key entry, store password, alias, and key password are valid, masks passwords, and removes
+temporary keystores on every path.
 
 After building, `tools/verify_android_artifacts.py` requires the exact companion and shim APK
 payloads, rejects debug certificates and unexpected native libraries, checks both APKs against
