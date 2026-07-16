@@ -264,6 +264,41 @@ class DocumentationContractTest(unittest.TestCase):
                 self.assertRegex(text, r"(?i)(?:not current HEAD|not evidence|not proof)")
                 self.assertIn("telemetry", text.lower())
 
+    def test_telemetry_origin_proof_status_matches_active_contract(self) -> None:
+        native = read("native/effects/legacy/telemetry_protocol.cpp") + read(
+            "native/effects/legacy/effect_context.cpp"
+        )
+        shim = read(
+            "android/lsposed-shim/shim/src/main/java/com/echidna/lsposed/hooks/"
+            "LegacyPreprocessorSessionManager.java"
+        )
+        control = read(
+            "android/control-service/service/src/main/kotlin/com/echidna/control/service/"
+            "LegacyPreprocessorTelemetryProof.kt"
+        )
+        self.assertIn("ECHIDNA_PREPROCESSOR_TELEMETRY_PROOF_V2", native)
+        self.assertIn("pollTelemetryProof", shim)
+        self.assertIn('Mac.getInstance("HmacSHA256")', control)
+
+        for path in (
+            "docs/limitations.md",
+            "docs/magisk_release.md",
+            "docs/signing.md",
+            "docs/verification.md",
+        ):
+            with self.subTest(path=path):
+                text = self.status[path]
+                self.assertIn("ECHT v2", text)
+                self.assertIn("HMAC", text)
+
+        stale_patterns = (
+            r"no native (?:telemetry )?(?:producer|consumer|protocol)",
+            r"native (?:hmac )?consumption.{0,40}(?:future|still required)",
+        )
+        for pattern in stale_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, self.corpus, re.IGNORECASE))
+
     def test_policy_and_diagnostics_language_stays_fail_closed(self) -> None:
         forbidden = (
             r"panic.{0,40}(?:master[- ]off|turns? off.{0,20}master)",

@@ -216,8 +216,9 @@ config, post-fs/mount ordering, magic-mount file labels/linker namespace, factor
 process maps, or AVC-free load. Host fixtures cover activation rollback and first-OTA refusal.
 Registration alone never attaches or enables the effect; only the separate default-off LSPosed
 session manager can request authorized attachment, and no device audio transformation is proved.
-Telemetry-key provisioning likewise does not prove native-origin authentication: native consumption
-and enforced-SELinux effect-host reads remain device-only future gates.
+Telemetry-key provisioning alone does not prove live native-origin authentication. Native ECHT v2
+HMAC production, LSPosed relay, and control-service verification are implemented and host-tested;
+effect-host key reads under enforced SELinux and end-to-end device proof remain device-only gates.
 
 Native Zygisk policy is owned by the companion service's authenticated abstract AF_UNIX socket
 `echidna_profiles`; LSPosed uses the companion's read-only Binder provider. There is no filesystem

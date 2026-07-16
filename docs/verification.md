@@ -116,7 +116,7 @@ Requested coverage, explicitly:
 | tinyalsa | Operational candidate; metadata from `pcm_open` config | Vendor/device target app |
 | LSPosed Java AudioRecord | Operational candidate; Java getters + dedicated JNI | Live LSPosed injection under SELinux |
 | Legacy input preprocessor | Packaged and next-boot registration implemented for a registered system/vendor HIDL factory PID; host fixtures prove first-OTA refusal and bounded activation rollback; default-off LSPosed attachment manager requires a signed short-lived capability | Real factory discovery, post-fs/mount ordering, magic-mount label/linker namespace, descriptor/maps/AVC, attachment/enablement under enforced SELinux, and device audio mutation |
-| Telemetry origin-proof key | Per-install root pin plus app/effect derived-copy provisioning is host-fixture and package-verifier covered; no key bytes ship or enter logs | Native HMAC consumption, effect-host SELinux read access, rotation/recovery observation, and end-to-end device proof |
+| Telemetry origin-proof key | Per-install root pin/derived copies plus native ECHT v2 HMAC production, LSPosed relay, and control verification are host-tested; no key bytes ship or enter logs | Effect-host SELinux read access, rotation/recovery observation, and end-to-end device proof |
 | Native AudioRecord | Developer contract only (`ECHIDNA_AR_*`) | A safe normal-flow metadata producer is not implemented |
 | libc raw-device read | Developer contract only (`ECHIDNA_LIBC_*`) | A safe normal-flow metadata producer is not implemented |
 | Audio HAL | Unsupported (`unsupported_injection_boundary`) | Requires a new, proven audioserver/vendor-stream design |

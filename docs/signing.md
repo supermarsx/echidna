@@ -103,9 +103,17 @@ The app and effect copies are never authorities. Missing, tampered, or metadata-
 copies are restored only from the validated root pin; symlinks are refused. The root pin and its
 root-owned hash metadata must agree, and neither an app nor effect copy may silently replace a
 missing or changed root pin. App data clear therefore remains fail-closed until the signed companion
-recreates its SPKI enrolment, after which the app copy can be restored. A module reinstall that
-loses root state while leaving a derived copy also requires explicit reprovisioning. Key bytes are
-never packaged, logged, or written to status metadata.
+recreates its SPKI enrolment. The same APK signer is not enough after Android has deleted the
+app-private Android Keystore key: a different SPKI is an intentional trust-rotation boundary. A
+module reinstall or update that loses the authoritative root state while a derived copy survives
+also remains fail-closed; that copy is never promoted to authority.
+
+Recovery from either boundary requires explicit trusted-pair reprovisioning: disable Echidna first,
+back up any app settings that matter, reinstall the intended signed companion and module pair, and
+let the companion recreate its SPKI. Never copy the app/effect HMAC file into root state or replace
+a pin while the effect host is live. A fresh eligible registration is next-boot-only: the first boot
+verifies and stages trust/registration, and the subsequent reboot activates those staged files.
+Key bytes are never packaged, logged, or written to status metadata.
 
 The packaging concern ships the effect inertly and, only after an eligible legacy-HIDL registry is
 proved, copies the verified pending key into the module overlay at
@@ -117,8 +125,10 @@ registration error leaves the preprocessor unregistered or identity-bypassed and
 details under `/data/adb/echidna/trust/status.txt` and
 `/data/adb/echidna/effect-registration/`.
 
-Provisioning alone is not native-origin proof. No native telemetry protocol consumes this HMAC key
-yet, and physical-device SELinux access for the effect host remains an explicit later gate.
+Native consumption is implemented and host-tested: the legacy effect loads the root:audio key and
+signs a capability-incarnation- and nonce-bound ECHT v2 proof, LSPosed relays that proof, and the
+control service verifies its key ID and HMAC before accepting telemetry. Physical-device effect-host
+key access under enforced SELinux and end-to-end transformed-audio evidence remain explicit gates.
 
 ## Signing-certificate migration
 
