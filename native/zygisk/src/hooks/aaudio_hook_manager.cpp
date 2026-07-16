@@ -136,15 +136,32 @@ namespace echidna::hooks
 
             if (gHookReadiness.callbackReady() && audio_data && frames > 0)
             {
-                ProcessPcmBuffer(stream,
-                                 AAudioProcessOwner::kCallback,
-                                 audio_data,
-                                 static_cast<uint32_t>(frames));
+                // The dispatcher transforms into per-stream scratch and invokes
+                // the application callback itself, never writing the platform
+                // input buffer. Fail-open paths hand the untouched input through.
+                utils::ScopedTelemetryRoute telemetry_route(utils::TelemetryRoute::kAAudio);
+                AAudioProcessResult result = AAudioProcessResult::kUnavailable;
+                const int callback_result =
+                    gStreamRegistry.dispatchCallback(stream,
+                                                     audio_data,
+                                                     frames,
+                                                     target.callback,
+                                                     target.user_data,
+                                                     &result);
+                if (result == AAudioProcessResult::kBypassed)
+                {
+                    RecordUnroutedBlock(static_cast<uint32_t>(frames),
+                                        utils::TelemetryBlockOutcome::kBypassed);
+                }
+                else if (result == AAudioProcessResult::kUnavailable)
+                {
+                    RecordUnroutedBlock(static_cast<uint32_t>(frames),
+                                        utils::TelemetryBlockOutcome::kFailure);
+                }
+                return callback_result;
             }
 
-            const int result = target.callback(
-                stream, target.user_data, audio_data, frames);
-            return result;
+            return target.callback(stream, target.user_data, audio_data, frames);
         }
 
         void ForwardSetDataCallback(void *builder, Callback callback, void *user_data)

@@ -1,8 +1,11 @@
 #include "hooks/aaudio_stream_registry.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <new>
 #include <thread>
 #include <utility>
 
@@ -173,6 +176,30 @@ namespace echidna::hooks
             slot.update = api.update;
             slot.destroy = api.destroy;
             slot.owner = static_cast<uint32_t>(owner);
+            slot.scratch.reset();
+            slot.scratch_bytes = 0;
+            if (owner == AAudioProcessOwner::kCallback)
+            {
+                // The callback route must never write the platform-owned input
+                // pointer, so allocate and pre-fault a private output region
+                // sized to the exact stream contract. validConfig() guarantees
+                // max_frames * channel_count <= kAAudioMaxPreparedSamples, so the
+                // byte product cannot overflow. Allocation failure degrades to a
+                // fail-open pass-through rather than breaking application audio.
+                const size_t bytes_per_sample =
+                    config.format == ECHIDNA_PCM_FORMAT_SIGNED_16 ? sizeof(int16_t)
+                                                                  : sizeof(float);
+                const size_t bytes = static_cast<size_t>(config.max_frames) *
+                                     static_cast<size_t>(config.channel_count) *
+                                     bytes_per_sample;
+                std::unique_ptr<uint8_t[]> buffer(new (std::nothrow) uint8_t[bytes]);
+                if (buffer)
+                {
+                    std::memset(buffer.get(), 0, bytes);
+                    slot.scratch = std::move(buffer);
+                    slot.scratch_bytes = bytes;
+                }
+            }
             slot.stream.store(stream, std::memory_order_relaxed);
             slot.usage.store(kActiveMask, std::memory_order_release);
             return ready;
@@ -234,6 +261,91 @@ namespace echidna::hooks
         return result;
     }
 
+    int AAudioStreamRegistry::dispatchCallback(void *stream,
+                                               void *platform_input,
+                                               int32_t frames,
+                                               AAudioAppDataCallback app_callback,
+                                               void *user_data,
+                                               AAudioProcessResult *out_result)
+    {
+        // The application callback must always run; it receives the transformed
+        // scratch on success and the untouched platform input on every other
+        // path. The platform-owned input pointer is never written here.
+        void *app_buffer = platform_input;
+        AAudioProcessResult result = AAudioProcessResult::kUnavailable;
+
+        if (!stream || !platform_input || frames <= 0)
+        {
+            result = AAudioProcessResult::kUnavailable;
+        }
+        else if (!acquireAdmission())
+        {
+            result = AAudioProcessResult::kBypassed;
+        }
+        else
+        {
+            for (Slot &slot : slots_)
+            {
+                if (slot.stream.load(std::memory_order_acquire) != stream ||
+                    !acquireSlot(slot, stream))
+                {
+                    continue;
+                }
+                if (slot.owner != static_cast<uint32_t>(AAudioProcessOwner::kCallback))
+                {
+                    result = AAudioProcessResult::kNotOwner;
+                }
+                else if (slot.handle == 0 || !slot.process || !slot.scratch)
+                {
+                    result = AAudioProcessResult::kUnavailable;
+                }
+                else if (static_cast<uint32_t>(frames) > slot.config.max_frames)
+                {
+                    // The platform capacity was captured at successful open.
+                    // Never let a callback overrun the preallocated scratch.
+                    result = AAudioProcessResult::kProcessorError;
+                }
+                else
+                {
+                    result = slot.process(slot.handle,
+                                          platform_input,
+                                          slot.scratch.get(),
+                                          static_cast<uint32_t>(frames),
+                                          slot.format) == ECHIDNA_RESULT_OK
+                                 ? AAudioProcessResult::kProcessed
+                                 : AAudioProcessResult::kProcessorError;
+                    if (result == AAudioProcessResult::kProcessed)
+                    {
+                        app_buffer = slot.scratch.get();
+                    }
+                }
+                // Drop the global admission reference once the DSP call is done,
+                // but hold the slot's in-flight reference across the application
+                // callback so the scratch cannot be reclaimed under it.
+                releaseAdmission();
+                const int callback_result =
+                    app_callback ? app_callback(stream, user_data, app_buffer, frames)
+                                 : 0;
+                releaseSlot(slot);
+                if (out_result)
+                {
+                    *out_result = result;
+                }
+                return callback_result;
+            }
+            // Admitted but no matching slot: release admission and fail open.
+            releaseAdmission();
+        }
+
+        const int callback_result =
+            app_callback ? app_callback(stream, user_data, app_buffer, frames) : 0;
+        if (out_result)
+        {
+            *out_result = result;
+        }
+        return callback_result;
+    }
+
     void AAudioStreamRegistry::close(void *stream)
     {
         if (!stream)
@@ -265,6 +377,10 @@ namespace echidna::hooks
             slot.update = nullptr;
             slot.destroy = nullptr;
             slot.owner = 0;
+            // The scratch is only released after every in-flight callback has
+            // drained above, so no live dispatch can still hold its pointer.
+            slot.scratch.reset();
+            slot.scratch_bytes = 0;
             slot.allocated = false;
             slot.usage.store(0, std::memory_order_release);
             return;

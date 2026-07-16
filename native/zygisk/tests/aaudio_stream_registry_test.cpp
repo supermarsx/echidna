@@ -49,6 +49,50 @@ namespace
     std::atomic<bool> gProcessEntered{false};
     std::atomic<bool> gReleaseProcess{false};
 
+    // Application-callback gates and recording state for the dispatchCallback
+    // route. The recording callback never allocates so it can run on the RT
+    // allocation-tracking path.
+    constexpr int kCallbackReturnSentinel = 4242;
+    std::atomic<void *> gCallbackBuffer{nullptr};
+    std::atomic<void *> gCallbackUserData{nullptr};
+    std::atomic<int32_t> gCallbackFrames{0};
+    std::atomic<uint32_t> gCallbackCalls{0};
+    std::atomic<bool> gBlockCallback{false};
+    std::atomic<bool> gCallbackEntered{false};
+    std::atomic<bool> gReleaseCallback{false};
+
+    void ResetCallbackRecord()
+    {
+        gCallbackBuffer.store(nullptr, std::memory_order_release);
+        gCallbackUserData.store(nullptr, std::memory_order_release);
+        gCallbackFrames.store(0, std::memory_order_release);
+        gCallbackCalls.store(0, std::memory_order_release);
+    }
+
+    int RecordingCallback(void *, void *user_data, void *audio_data, int32_t frames)
+    {
+        gCallbackBuffer.store(audio_data, std::memory_order_release);
+        gCallbackUserData.store(user_data, std::memory_order_release);
+        gCallbackFrames.store(frames, std::memory_order_release);
+        gCallbackCalls.fetch_add(1, std::memory_order_relaxed);
+        return kCallbackReturnSentinel;
+    }
+
+    int BlockingCallback(void *, void *user_data, void *audio_data, int32_t frames)
+    {
+        gCallbackBuffer.store(audio_data, std::memory_order_release);
+        gCallbackUserData.store(user_data, std::memory_order_release);
+        gCallbackFrames.store(frames, std::memory_order_release);
+        gCallbackCalls.fetch_add(1, std::memory_order_relaxed);
+        gCallbackEntered.store(true, std::memory_order_release);
+        while (gBlockCallback.load(std::memory_order_acquire) &&
+               !gReleaseCallback.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+        return kCallbackReturnSentinel;
+    }
+
     void ResetFake()
     {
         for (auto &state : gHandles)
@@ -69,6 +113,9 @@ namespace
         gBlockProcess = false;
         gProcessEntered = false;
         gReleaseProcess = false;
+        gBlockCallback = false;
+        gCallbackEntered = false;
+        gReleaseCallback = false;
     }
 
     echidna_result_t FakeCreate(const echidna_stream_config_t *config,
@@ -552,6 +599,163 @@ namespace
                   gCreates.load(std::memory_order_acquire) == 0,
               "oversized capacity fails before allocating a handle");
     }
+
+    void TestCallbackDispatchOwnershipTransparencyAndFailOpen()
+    {
+        ResetFake();
+        ResetCallbackRecord();
+        const auto api = Api();
+        echidna::hooks::AAudioStreamRegistry registry;
+        CHECK(registry.publishProfile(1, true, "gain", api),
+              "callback dispatch gain policy");
+        void *stream = reinterpret_cast<void *>(uintptr_t{0x6000});
+        CHECK(registry.open(stream,
+                            Config(48000, 2, ECHIDNA_PCM_FORMAT_FLOAT_32, 8),
+                            echidna::hooks::AAudioProcessOwner::kCallback,
+                            api),
+              "callback stream opens with scratch");
+
+        std::array<float, 8> platform{
+            0.1f, -0.2f, 0.3f, -0.4f, 0.5f, -0.6f, 0.7f, -0.8f};
+        const auto original = platform;
+        echidna::hooks::AAudioProcessResult result =
+            echidna::hooks::AAudioProcessResult::kUnavailable;
+        void *const user_data = reinterpret_cast<void *>(uintptr_t{0xABCD});
+        const int returned = registry.dispatchCallback(
+            stream, platform.data(), 4, &RecordingCallback, user_data, &result);
+
+        CHECK(result == echidna::hooks::AAudioProcessResult::kProcessed,
+              "callback dispatch processes a callback-owned stream");
+        CHECK(returned == kCallbackReturnSentinel,
+              "dispatch preserves the application callback return value");
+        CHECK(std::memcmp(platform.data(), original.data(), sizeof(platform)) == 0,
+              "platform input buffer is never written by the callback route");
+        void *handed = gCallbackBuffer.load(std::memory_order_acquire);
+        CHECK(handed != nullptr && handed != platform.data(),
+              "application callback receives scratch, not the platform input");
+        CHECK(gCallbackUserData.load(std::memory_order_acquire) == user_data,
+              "dispatch forwards the application user_data");
+        CHECK(gCallbackFrames.load(std::memory_order_acquire) == 4,
+              "dispatch forwards the frame count");
+        const auto *scratch = static_cast<const float *>(handed);
+        bool scratch_ok = true;
+        for (size_t i = 0; i < platform.size(); ++i)
+        {
+            scratch_ok = scratch_ok && scratch[i] == original[i] * 2.0f;
+        }
+        CHECK(scratch_ok, "scratch holds the gain-transformed samples handed to the app");
+
+        // Fail open: after an admission revoke the untouched platform input is
+        // handed straight to the application and the return value is preserved.
+        CHECK(registry.publishProfile(2, false, {}, api),
+              "callback dispatch admission revoke");
+        ResetCallbackRecord();
+        platform = original;
+        result = echidna::hooks::AAudioProcessResult::kProcessed;
+        const int bypass_return = registry.dispatchCallback(
+            stream, platform.data(), 4, &RecordingCallback, nullptr, &result);
+        CHECK(result == echidna::hooks::AAudioProcessResult::kBypassed,
+              "revoked admission bypasses the callback route");
+        CHECK(bypass_return == kCallbackReturnSentinel,
+              "fail-open dispatch still returns the application value");
+        CHECK(std::memcmp(platform.data(), original.data(), sizeof(platform)) == 0,
+              "fail-open leaves the platform input unchanged");
+        CHECK(gCallbackBuffer.load(std::memory_order_acquire) == platform.data(),
+              "fail-open hands the untouched platform input to the application");
+        registry.close(stream);
+    }
+
+    void TestCallbackDispatchHoldsScratchAcrossAppCallback()
+    {
+        ResetFake();
+        ResetCallbackRecord();
+        const auto api = Api();
+        echidna::hooks::AAudioStreamRegistry registry;
+        CHECK(registry.publishProfile(1, true, "gain", api), "lifetime policy");
+        void *stream = reinterpret_cast<void *>(uintptr_t{0x6100});
+        CHECK(registry.open(stream,
+                            Config(48000, 1, ECHIDNA_PCM_FORMAT_FLOAT_32, 8),
+                            echidna::hooks::AAudioProcessOwner::kCallback,
+                            api),
+              "lifetime stream opens");
+        gBlockCallback = true;
+        std::array<float, 4> platform{0.1f, 0.2f, 0.3f, 0.4f};
+        std::atomic<bool> close_done{false};
+        std::atomic<int> dispatch_return{0};
+        std::thread dispatcher(
+            [&]()
+            {
+                echidna::hooks::AAudioProcessResult result =
+                    echidna::hooks::AAudioProcessResult::kUnavailable;
+                dispatch_return.store(
+                    registry.dispatchCallback(
+                        stream, platform.data(), 4, &BlockingCallback, nullptr, &result),
+                    std::memory_order_release);
+            });
+        while (!gCallbackEntered.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+        std::thread closer(
+            [&]()
+            {
+                registry.close(stream);
+                close_done.store(true, std::memory_order_release);
+            });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(!close_done.load(std::memory_order_acquire),
+              "close waits for the in-flight application callback (scratch stays valid)");
+        void *handed = gCallbackBuffer.load(std::memory_order_acquire);
+        CHECK(handed != nullptr && handed != platform.data(),
+              "blocking callback is reading the scratch, not the platform input");
+        gReleaseCallback = true;
+        dispatcher.join();
+        closer.join();
+        CHECK(close_done.load(std::memory_order_acquire) && gDestroys == 1,
+              "close completes once the callback returns and destroys once");
+        CHECK(dispatch_return.load(std::memory_order_acquire) == kCallbackReturnSentinel,
+              "blocking dispatch returns the application value");
+    }
+
+    void TestCallbackDispatchNoRealtimeAllocation()
+    {
+        ResetFake();
+        ResetCallbackRecord();
+        const auto api = Api();
+        echidna::hooks::AAudioStreamRegistry registry;
+        CHECK(registry.publishProfile(1, true, "gain", api), "callback alloc policy");
+        void *stream = reinterpret_cast<void *>(uintptr_t{0x6200});
+        // Open BEFORE tracking so the one-time scratch allocation is not counted.
+        CHECK(registry.open(stream,
+                            Config(48000, 2, ECHIDNA_PCM_FORMAT_FLOAT_32, 8),
+                            echidna::hooks::AAudioProcessOwner::kCallback,
+                            api),
+              "callback alloc stream opens");
+        std::array<float, 8> platform{
+            0.1f, -0.2f, 0.3f, -0.4f, 0.5f, -0.6f, 0.7f, -0.8f};
+        echidna::hooks::AAudioProcessResult result =
+            echidna::hooks::AAudioProcessResult::kUnavailable;
+        (void)registry.dispatchCallback(
+            stream, platform.data(), 4, &RecordingCallback, nullptr, &result);
+        CHECK(result == echidna::hooks::AAudioProcessResult::kProcessed,
+              "warmup dispatch processes before tracking");
+
+        const uint64_t before = gAllocationCount.load(std::memory_order_relaxed);
+        gTrackAllocations.store(true, std::memory_order_release);
+        int returned = 0;
+        for (size_t i = 0; i < 1000; ++i)
+        {
+            returned = registry.dispatchCallback(
+                stream, platform.data(), 4, &RecordingCallback, nullptr, &result);
+        }
+        gTrackAllocations.store(false, std::memory_order_release);
+        CHECK(returned == kCallbackReturnSentinel &&
+                  result == echidna::hooks::AAudioProcessResult::kProcessed,
+              "tracked dispatch keeps processing");
+        CHECK(gAllocationCount.load(std::memory_order_relaxed) == before,
+              "callback dispatch RT path allocates no memory");
+        registry.close(stream);
+    }
 } // namespace
 
 void *operator new(std::size_t size)
@@ -580,6 +784,9 @@ int main()
     TestCloseAndPublicationQuiesceProcessing();
     TestExhaustionAndNoRealtimeAllocations();
     TestActualCapacityBoundsProcessingAndAllocation();
+    TestCallbackDispatchOwnershipTransparencyAndFailOpen();
+    TestCallbackDispatchHoldsScratchAcrossAppCallback();
+    TestCallbackDispatchNoRealtimeAllocation();
     if (gFailures != 0)
     {
         std::fprintf(stderr, "aaudio_stream_registry_test: %d failure(s)\n", gFailures);

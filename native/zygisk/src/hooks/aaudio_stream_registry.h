@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -25,6 +26,16 @@ namespace echidna::hooks
         kUnavailable,
         kNotOwner,
     };
+
+    /**
+     * Application AAudio input-data callback ABI. Identical to the platform
+     * AAudioStream_dataCallback signature; the dispatcher forwards to it with a
+     * transformed buffer that is never the platform-owned input pointer.
+     */
+    using AAudioAppDataCallback = int (*)(void *stream,
+                                          void *user_data,
+                                          void *audio_data,
+                                          int32_t frames);
 
     struct AAudioDspApi
     {
@@ -65,6 +76,25 @@ namespace echidna::hooks
                                     AAudioProcessOwner owner,
                                     void *buffer,
                                     uint32_t frames);
+
+        /**
+         * Runs a callback-owned stream's transform without ever writing the
+         * platform-owned input pointer. The platform buffer is copied into
+         * per-stream, pre-faulted scratch by the DSP, and the resulting scratch
+         * pointer is handed to @p app_callback. The slot's in-flight reference is
+         * held for the whole callback so the scratch cannot be reclaimed under
+         * it. When the stream is not admitted, not owned by the callback route,
+         * or processing fails, the application callback still runs against the
+         * untouched platform input (fail open for application audio).
+         *
+         * @return The application callback's own return value.
+         */
+        int dispatchCallback(void *stream,
+                             void *platform_input,
+                             int32_t frames,
+                             AAudioAppDataCallback app_callback,
+                             void *user_data,
+                             AAudioProcessResult *out_result);
         void close(void *stream);
 
         /** Publishes or revokes one process policy while every callback is gated. */
@@ -90,6 +120,12 @@ namespace echidna::hooks
             AAudioDspApi::ProcessFn process{nullptr};
             AAudioDspApi::UpdateFn update{nullptr};
             AAudioDspApi::DestroyFn destroy{nullptr};
+            // Owned, pre-faulted output scratch for the callback route so the
+            // platform-owned input buffer is never written. Allocated at open
+            // for callback-owned streams and released only after every in-flight
+            // callback has drained. Null for read-owned streams.
+            std::unique_ptr<uint8_t[]> scratch{};
+            size_t scratch_bytes{0};
             bool allocated{false};
         };
 
