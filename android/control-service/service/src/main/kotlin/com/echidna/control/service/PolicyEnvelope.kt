@@ -31,6 +31,7 @@ internal data class PolicyEnvelope(
     val whitelist: LinkedHashMap<String, Boolean>,
     val captureOwners: LinkedHashMap<String, String>,
     val control: PolicyControl,
+    val appIdentities: LinkedHashMap<String, PublishedAppIdentity> = linkedMapOf(),
 )
 
 internal data class VersionedPolicyEnvelope(
@@ -54,16 +55,50 @@ internal object PolicyEnvelopeCodec {
         if (utf8Size(payload) > MAX_POLICY_ENVELOPE_BYTES) return null
         if (JsonDuplicateKeyScanner.hasDuplicateKeys(payload)) return null
         val root = runCatching { JSONObject(payload) }.getOrNull() ?: return null
+        if (!hasExactlyAllowedKeys(root, IDENTITY_BOUND_PUBLISHED_ROOT_KEYS)) return null
+        if (root.optInt("schemaVersion", -1) != POLICY_SCHEMA_VERSION) return null
+        val generationValue = root.opt("generation") as? Number ?: return null
+        val generation = exactNonNegativeLong(generationValue)?.takeIf { it >= 1L } ?: return null
+        val envelope = parseEnvelope(root)?.copy(
+            appIdentities = parseAppIdentities(root.optJSONObject("appIdentities") ?: return null)
+                ?: return null,
+        ) ?: return null
+        if (!isValidEnvelope(envelope)) return null
+        return VersionedPolicyEnvelope(generation, envelope)
+    }
+
+    /** Parses a pre-identity v2 store only so ProfileStore can rewrite it fail-closed. */
+    fun parseUnboundPublished(payload: String): VersionedPolicyEnvelope? = parseTransport(payload)
+
+    /** Parses a strict process-scoped wire policy, which never carries install identity metadata. */
+    fun parseTransport(payload: String): VersionedPolicyEnvelope? {
+        if (!isWellFormedUtf16(payload) || utf8Size(payload) > MAX_POLICY_ENVELOPE_BYTES) return null
+        if (JsonDuplicateKeyScanner.hasDuplicateKeys(payload)) return null
+        val root = runCatching { JSONObject(payload) }.getOrNull() ?: return null
         if (!hasExactlyAllowedKeys(root, PUBLISHED_ROOT_KEYS)) return null
         if (root.optInt("schemaVersion", -1) != POLICY_SCHEMA_VERSION) return null
         val generationValue = root.opt("generation") as? Number ?: return null
         val generation = exactNonNegativeLong(generationValue)?.takeIf { it >= 1L } ?: return null
         val envelope = parseEnvelope(root) ?: return null
+        if (!isValidEnvelope(envelope)) return null
         return VersionedPolicyEnvelope(generation, envelope)
     }
 
     fun encode(envelope: PolicyEnvelope, generation: Long): String? {
         if (generation < 1L || !isValidEnvelope(envelope)) return null
+        return encodeEnvelope(envelope, generation, includeIdentities = true)
+    }
+
+    private fun encodeTransport(envelope: PolicyEnvelope, generation: Long): String? {
+        if (generation < 1L || !isValidEnvelope(envelope)) return null
+        return encodeEnvelope(envelope, generation, includeIdentities = false)
+    }
+
+    private fun encodeEnvelope(
+        envelope: PolicyEnvelope,
+        generation: Long,
+        includeIdentities: Boolean,
+    ): String? {
         val profiles = JSONObject()
         envelope.profiles.forEach { (id, preset) -> profiles.put(id, preset) }
         val bindings = JSONObject()
@@ -88,8 +123,15 @@ internal object PolicyEnvelopeCodec {
             .put("whitelist", whitelist)
             .put("captureOwners", owners)
             .put("control", control)
-            .toString()
-        return payload.takeIf {
+        if (includeIdentities) {
+            val identities = JSONObject()
+            envelope.appIdentities.forEach { (packageName, identity) ->
+                identities.put(packageName, identity.toJson())
+            }
+            payload.put("appIdentities", identities)
+        }
+        val encoded = payload.toString()
+        return encoded.takeIf {
             isWellFormedUtf16(it) && utf8Size(it) <= MAX_POLICY_ENVELOPE_BYTES
         }
     }
@@ -140,7 +182,10 @@ internal object PolicyEnvelopeCodec {
         policyKeys.addAll(
             published.envelope.captureOwners.keys.filter { processBase(it) in packages },
         )
-        return encode(scopeEnvelope(published.envelope, packages, policyKeys), published.generation)
+        return encodeTransport(
+            scopeEnvelope(published.envelope, packages, policyKeys),
+            published.generation,
+        )
     }
 
     /** Produces the exact/base view authorized for one explicit Binder caller process. */
@@ -156,7 +201,7 @@ internal object PolicyEnvelopeCodec {
             name in policyKeys
         }
         if (whitelist.isEmpty()) return null
-        return encode(
+        return encodeTransport(
             scopeEnvelope(published.envelope, setOf(packageName), policyKeys),
             published.generation,
         )
@@ -179,7 +224,7 @@ internal object PolicyEnvelopeCodec {
             ?: false
         val effectiveOwners = linkedMapOf<String, String>()
         if (owner != null) effectiveOwners[processName] = owner
-        return encode(
+        return encodeTransport(
             scoped.copy(
                 whitelist = linkedMapOf(processName to processAllowed),
                 captureOwners = effectiveOwners,
@@ -284,6 +329,24 @@ internal object PolicyEnvelopeCodec {
         return owners
     }
 
+    private fun parseAppIdentities(
+        root: JSONObject,
+    ): LinkedHashMap<String, PublishedAppIdentity>? {
+        if (root.length() > MAX_POLICY_ENTRIES) return null
+        val identities = linkedMapOf<String, PublishedAppIdentity>()
+        val keys = root.keys()
+        while (keys.hasNext()) {
+            val packageName = keys.next()
+            if (!isPolicyPackageName(packageName)) return null
+            val identity = PublishedAppIdentity.parse(
+                packageName,
+                root.optJSONObject(packageName) ?: return null,
+            ) ?: return null
+            identities[packageName] = identity
+        }
+        return identities
+    }
+
     private fun parseControl(root: JSONObject): PolicyControl? {
         if (!hasExactlyAllowedKeys(root, CONTROL_KEYS)) return null
         val master = root.opt("masterEnabled") as? Boolean ?: return null
@@ -333,6 +396,12 @@ internal object PolicyEnvelopeCodec {
             envelope.captureOwners.all { (name, owner) ->
                 isValidProcessName(name) && owner in CAPTURE_OWNERS
             } &&
+            envelope.appIdentities.size <= MAX_POLICY_ENTRIES &&
+            envelope.appIdentities.all { (packageName, identity) ->
+                packageName == identity.packageName &&
+                    packageName in envelope.whitelist.keys.map(::processBase) &&
+                    identity.isValid()
+            } &&
             envelope.control.panicUntilEpochMs >= 0L &&
             envelope.control.sidetoneGainDb.isFinite() &&
             envelope.control.engineMode in ENGINE_MODES
@@ -350,17 +419,11 @@ internal object PolicyEnvelopeCodec {
     private fun isValidProfileId(id: String): Boolean =
         id.isNotEmpty() && utf8Size(id) <= MAX_PROFILE_ID_BYTES && PROFILE_ID_PATTERN.matches(id)
 
-    private fun isValidProcessName(name: String): Boolean =
-        name.isNotEmpty() &&
-            utf8Size(name) <= MAX_PROCESS_NAME_BYTES &&
-            PROCESS_NAME_PATTERN.matches(name)
+    private fun isValidProcessName(name: String): Boolean = isPolicyProcessName(name)
 
-    private fun isValidPackageName(name: String): Boolean =
-        name.isNotEmpty() &&
-            utf8Size(name) <= MAX_PROCESS_NAME_BYTES &&
-            PACKAGE_NAME_PATTERN.matches(name)
+    private fun isValidPackageName(name: String): Boolean = isPolicyPackageName(name)
 
-    private fun processBase(name: String): String = name.substringBefore(':')
+    private fun processBase(name: String): String = policyProcessBase(name)
 
     private fun hasExactlyAllowedKeys(root: JSONObject, allowed: Set<String>): Boolean {
         if (root.length() != allowed.size) return false
@@ -385,6 +448,7 @@ internal object PolicyEnvelopeCodec {
         "control",
     )
     private val PUBLISHED_ROOT_KEYS = REQUEST_ROOT_KEYS + "generation"
+    private val IDENTITY_BOUND_PUBLISHED_ROOT_KEYS = PUBLISHED_ROOT_KEYS + "appIdentities"
     private val CONTROL_KEYS = setOf(
         "masterEnabled",
         "bypass",
@@ -394,6 +458,18 @@ internal object PolicyEnvelopeCodec {
         "engineMode",
     )
 }
+
+internal fun isPolicyProcessName(name: String): Boolean =
+    name.isNotEmpty() &&
+        name.toByteArray(StandardCharsets.UTF_8).size <= MAX_PROCESS_NAME_BYTES &&
+        PROCESS_NAME_PATTERN.matches(name)
+
+internal fun isPolicyPackageName(name: String): Boolean =
+    name.isNotEmpty() &&
+        name.toByteArray(StandardCharsets.UTF_8).size <= MAX_PROCESS_NAME_BYTES &&
+        PACKAGE_NAME_PATTERN.matches(name)
+
+internal fun policyProcessBase(name: String): String = name.substringBefore(':')
 
 /** Small strict pre-scan because org.json silently keeps only the last duplicate object key. */
 internal object JsonDuplicateKeyScanner {

@@ -1,6 +1,5 @@
 package com.echidna.control.service
 
-import android.app.ActivityManager
 import android.content.Context
 import android.net.LocalServerSocket
 import android.net.LocalSocket
@@ -122,7 +121,7 @@ internal object ProfileSyncWire {
     }
 
     fun encodeCapturePolicyFrame(payload: String, handoffToken: Long): ByteArray? {
-        if (handoffToken <= 0L || PolicyEnvelopeCodec.parsePublished(payload) == null) return null
+        if (handoffToken <= 0L || PolicyEnvelopeCodec.parseTransport(payload) == null) return null
         val wrapped = "{" +
             "\"schemaVersion\":1," +
             "\"type\":\"capture_policy\"," +
@@ -235,6 +234,7 @@ private class ProfileSnapshotPublisher(
     private val telemetryStore: AuthenticatedTelemetryStore,
     private val handoffCoordinator: CaptureOwnerHandoffCoordinator,
 ) : Closeable {
+    private val identityResolver = AndroidPublishedAppIdentityResolver(context)
     private val running = AtomicBoolean(false)
     private val stateLock = Any()
     private val clients = ConcurrentHashMap.newKeySet<ProfileClient>()
@@ -325,16 +325,13 @@ private class ProfileSnapshotPublisher(
             closeSocket(socket)
             return
         }
-        val packageNames = context.packageManager.getPackagesForUid(credentials.uid)
-            ?.filterTo(linkedSetOf()) { it.isNotBlank() }
-            .orEmpty()
-        if (packageNames.isEmpty()) {
-            Log.w(SYNC_TAG, "Dropping profile reader with unmapped peer UID")
-            closeSocket(socket)
-            return
-        }
-        if (!authenticatedProcessClaim(context, credentials.uid, credentials.pid, processName, packageNames)) {
-            Log.w(SYNC_TAG, "Dropping profile reader with mismatched process claim")
+        val identityBinding = PublishedPolicyRegistry.authorizeProcess(
+            credentials.uid,
+            processName,
+            identityResolver,
+        )
+        if (identityBinding == null) {
+            Log.w(SYNC_TAG, "Dropping profile reader without a current published identity")
             closeSocket(socket)
             return
         }
@@ -350,7 +347,6 @@ private class ProfileSnapshotPublisher(
                 client = ProfileClient(
                     socket = socket,
                     processName = processName,
-                    packageNames = packageNames,
                     peer = AuthenticatedPeer(credentials.uid, credentials.pid),
                     telemetryStore = telemetryStore,
                     handoffCoordinator = handoffCoordinator,
@@ -360,7 +356,10 @@ private class ProfileSnapshotPublisher(
             }
         }
         val registered = client
-        if (registered == null || !handoffCoordinator.registerNative(registered)) {
+        if (
+            registered == null ||
+            !handoffCoordinator.registerNative(registered, identityBinding)
+        ) {
             registered?.close()
             closeSocket(socket)
             return
@@ -415,7 +414,6 @@ private class ProfileSnapshotPublisher(
 private class ProfileClient(
     private val socket: LocalSocket,
     override val processName: String,
-    private val packageNames: Set<String>,
     private val peer: AuthenticatedPeer,
     private val telemetryStore: AuthenticatedTelemetryStore,
     private val handoffCoordinator: CaptureOwnerHandoffCoordinator,
@@ -604,26 +602,6 @@ private fun readFully(input: InputStream, target: ByteArray, offset: Int, length
         if (count < 0) throw EOFException("Truncated profile-client frame")
         if (count > 0) cursor += count
     }
-}
-
-private fun authenticatedProcessClaim(
-    context: Context,
-    uid: Int,
-    pid: Int,
-    processName: String,
-    packageNames: Set<String>,
-): Boolean {
-    val packageName = processName.substringBefore(':')
-    if (packageName !in packageNames) return false
-    return context.getSystemService(ActivityManager::class.java)
-        ?.runningAppProcesses
-        .orEmpty()
-        .any { process ->
-            process.uid == uid &&
-                process.pid == pid &&
-                process.processName == processName &&
-                packageName in process.pkgList.orEmpty()
-        }
 }
 
 private fun daemonThread(block: () -> Unit, name: String): Thread =

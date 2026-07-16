@@ -440,37 +440,6 @@ class LegacyPreprocessorTelemetryTest {
         assertEquals("error", error.entries.single().state)
     }
 
-    @Test
-    fun `telemetry caller authentication uses exact Binder uid pid process evidence`() {
-        val running = listOf(
-            CallerPolicyAuthorizer.RunningProcess(
-                pid = 77,
-                uid = 10_123,
-                processName = "com.example.recorder",
-                packageNames = setOf("com.example.recorder"),
-            ),
-        )
-        assertEquals(
-            "com.example.recorder",
-            CallerPolicyAuthorizer.authorizeCapability(
-                10_123,
-                77,
-                listOf("com.example.recorder"),
-                running,
-                "com.example.recorder",
-            ),
-        )
-        assertNull(
-            CallerPolicyAuthorizer.authorizeCapability(
-                10_123,
-                78,
-                listOf("com.example.recorder"),
-                running,
-                "com.example.recorder",
-            ),
-        )
-    }
-
     private class Fixture {
         var now = 1_000L
         var policyGeneration = 7L

@@ -49,10 +49,19 @@ class PolicyEnvelopeTest {
 
     @Test
     fun `published generation must be a positive exact integer`() {
-        val request = validRequest()
-        assertNull(PolicyEnvelopeCodec.parsePublished(JSONObject(request.toString()).put("generation", 0).toString()))
-        assertNull(PolicyEnvelopeCodec.parsePublished(JSONObject(request.toString()).put("generation", 1.5).toString()))
-        assertNotNull(PolicyEnvelopeCodec.parsePublished(JSONObject(request.toString()).put("generation", 1).toString()))
+        val request = PolicyEnvelopeCodec.parseRequest(validRequest().toString())!!
+        val published = JSONObject(PolicyEnvelopeCodec.encode(request, 1L)!!)
+        assertNull(
+            PolicyEnvelopeCodec.parsePublished(
+                JSONObject(published.toString()).put("generation", 0).toString(),
+            ),
+        )
+        assertNull(
+            PolicyEnvelopeCodec.parsePublished(
+                JSONObject(published.toString()).put("generation", 1.5).toString(),
+            ),
+        )
+        assertNotNull(PolicyEnvelopeCodec.parsePublished(published.toString()))
     }
 
     @Test

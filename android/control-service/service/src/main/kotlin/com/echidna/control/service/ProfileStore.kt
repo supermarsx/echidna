@@ -26,7 +26,7 @@ private const val CLOSE_DRAIN_TIMEOUT_MS = 1_500L
 /**
  * Maintains JSON profile definitions and pushes updates to the Zygisk bridge.
  */
-class ProfileStore(
+internal class ProfileStore(
     storageDir: File,
     private val syncBridge: ProfileSyncChannel,
     private val executor: ExecutorService = Executors.newSingleThreadExecutor(),
@@ -35,6 +35,8 @@ class ProfileStore(
             Thread(runnable, "echidna-panic-expiry").apply { isDaemon = true }
         },
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
+    private val identityResolver: PublishedAppIdentityResolver =
+        MissingPublishedAppIdentityResolver,
 ) {
     private val lock = ReentrantReadWriteLock()
     private val storageFile = File(storageDir, "profiles.json")
@@ -42,6 +44,7 @@ class ProfileStore(
     private val whitelist = mutableMapOf<String, Boolean>()
     private val appBindings = mutableMapOf<String, String>()
     private val captureOwners = mutableMapOf<String, String>()
+    private val appIdentities = mutableMapOf<String, PublishedAppIdentity>()
     private var defaultProfileId = ""
     private var generation = 0L
     private var lastAppPayload: String? = null
@@ -123,6 +126,8 @@ class ProfileStore(
             Log.w(STORE_TAG, "Rejected invalid process name: $processName")
             return
         }
+        val packageName = policyProcessBase(processName)
+        val refreshedIdentity = identityResolver.resolve(packageName)
         val snapshot = lock.write {
             if (!whitelist.containsKey(processName) && whitelist.size >= MAX_PROFILE_COUNT) {
                 return@write null
@@ -136,6 +141,12 @@ class ProfileStore(
             } else {
                 captureOwners.remove(processName)
             }
+            if (refreshedIdentity != null) {
+                appIdentities[packageName] = refreshedIdentity
+            } else {
+                appIdentities.remove(packageName)
+            }
+            pruneUnusedIdentitiesLocked()
             buildMutatedSnapshotLocked()
         }
         snapshot?.let(::scheduleFlush)
@@ -223,11 +234,17 @@ class ProfileStore(
             Log.w(STORE_TAG, "Rejected invalid v2 policy request")
             return false
         }
+        val resolvedIdentities = resolvePolicyIdentities(next)
         var snapshot: String? = null
         val accepted = lock.write {
-            if (lastAppPayload == stateJson) return@write true
+            if (lastAppPayload == stateJson && appIdentities == resolvedIdentities) {
+                return@write true
+            }
             val nextGeneration = nextGenerationLocked() ?: return@write false
-            val encoded = PolicyEnvelopeCodec.encode(next, nextGeneration) ?: return@write false
+            val encoded = PolicyEnvelopeCodec.encode(
+                next.copy(appIdentities = resolvedIdentities),
+                nextGeneration,
+            ) ?: return@write false
             profiles.clear()
             profiles.putAll(next.profiles)
             defaultProfileId = next.defaultProfileId
@@ -237,6 +254,8 @@ class ProfileStore(
             whitelist.putAll(next.whitelist)
             captureOwners.clear()
             captureOwners.putAll(next.captureOwners)
+            appIdentities.clear()
+            appIdentities.putAll(resolvedIdentities)
             masterEnabled = next.control.masterEnabled
             bypass = next.control.bypass
             panicUntilEpochMs = next.control.panicUntilEpochMs
@@ -375,6 +394,7 @@ class ProfileStore(
                 sidetoneGainDb = sidetoneGainDb,
                 engineMode = engineMode,
             ),
+            appIdentities = LinkedHashMap(appIdentities),
         )
     }
 
@@ -482,8 +502,20 @@ class ProfileStore(
         try {
             val content = readProfileStoreAtomic(storageFile)
             val published = PolicyEnvelopeCodec.parsePublished(content)
-            val restored = published ?: PolicyEnvelopeCodec.migrateLegacy(content) ?: return
-            var needsRewrite = published == null
+            val unbound = if (published == null) {
+                PolicyEnvelopeCodec.parseUnboundPublished(content)
+            } else {
+                null
+            }
+            val restored = published ?: unbound ?: PolicyEnvelopeCodec.migrateLegacy(content)
+                ?: return
+            val retainedIdentities = if (published != null) {
+                revalidatePersistedIdentities(published.envelope)
+            } else {
+                linkedMapOf()
+            }
+            var needsRewrite = published == null ||
+                retainedIdentities != restored.envelope.appIdentities
             val snapshot = lock.write {
                 val envelope = restored.envelope
                 profiles.clear()
@@ -495,6 +527,8 @@ class ProfileStore(
                 whitelist.putAll(envelope.whitelist)
                 captureOwners.clear()
                 captureOwners.putAll(envelope.captureOwners)
+                appIdentities.clear()
+                appIdentities.putAll(retainedIdentities)
                 masterEnabled = envelope.control.masterEnabled
                 bypass = envelope.control.bypass
                 panicUntilEpochMs = envelope.control.panicUntilEpochMs
@@ -505,6 +539,8 @@ class ProfileStore(
                 if (panicUntilEpochMs > 0L && panicUntilEpochMs <= nowEpochMs()) {
                     panicUntilEpochMs = 0L
                     needsRewrite = true
+                    buildMutatedSnapshotLocked()
+                } else if (needsRewrite) {
                     buildMutatedSnapshotLocked()
                 } else {
                     buildSnapshotLocked()
@@ -566,4 +602,28 @@ class ProfileStore(
             ENGINE_MODE_COMPATIBILITY -> mode
             else -> ENGINE_MODE_NATIVE_FIRST
         }
+
+    private fun resolvePolicyIdentities(
+        envelope: PolicyEnvelope,
+    ): LinkedHashMap<String, PublishedAppIdentity> {
+        val identities = linkedMapOf<String, PublishedAppIdentity>()
+        envelope.whitelist.keys
+            .map(::policyProcessBase)
+            .distinct()
+            .sorted()
+            .forEach { packageName ->
+                identityResolver.resolve(packageName)?.let { identities[packageName] = it }
+            }
+        return identities
+    }
+
+    private fun revalidatePersistedIdentities(
+        envelope: PolicyEnvelope,
+    ): LinkedHashMap<String, PublishedAppIdentity> =
+        revalidatePublishedAppIdentities(envelope, identityResolver)
+
+    private fun pruneUnusedIdentitiesLocked() {
+        val policyPackages = whitelist.keys.mapTo(hashSetOf(), ::policyProcessBase)
+        appIdentities.keys.retainAll(policyPackages)
+    }
 }

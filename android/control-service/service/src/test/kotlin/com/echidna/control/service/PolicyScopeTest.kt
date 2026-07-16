@@ -37,6 +37,7 @@ class PolicyScopeTest {
         assertFalse(scoped.getJSONObject("profiles").has("other"))
         assertTrue(scoped.getJSONObject("whitelist").has("com.example.recorder:remote"))
         assertFalse(scoped.getJSONObject("whitelist").has("com.example.other"))
+        assertFalse(scoped.has("appIdentities"))
         assertEquals(
             "lsposed",
             scoped.getJSONObject("captureOwners").getString("com.example.recorder:remote"),
@@ -70,7 +71,7 @@ class PolicyScopeTest {
     }
 
     @Test
-    fun `binder caller cannot impersonate a package outside its uid`() {
+    fun `legacy listener caller cannot impersonate a package outside its uid`() {
         assertEquals(
             "com.example.recorder",
             CallerPolicyAuthorizer.authorize(
@@ -88,34 +89,6 @@ class PolicyScopeTest {
             CallerPolicyAuthorizer.authorize(
                 listOf("com.example.recorder"),
                 "com.example.recorder/../../other",
-            ),
-        )
-
-        val running = listOf(
-            CallerPolicyAuthorizer.RunningProcess(
-                pid = 42,
-                uid = 10_000,
-                processName = "com.example.recorder:remote",
-                packageNames = setOf("com.example.recorder"),
-            ),
-        )
-        assertEquals(
-            "com.example.recorder",
-            CallerPolicyAuthorizer.authorizeCapability(
-                10_000,
-                42,
-                listOf("com.example.recorder"),
-                running,
-                "com.example.recorder:remote",
-            ),
-        )
-        assertNull(
-            CallerPolicyAuthorizer.authorizeCapability(
-                10_000,
-                43,
-                listOf("com.example.recorder"),
-                running,
-                "com.example.recorder:remote",
             ),
         )
     }
@@ -173,7 +146,19 @@ class PolicyScopeTest {
                     .put("sidetoneGainDb", 0.0)
                     .put("engineMode", "native_first"),
             )
+            .put(
+                "appIdentities",
+                JSONObject()
+                    .put("com.example.recorder", identity("com.example.recorder", 10_123))
+                    .put("com.example.other", identity("com.example.other", 10_124)),
+            )
     }
+
+    private fun identity(packageName: String, uid: Int): JSONObject = JSONObject()
+        .put("packageName", packageName)
+        .put("uid", uid)
+        .put("userId", 0)
+        .put("signingSha256", JSONArray().put("11".repeat(32)))
 
     private fun preset(id: String): JSONObject = JSONObject()
         .put("id", id)

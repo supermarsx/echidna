@@ -23,7 +23,7 @@ class CaptureOwnerHandoffCoordinatorTest {
         val harness = Harness()
         harness.establishZygisk(1L)
 
-        harness.coordinator.publishPolicy(policy(2L, owner = "lsposed"))
+        harness.publish(policy(2L, owner = "lsposed"))
         val nativeDrain = harness.native.lastPublication()
         assertEquals(CaptureHandoffPhase.WAIT_NATIVE_INACTIVE, harness.phase())
         assertNull(nativeDrain.owner(PROCESS))
@@ -54,7 +54,7 @@ class CaptureOwnerHandoffCoordinatorTest {
         val harness = Harness()
         harness.establishLsposed(1L)
 
-        harness.coordinator.publishPolicy(policy(2L, owner = "zygisk"))
+        harness.publish(policy(2L, owner = "zygisk"))
         val nativeDrain = harness.native.lastPublication()
         assertTrue(harness.ackNative(2L, nativeDrain.token, active = false))
         val lsDrain = harness.lsposed.lastRevocation()
@@ -73,9 +73,9 @@ class CaptureOwnerHandoffCoordinatorTest {
     fun rapidFlipCoalescesAndRequiresLatestGenerationEvidence() {
         val harness = Harness()
         harness.establishLsposed(1L)
-        harness.coordinator.publishPolicy(policy(2L, owner = "zygisk"))
+        harness.publish(policy(2L, owner = "zygisk"))
         val oldDrain = harness.native.lastPublication()
-        harness.coordinator.publishPolicy(policy(3L, owner = "lsposed"))
+        harness.publish(policy(3L, owner = "lsposed"))
 
         assertTrue(harness.ackNative(2L, oldDrain.token, active = false))
         val currentDrain = harness.native.lastPublication()
@@ -91,14 +91,14 @@ class CaptureOwnerHandoffCoordinatorTest {
     @Test
     fun policyDisableWhileNativeActivationPendingExplicitlyDrainsNative() {
         val harness = Harness()
-        harness.coordinator.publishPolicy(policy(1L, owner = "zygisk"))
+        harness.publish(policy(1L, owner = "zygisk"))
         val firstDrain = harness.native.lastPublication()
         assertTrue(harness.ackNative(1L, firstDrain.token, active = false))
         assertTrue(harness.ackLsposed(1L, harness.lsposed.lastRevocation().token))
         val pendingActivation = harness.native.lastPublication()
         assertEquals(CaptureHandoffPhase.WAIT_NATIVE_ACTIVE, harness.phase())
 
-        harness.coordinator.publishPolicy(policy(2L, owner = "zygisk", masterEnabled = false))
+        harness.publish(policy(2L, owner = "zygisk", masterEnabled = false))
         val disabledDrain = harness.native.lastPublication()
         assertNull(disabledDrain.owner(PROCESS))
         assertTrue(disabledDrain.token > pendingActivation.token)
@@ -113,8 +113,8 @@ class CaptureOwnerHandoffCoordinatorTest {
     fun duplicateEndpointsAreRejectedAndSameGenerationReconnectGetsFreshToken() {
         val harness = Harness()
         harness.establishZygisk(7L)
-        assertFalse(harness.coordinator.registerNative(FakeNative(PROCESS)))
-        assertFalse(harness.coordinator.registerLsposed(FakeLsposed(PROCESS)))
+        assertFalse(harness.coordinator.registerNative(FakeNative(PROCESS), binding(7L)))
+        assertFalse(harness.coordinator.registerLsposed(FakeLsposed(PROCESS), binding(7L)))
 
         val oldNative = harness.native
         val staleToken = oldNative.lastPublication().token
@@ -129,7 +129,7 @@ class CaptureOwnerHandoffCoordinatorTest {
         ))
 
         val replacement = FakeNative(PROCESS)
-        assertTrue(harness.coordinator.registerNative(replacement))
+        assertTrue(harness.coordinator.registerNative(replacement, binding(7L)))
         val replacementDrain = replacement.lastPublication()
         assertEquals(7L, replacementDrain.generation)
         assertTrue(replacementDrain.token > staleToken)
@@ -159,11 +159,21 @@ class CaptureOwnerHandoffCoordinatorTest {
     }
 
     @Test
+    fun staleGenerationBindingCannotRegisterAfterPolicyFlip() {
+        val coordinator = CaptureOwnerHandoffCoordinator(ManualScheduler(), 10L)
+        assertTrue(coordinator.publishPolicy(policy(2L, owner = "zygisk")))
+        val endpoint = FakeNative(PROCESS)
+
+        assertFalse(coordinator.registerNative(endpoint, binding(1L)))
+        assertTrue(coordinator.registerNative(endpoint, binding(2L)))
+    }
+
+    @Test
     fun coldSingleTransportDenyAndLateOppositeRegistrationAreAuthoritative() {
         val nativeOnly = CaptureOwnerHandoffCoordinator(ManualScheduler(), 10L)
         val native = FakeNative(PROCESS)
-        assertTrue(nativeOnly.registerNative(native))
         assertTrue(nativeOnly.publishPolicy(policy(1L, owner = "zygisk", whitelisted = false)))
+        assertTrue(nativeOnly.registerNative(native, binding(1L)))
         val deny = native.lastPublication()
         assertNull(deny.owner(PROCESS))
         assertFalse(JSONObject(deny.payload).getJSONObject("whitelist").getBoolean(PROCESS))
@@ -196,7 +206,7 @@ class CaptureOwnerHandoffCoordinatorTest {
         ))
 
         val lateLsposed = FakeLsposed(PROCESS)
-        assertTrue(nativeOnly.registerLsposed(lateLsposed))
+        assertTrue(nativeOnly.registerLsposed(lateLsposed, binding(2L)))
         val lateNativeDrain = native.lastPublication()
         assertNull(lateNativeDrain.owner(PROCESS))
         assertEquals(CaptureRouteOwner.NONE, nativeOnly.effectiveOwner(PROCESS))
@@ -225,8 +235,8 @@ class CaptureOwnerHandoffCoordinatorTest {
 
         val lsOnly = CaptureOwnerHandoffCoordinator(ManualScheduler(), 10L)
         val lsposed = FakeLsposed(PROCESS)
-        assertTrue(lsOnly.registerLsposed(lsposed))
         assertTrue(lsOnly.publishPolicy(policy(1L, owner = "lsposed")))
+        assertTrue(lsOnly.registerLsposed(lsposed, binding(1L)))
         assertTrue(lsOnly.acknowledgeLsposedInactive(
             lsposed,
             PROCESS,
@@ -247,13 +257,13 @@ class CaptureOwnerHandoffCoordinatorTest {
         )
         deniedPolicies.forEach { denied ->
             val harness = Harness(nowEpochMs = { 1_000L })
-            harness.coordinator.publishPolicy(denied)
+            harness.publish(denied)
             harness.completeInactive(denied.generation)
             assertEquals(CaptureRouteOwner.NONE, harness.owner())
         }
 
         val boundary = Harness(nowEpochMs = { 1_000L })
-        boundary.coordinator.publishPolicy(policy(
+        boundary.publish(policy(
             6L,
             owner = "zygisk",
             panicUntilEpochMs = 1_000L,
@@ -267,26 +277,39 @@ class CaptureOwnerHandoffCoordinatorTest {
     @Test
     fun timeoutRejectionDisconnectAndBlockedOtherProcessRemainIsolated() {
         val timeout = Harness(ManualScheduler())
-        timeout.coordinator.publishPolicy(policy(1L, owner = "zygisk"))
+        timeout.publish(policy(1L, owner = "zygisk"))
         timeout.scheduler.runAll()
         assertEquals(CaptureHandoffPhase.FAILED, timeout.phase())
         assertTrue(timeout.native.closed)
 
         val rejected = Harness(ManualScheduler(reject = true))
-        rejected.coordinator.publishPolicy(policy(1L, owner = "zygisk"))
+        rejected.publish(policy(1L, owner = "zygisk"))
         assertEquals(CaptureHandoffPhase.FAILED, rejected.phase())
 
         val coordinator = CaptureOwnerHandoffCoordinator(ManualScheduler(), 10L)
-        coordinator.publishPolicy(policy(1L, owner = "zygisk", packageName = "com.blocked"))
+        val blockedPolicy = policy(1L, owner = "zygisk", packageName = "com.blocked")
+        val multiProcessPolicy = blockedPolicy.copy(
+            envelope = blockedPolicy.envelope.copy(
+                whitelist = LinkedHashMap(blockedPolicy.envelope.whitelist).apply {
+                    put("com.healthy", false)
+                },
+                appIdentities = LinkedHashMap(blockedPolicy.envelope.appIdentities).apply {
+                    put("com.healthy", identity("com.healthy"))
+                },
+            ),
+        )
+        coordinator.publishPolicy(multiProcessPolicy)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val blocked = BlockingNative("com.blocked", entered, release)
-        val registration = Thread { coordinator.registerNative(blocked) }
+        val registration = Thread {
+            coordinator.registerNative(blocked, binding(1L, "com.blocked"))
+        }
         registration.start()
         assertTrue(entered.await(2, TimeUnit.SECONDS))
 
         val healthy = FakeNative("com.healthy")
-        assertTrue(coordinator.registerNative(healthy))
+        assertTrue(coordinator.registerNative(healthy, binding(1L, "com.healthy")))
         assertEquals(CaptureHandoffPhase.WAIT_NATIVE_INACTIVE, coordinator.phase("com.healthy"))
         val healthyDrain = healthy.lastPublication()
         assertTrue(coordinator.acknowledgeNative(
@@ -306,7 +329,7 @@ class CaptureOwnerHandoffCoordinatorTest {
     fun exactOwnerOverridesBaseAndWrongProcessOrTransitionCannotAdvance() {
         val process = "$PACKAGE:worker"
         val harness = Harness(process = process)
-        harness.coordinator.publishPolicy(policy(
+        harness.publish(policy(
             1L,
             owner = "zygisk",
             exactOwner = "lsposed",
@@ -345,7 +368,7 @@ class CaptureOwnerHandoffCoordinatorTest {
             10_000L,
         ))
 
-        harness.coordinator.publishPolicy(policy(2L, owner = "zygisk"))
+        harness.publish(policy(2L, owner = "zygisk"))
         assertNull(harness.coordinator.capabilityPolicy(
             harness.lsposed,
             PACKAGE,
@@ -377,9 +400,27 @@ class CaptureOwnerHandoffCoordinatorTest {
         val native = FakeNative(process)
         val lsposed = FakeLsposed(process)
 
-        init {
-            assertTrue(coordinator.registerNative(native))
-            assertTrue(coordinator.registerLsposed(lsposed))
+        private var nativeRegistered = false
+        private var lsposedRegistered = false
+
+        fun publish(policy: VersionedPolicyEnvelope): Boolean {
+            val published = coordinator.publishPolicy(policy)
+            if (!published) return false
+            if (!nativeRegistered) {
+                nativeRegistered = coordinator.registerNative(
+                    native,
+                    binding(policy.generation, native.processName),
+                )
+                assertTrue(nativeRegistered)
+            }
+            if (!lsposedRegistered) {
+                lsposedRegistered = coordinator.registerLsposed(
+                    lsposed,
+                    binding(policy.generation, lsposed.processName),
+                )
+                assertTrue(lsposedRegistered)
+            }
+            return true
         }
 
         fun phase() = coordinator.phase(native.processName)
@@ -414,14 +455,14 @@ class CaptureOwnerHandoffCoordinatorTest {
         }
 
         fun establishZygisk(generation: Long) {
-            assertTrue(coordinator.publishPolicy(policy(generation, owner = "zygisk")))
+            assertTrue(publish(policy(generation, owner = "zygisk")))
             completeNativeDrainAndLs(generation)
             val activation = native.lastPublication()
             assertTrue(ackNative(generation, activation.token, active = true))
         }
 
         fun establishLsposed(generation: Long) {
-            assertTrue(coordinator.publishPolicy(policy(generation, owner = "lsposed")))
+            assertTrue(publish(policy(generation, owner = "lsposed")))
             completeNativeDrainAndLs(generation)
             assertEquals(CaptureRouteOwner.LSPOSED, owner())
         }
@@ -508,6 +549,26 @@ class CaptureOwnerHandoffCoordinatorTest {
     companion object {
         private const val PACKAGE = "com.example.recorder"
         private const val PROCESS = PACKAGE
+        private const val UID = 10_123
+        private val SIGNING_DIGEST = "11".repeat(32)
+
+        private fun identity(packageName: String = PACKAGE, uid: Int = UID) =
+            PublishedAppIdentity(
+                packageName = packageName,
+                uid = uid,
+                userId = androidUserId(uid),
+                signingSha256 = listOf(SIGNING_DIGEST),
+            )
+
+        private fun binding(
+            generation: Long,
+            processName: String = PROCESS,
+            uid: Int = UID,
+        ) = PublishedProcessIdentityBinding(
+            generation = generation,
+            processName = processName,
+            identity = identity(policyProcessBase(processName), uid),
+        )
 
         private fun policy(
             generation: Long,
@@ -542,6 +603,9 @@ class CaptureOwnerHandoffCoordinatorTest {
                         sidetoneEnabled = false,
                         sidetoneGainDb = 0.0,
                         engineMode = engineMode,
+                    ),
+                    appIdentities = linkedMapOf(
+                        packageName to identity(packageName),
                     ),
                 ),
             )

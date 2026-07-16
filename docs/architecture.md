@@ -159,7 +159,7 @@ app touches multiple APIs. Unsupported or unconfigured routes return false with 
     sequenceDiagram
     participant Z as Zygisk loader (Magisk)
     participant M as EchidnaModule
-    participant S as authenticated v2 publisher
+    participant S as authenticated policy publisher
     participant O as AudioHookOrchestrator
     participant D as libech_dsp.so
     Z->>M: onLoad(Api*, JNIEnv*)
@@ -168,9 +168,9 @@ app touches multiple APIs. Unsupported or unconfigured routes return false with 
     Note over M: cache target process and expected companion UID
     Z->>M: postAppSpecialize(args)
     M->>M: echidna_module_attach()
-    M->>S: connect, verify SO_PEERCRED, send v2 hello
+    M->>S: connect, verify SO_PEERCRED, send v3 process hello
     Note over M: stay inert and reconnect if publisher/policy is unavailable
-    S-->>M: UID-scoped, monotonic v2 generation
+    S-->>M: process-scoped, monotonic v2 policy
     M->>O: install once admitted by master/panic/whitelist/owner gates
     Note over O,D: on captured PCM → echidna_process_block → dsp.process()
 ```
@@ -222,26 +222,38 @@ trampoline support differs by ABI (t2-e11):
 
 `ProfileStore` persists and publishes one strict, bounded version-2 policy document. It contains
 `schemaVersion`, a service-owned monotonic `generation`, `profiles`, `defaultProfileId`,
-`appBindings`, `whitelist`, `captureOwners`, and the complete `control` object. Control covers
-master, bypass, timed panic, sidetone, gain, and engine mode. Unknown or duplicate keys, malformed
-Unicode, oversize documents, dangling defaults/bindings, invalid owners, and incomplete controls
-fail closed. Legacy storage can be migrated once; legacy readers do not receive live policy.
+`appBindings`, `whitelist`, `captureOwners`, the complete `control` object, and an internal
+`appIdentities` binding for each resolvable policy package. An identity records the full Android
+UID/user and sorted current APK signing-certificate digests at publication time. Unknown or
+duplicate keys, malformed Unicode, oversize documents, dangling defaults/bindings, invalid owners,
+and incomplete controls fail closed. A pre-identity stored policy is rewritten inert and cannot
+activate a route until the companion refreshes it. Process-scoped transport views deliberately omit
+the private identity table.
 
 `PublishedPolicyRegistry` is the read-only process-local source shared by the two transports:
 
 - **Zygisk:** `ProfileSyncBridge` owns the abstract `AF_UNIX` socket `echidna_profiles`. A client
-  must send the v2 Zygisk hello. Both sides validate peer identity: the publisher scopes policy to
-  packages mapped from `SO_PEERCRED`, while the native reader accepts only the companion UID cached
-  before specialization. Frames are bounded, length-prefixed UTF-8. Multiple native readers receive
-  only their UID-scoped view; slow writers and handshake/client counts are bounded. A disconnect
+  must send the v3 Zygisk hello with its exact process name. The publisher binds the full
+  `SO_PEERCRED` UID to the current policy's published package/user/signing identity; PID identifies
+  only that socket incarnation. The native reader independently accepts only the companion UID
+  cached before specialization. Frames are bounded, length-prefixed UTF-8. Each reader receives only
+  its exact/base process view; slow writers and handshake/client counts are bounded. A disconnect
   revokes admission while retaining the generation watermark for safe reconnect.
 - **LSPosed:** `PolicySnapshotService` is an explicit, exported, read-only Binder component. It
-  validates the claimed process against `Binder.getCallingUid()` packages and returns only the
-  exact/base process view. Bounded listeners receive generation invalidations, then fetch the
-  newest scoped document. They never receive mutation authority.
+  binds `Binder.getCallingUid()` to the same current published identity and pins PID plus the live
+  callback Binder to one registration incarnation. It returns only the exact/base process view.
+  Bounded listeners receive generation invalidations, then fetch the newest scoped document. They
+  never receive mutation authority.
 - A socket LSPosed hello is closed, and an unnegotiated legacy socket reader receives one inert
   fail-closed document before disconnect. The old filesystem endpoint
   `/data/local/tmp/echidna_profiles.sock` is not used.
+
+Android packages sharing one UID are one application-sandbox trust domain, so either sibling can
+act for that UID; package/process policy keys still limit which scoped route exists. Full UIDs keep
+work-profile users distinct. Resolution is intentionally limited to packages visible to the
+companion's Android user (including its launcher-scoped `<queries>` declaration); missing
+visibility, uninstall/reinstall UID drift, or signer drift revokes admission without adding
+`QUERY_ALL_PACKAGES`, privileged permissions, `/proc` inspection, or SELinux exceptions.
 
 ### Shared-memory fallback and telemetry
 

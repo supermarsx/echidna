@@ -85,7 +85,11 @@ class EchidnaControlService : Service() {
         super.onCreate()
         authenticatedTelemetryStore = AuthenticatedTelemetryRegistry.store
         syncBridge = ProfileSyncBridge(applicationContext, authenticatedTelemetryStore)
-        profileStore = ProfileStore(File(filesDir, "profiles"), syncBridge)
+        profileStore = ProfileStore(
+            File(filesDir, "profiles"),
+            syncBridge,
+            identityResolver = AndroidPublishedAppIdentityResolver(applicationContext),
+        )
         val rootExecutor = RootCommandExecutor()
         val selinuxChecker = SelinuxCompatChecker(rootExecutor)
         privilegedController = PrivilegedController(rootExecutor, selinuxChecker)

@@ -20,29 +20,4 @@ internal object CallerPolicyAuthorizer {
         if (!CALLER_PACKAGE_PATTERN.matches(packageName)) return null
         return packageName.takeIf { it in packagesForUid }
     }
-
-    data class RunningProcess(
-        val pid: Int,
-        val uid: Int,
-        val processName: String,
-        val packageNames: Set<String>,
-    )
-
-    /** Authenticates an exact process claim against Binder-owned UID/PID observations. */
-    fun authorizeCapability(
-        callingUid: Int,
-        callingPid: Int,
-        packagesForUid: Collection<String>,
-        runningProcesses: Collection<RunningProcess>,
-        processName: String?,
-    ): String? {
-        if (callingPid <= 0) return null
-        val packageName = authorize(packagesForUid, processName) ?: return null
-        val running = runningProcesses.firstOrNull { process ->
-            process.pid == callingPid &&
-                process.uid == callingUid &&
-                process.processName == processName
-        } ?: return null
-        return packageName.takeIf { it in running.packageNames }
-    }
 }

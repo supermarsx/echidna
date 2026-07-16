@@ -69,8 +69,8 @@ libech_dsp.so  (DSP engine)
 
 ProfileStore publishes strict policy v2 into PublishedPolicyRegistry
    {schemaVersion, generation, profiles, defaultProfileId, appBindings,
-    whitelist, captureOwners, control}
-   ├─ Zygisk: authenticated, UID-scoped abstract AF_UNIX frames
+    whitelist, captureOwners, control, appIdentities}
+   ├─ Zygisk: authenticated, process-scoped abstract AF_UNIX frames
    └─ LSPosed: authenticated, process-scoped read-only Binder snapshot
 ```
 
@@ -417,19 +417,23 @@ processing chain immediately before the mix bus so they receive the fully condit
 
 `ProfileStore` owns a complete strict v2 document and monotonic generation. Required fields include
 the explicit default profile, per-process whitelist and capture owner, bindings, and all global
-master/bypass/panic/sidetone/engine controls. Mutations persist before replay; rollback,
-same-generation conflict, malformed/duplicate keys, incomplete controls, and invalid owners fail
-closed.
+master/bypass/panic/sidetone/engine controls. Persisted publications also bind policy packages to
+the full Android UID/user and current APK signing digests. Mutations persist before replay; rollback,
+same-generation conflict, malformed/duplicate keys, incomplete controls, invalid owners, an old
+identity-free store, and current install-identity drift fail closed. Transport views omit the
+internal identity table.
 
 Zygisk readers negotiate on the service-owned abstract `AF_UNIX` socket `echidna_profiles`. The
-publisher scopes each frame from the peer UID's packages, while native code accepts only the
-companion UID resolved before specialization. Disconnect revokes processing, keeps the generation
-watermark, and reconnects with bounded backoff so a late publisher can activate safely.
+publisher binds the v3 process claim and full `SO_PEERCRED` UID to the current published identity,
+while native code accepts only the companion UID resolved before specialization. PID belongs only to
+that socket incarnation. Disconnect revokes processing, keeps the generation watermark, and
+reconnects with bounded backoff so a late publisher can activate safely.
 
 LSPosed does not use that socket. It explicitly binds exported read-only `PolicySnapshotService`;
-the provider matches `Binder.getCallingUid()` packages to the claimed process and returns an
-exact/base scoped view. Bounded listeners carry generation invalidations only. The shim fetches the
-new snapshot, rejects rollback/conflict, and preserves original audio if policy changes in-flight.
+the provider binds `Binder.getCallingUid()` to the same published package/user/signing identity and
+pins PID plus the callback Binder to one registration incarnation. It returns an exact/base scoped
+view. Bounded listeners carry generation invalidations only. The shim fetches the new snapshot,
+rejects rollback/conflict, and preserves original audio if policy changes in-flight.
 
 Do not assign one process to both capture owners. The policy schema permits only `zygisk` or
 `lsposed`, and each consumer requires its own owner before processing.

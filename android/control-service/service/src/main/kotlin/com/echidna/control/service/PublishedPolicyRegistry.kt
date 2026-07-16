@@ -35,6 +35,19 @@ internal object PublishedPolicyRegistry {
 
     fun current(): VersionedPolicyEnvelope? = state.get()?.published
 
+    fun authorizeProcess(
+        peerUid: Int,
+        processName: String?,
+        resolver: PublishedAppIdentityResolver,
+    ): PublishedProcessIdentityBinding? = state.get()?.let { current ->
+        PublishedProcessIdentityAuthorizer.authorize(
+            current.published,
+            peerUid,
+            processName,
+            resolver,
+        )
+    }
+
     fun scopedForPackages(packageNames: Set<String>): String? = state.get()?.let { current ->
         PolicyEnvelopeCodec.encodeScopedForPackages(current.published, packageNames)
     }

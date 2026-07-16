@@ -67,7 +67,9 @@ internal class CaptureOwnerHandoffCoordinator(
         var effective: CaptureRouteOwner = CaptureRouteOwner.NONE,
         var phase: CaptureHandoffPhase = CaptureHandoffPhase.INACTIVE,
         var native: NativeCaptureEndpoint? = null,
+        var nativeBinding: PublishedProcessIdentityBinding? = null,
         var lsposed: LsposedCaptureEndpoint? = null,
+        var lsposedBinding: PublishedProcessIdentityBinding? = null,
         var nativeSeen: Boolean = false,
         var lsposedSeen: Boolean = false,
         var transition: Long = 0L,
@@ -143,17 +145,30 @@ internal class CaptureOwnerHandoffCoordinator(
         return true
     }
 
-    fun registerNative(endpoint: NativeCaptureEndpoint): Boolean {
+    fun registerNative(
+        endpoint: NativeCaptureEndpoint,
+        binding: PublishedProcessIdentityBinding,
+    ): Boolean {
         if (closed || !validProcess(endpoint.processName)) return false
+        if (binding.processName != endpoint.processName) return false
         val state = states.computeIfAbsent(endpoint.processName) { ProcessState(it) }
         val actions = mutableListOf<Action>()
         val registered = synchronized(state) {
             if (closed) return@synchronized false
             if (state.native === endpoint) return@synchronized true
             if (state.native != null) return@synchronized false
+            val policy = latestPolicy ?: return@synchronized false
+            if (
+                binding.generation != policy.generation ||
+                !PublishedProcessIdentityAuthorizer.matches(policy, binding)
+            ) {
+                return@synchronized false
+            }
             state.native = endpoint
+            state.nativeBinding = binding
             state.nativeSeen = true
-            restart(state, actions)
+            beginTransition(state, policy, actions)
+            notifyState(state, actions)
             true
         }
         execute(actions)
@@ -166,6 +181,7 @@ internal class CaptureOwnerHandoffCoordinator(
         synchronized(state) {
             if (state.native !== endpoint) return
             state.native = null
+            state.nativeBinding = null
             clearTimeout(state, actions)
             state.transition = nextCaptureHandoffToken(state.transition)
             state.effective = CaptureRouteOwner.NONE
@@ -184,17 +200,30 @@ internal class CaptureOwnerHandoffCoordinator(
         execute(actions)
     }
 
-    fun registerLsposed(endpoint: LsposedCaptureEndpoint): Boolean {
+    fun registerLsposed(
+        endpoint: LsposedCaptureEndpoint,
+        binding: PublishedProcessIdentityBinding,
+    ): Boolean {
         if (closed || !validProcess(endpoint.processName)) return false
+        if (binding.processName != endpoint.processName) return false
         val state = states.computeIfAbsent(endpoint.processName) { ProcessState(it) }
         val actions = mutableListOf<Action>()
         val registered = synchronized(state) {
             if (closed) return@synchronized false
             if (state.lsposed === endpoint) return@synchronized true
             if (state.lsposed != null) return@synchronized false
+            val policy = latestPolicy ?: return@synchronized false
+            if (
+                binding.generation != policy.generation ||
+                !PublishedProcessIdentityAuthorizer.matches(policy, binding)
+            ) {
+                return@synchronized false
+            }
             state.lsposed = endpoint
+            state.lsposedBinding = binding
             state.lsposedSeen = true
-            restart(state, actions)
+            beginTransition(state, policy, actions)
+            notifyState(state, actions)
             true
         }
         execute(actions)
@@ -207,6 +236,7 @@ internal class CaptureOwnerHandoffCoordinator(
         synchronized(state) {
             if (state.lsposed !== endpoint) return
             state.lsposed = null
+            state.lsposedBinding = null
             clearTimeout(state, actions)
             state.transition = nextCaptureHandoffToken(state.transition)
             state.effective = CaptureRouteOwner.NONE
@@ -214,6 +244,7 @@ internal class CaptureOwnerHandoffCoordinator(
             // Provider death must also revoke an already admitted native route.
             state.native?.let { actions += Action.CloseNative(it) }
             state.native = null
+            state.nativeBinding = null
             notifyState(state, actions)
         }
         execute(actions)
@@ -301,6 +332,10 @@ internal class CaptureOwnerHandoffCoordinator(
             if (
                 state.lsposed !== endpoint || state.effective != CaptureRouteOwner.LSPOSED ||
                 state.phase != CaptureHandoffPhase.ACTIVE_LSPOSED ||
+                !PublishedProcessIdentityAuthorizer.matches(
+                    state.policy ?: return@synchronized null,
+                    state.lsposedBinding,
+                ) ||
                 processName.substringBefore(':') != packageName
             ) return@synchronized null
             scopedPolicy(state, CaptureRouteOwner.LSPOSED)
@@ -317,7 +352,11 @@ internal class CaptureOwnerHandoffCoordinator(
         return synchronized(state) {
             if (
                 state.lsposed !== endpoint || state.effective != CaptureRouteOwner.LSPOSED ||
-                state.phase != CaptureHandoffPhase.ACTIVE_LSPOSED
+                state.phase != CaptureHandoffPhase.ACTIVE_LSPOSED ||
+                !PublishedProcessIdentityAuthorizer.matches(
+                    state.policy ?: return@synchronized null,
+                    state.lsposedBinding,
+                )
             ) return@synchronized null
             val policy = state.policy ?: return@synchronized null
             capabilityForPublished(policy, packageName, processName, nowEpochMs)
@@ -343,7 +382,8 @@ internal class CaptureOwnerHandoffCoordinator(
         return synchronized(state) {
             state.native === endpoint && state.policy?.generation == generation &&
                 state.phase == CaptureHandoffPhase.ACTIVE_ZYGISK &&
-                state.effective == CaptureRouteOwner.ZYGISK
+                state.effective == CaptureRouteOwner.ZYGISK &&
+                PublishedProcessIdentityAuthorizer.matches(state.policy!!, state.nativeBinding)
         }
     }
 
@@ -414,12 +454,6 @@ internal class CaptureOwnerHandoffCoordinator(
         startNativeDrain(state, actions)
     }
 
-    private fun restart(state: ProcessState, actions: MutableList<Action>) {
-        val policy = latestPolicy ?: return
-        beginTransition(state, policy, actions)
-        notifyState(state, actions)
-    }
-
     private fun resumePendingPolicy(state: ProcessState, actions: MutableList<Action>): Boolean {
         val pending = state.pendingPolicy ?: return false
         state.pendingPolicy = null
@@ -485,6 +519,9 @@ internal class CaptureOwnerHandoffCoordinator(
                     }
                     return
                 }
+                if (!PublishedProcessIdentityAuthorizer.matches(state.policy!!, state.nativeBinding)) {
+                    return fail(state, actions)
+                }
                 val payload = scopedPolicy(state, CaptureRouteOwner.ZYGISK)
                     ?: return fail(state, actions)
                 state.phase = CaptureHandoffPhase.WAIT_NATIVE_ACTIVE
@@ -508,6 +545,9 @@ internal class CaptureOwnerHandoffCoordinator(
                         CaptureHandoffPhase.INACTIVE
                     }
                     return
+                }
+                if (!PublishedProcessIdentityAuthorizer.matches(state.policy!!, state.lsposedBinding)) {
+                    return fail(state, actions)
                 }
                 state.phase = CaptureHandoffPhase.ACTIVE_LSPOSED
                 state.effective = CaptureRouteOwner.LSPOSED
@@ -537,6 +577,7 @@ internal class CaptureOwnerHandoffCoordinator(
         }
         state.native?.let { actions += Action.CloseNative(it) }
         state.native = null
+        state.nativeBinding = null
         notifyState(state, actions)
     }
 

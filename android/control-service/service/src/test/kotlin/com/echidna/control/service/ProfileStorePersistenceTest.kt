@@ -180,6 +180,86 @@ class ProfileStorePersistenceTest {
         assertEquals("previous-complete", readProfileStoreAtomic(file))
     }
 
+    @Test
+    fun `identity drift advances generation and remains inert until policy refresh`() {
+        var currentIdentity: PublishedAppIdentity? = appIdentity(uid = 10_123)
+        val resolver = PublishedAppIdentityResolver { packageName ->
+            currentIdentity?.takeIf { packageName == it.packageName }
+        }
+        val firstBridge = PayloadBridge()
+        val first = ProfileStore(
+            tempDir,
+            firstBridge,
+            identityResolver = resolver,
+        )
+        assertTrue(first.synchronizePolicyState(syncState()))
+        first.close()
+        assertTrue(first.awaitClosed())
+        val firstSnapshot = JSONObject(firstBridge.payloads.last())
+        assertEquals(1L, firstSnapshot.getLong("generation"))
+        assertEquals(
+            10_123,
+            firstSnapshot.getJSONObject("appIdentities")
+                .getJSONObject("com.example.recorder")
+                .getInt("uid"),
+        )
+
+        currentIdentity = null
+        val restartBridge = PayloadBridge()
+        val restarted = ProfileStore(
+            tempDir,
+            restartBridge,
+            identityResolver = resolver,
+        )
+        val revokedSnapshot = JSONObject(restartBridge.payloads.single())
+        assertEquals(2L, revokedSnapshot.getLong("generation"))
+        assertEquals(0, revokedSnapshot.getJSONObject("appIdentities").length())
+
+        currentIdentity = appIdentity(uid = 10_124, signerByte = "22")
+        assertTrue(restarted.synchronizePolicyState(syncState()))
+        restarted.close()
+        assertTrue(restarted.awaitClosed())
+        val refreshedSnapshot = JSONObject(restartBridge.payloads.last())
+        assertEquals(3L, refreshedSnapshot.getLong("generation"))
+        assertEquals(
+            10_124,
+            refreshedSnapshot.getJSONObject("appIdentities")
+                .getJSONObject("com.example.recorder")
+                .getInt("uid"),
+        )
+    }
+
+    @Test
+    fun `pre-identity persisted policy is rewritten inert before any resolver trust`() {
+        val request = PolicyEnvelopeCodec.parseRequest(syncState())!!
+        val bound = request.copy(
+            appIdentities = linkedMapOf(
+                "com.example.recorder" to appIdentity(uid = 10_123),
+            ),
+        )
+        val oldUnbound = JSONObject(PolicyEnvelopeCodec.encode(bound, 4L)!!).apply {
+            remove("appIdentities")
+        }.toString()
+        writeProfileStoreAtomic(File(tempDir, "profiles.json"), oldUnbound)
+
+        val bridge = PayloadBridge()
+        val store = ProfileStore(
+            tempDir,
+            bridge,
+            identityResolver = PublishedAppIdentityResolver { appIdentity(uid = 10_123) },
+        )
+        val inertRewrite = JSONObject(bridge.payloads.single())
+        assertEquals(5L, inertRewrite.getLong("generation"))
+        assertEquals(0, inertRewrite.getJSONObject("appIdentities").length())
+
+        assertTrue(store.synchronizePolicyState(syncState()))
+        store.close()
+        assertTrue(store.awaitClosed())
+        val refreshed = JSONObject(bridge.payloads.last())
+        assertEquals(6L, refreshed.getLong("generation"))
+        assertTrue(refreshed.getJSONObject("appIdentities").has("com.example.recorder"))
+    }
+
     private fun syncState(boundName: String = "Bound", includeBound: Boolean = true): String {
         val profiles = JSONObject()
             .put("active", preset("Active"))
@@ -212,6 +292,16 @@ class ProfileStorePersistenceTest {
         .put("name", name)
         .put("engine", JSONObject().put("latencyMode", "LL"))
         .put("modules", org.json.JSONArray())
+
+    private fun appIdentity(
+        uid: Int,
+        signerByte: String = "11",
+    ): PublishedAppIdentity = PublishedAppIdentity(
+        packageName = "com.example.recorder",
+        uid = uid,
+        userId = androidUserId(uid),
+        signingSha256 = listOf(signerByte.repeat(32)),
+    )
 }
 
 private class PayloadBridge : ProfileSyncChannel {

@@ -1,6 +1,5 @@
 package com.echidna.control.service
 
-import android.app.ActivityManager
 import android.app.Service
 import android.content.Intent
 import android.os.Binder
@@ -63,6 +62,7 @@ class PolicySnapshotService : Service() {
     private var registryObservation: Closeable? = null
     private var handoffObservation: Closeable? = null
     private lateinit var handoffCoordinator: CaptureOwnerHandoffCoordinator
+    private lateinit var identityResolver: PublishedAppIdentityResolver
     private lateinit var capabilityIssuer: LegacyCapabilityIssuer
     private lateinit var issuanceLedger: LegacyCapabilityIssuanceLedger
     private lateinit var telemetryRelay: LegacyPreprocessorTelemetryRelay
@@ -84,6 +84,7 @@ class PolicySnapshotService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        identityResolver = AndroidPublishedAppIdentityResolver(applicationContext)
         handoffCoordinator = CaptureOwnerHandoffRegistry.get()
         registryObservation = PublishedPolicyRegistry.observe(::scheduleInvalidation)
         handoffObservation = handoffCoordinator.observe { _, generation, _ ->
@@ -145,6 +146,7 @@ class PolicySnapshotService : Service() {
         val uid: Int,
         val pid: Int,
         val listener: IEchidnaPolicyListener,
+        val identityBinding: PublishedProcessIdentityBinding,
     ) : LsposedCaptureEndpoint {
         override fun revoke(generation: Long, handoffToken: Long): Boolean = try {
             listener.onCaptureOwnerRevoked(generation, handoffToken)
@@ -164,11 +166,11 @@ class PolicySnapshotService : Service() {
         override fun getPolicySnapshot(processName: String?): String? {
             val uid = Binder.getCallingUid()
             val pid = Binder.getCallingPid()
-            val authorized = authorizeCapabilityCaller(uid, pid, processName) ?: return null
+            val authorized = authorizeCapabilityCaller(uid, processName) ?: return null
             val endpoint = currentHandoffEndpoint(uid, pid, processName!!) ?: return null
             return handoffCoordinator.lsposedPolicy(
                 endpoint,
-                authorized,
+                authorized.identity.packageName,
                 processName,
             )
         }
@@ -223,10 +225,22 @@ class PolicySnapshotService : Service() {
             if (listener == null || !isCaptureOwnerClientApiSupported(clientApiVersion)) return false
             val uid = Binder.getCallingUid()
             val pid = Binder.getCallingPid()
-            val authorized = authorizeCapabilityCaller(uid, pid, processName) ?: return false
+            val authorized = authorizeCapabilityCaller(uid, processName) ?: return false
             val ownedProcess = processName!!
-            val endpoint = BinderLsposedEndpoint(ownedProcess, uid, pid, listener)
-            val registration = Registration(uid, pid, authorized, ownedProcess, true)
+            val endpoint = BinderLsposedEndpoint(
+                ownedProcess,
+                uid,
+                pid,
+                listener,
+                authorized,
+            )
+            val registration = Registration(
+                uid,
+                pid,
+                authorized.identity.packageName,
+                ownedProcess,
+                true,
+            )
             val callbackBinder = listener.asBinder()
             val reserved = synchronized(registrationLock) {
                 val uidCount = registrations.values.count { it.uid == uid } +
@@ -249,7 +263,10 @@ class PolicySnapshotService : Service() {
                 }
             }
             if (!reserved) return false
-            if (!callbackBinder.isBinderAlive || !handoffCoordinator.registerLsposed(endpoint)) {
+            if (
+                !callbackBinder.isBinderAlive ||
+                !handoffCoordinator.registerLsposed(endpoint, authorized)
+            ) {
                 synchronized(registrationLock) {
                     pendingHandoffEndpoints.remove(callbackBinder, endpoint)
                 }
@@ -286,7 +303,7 @@ class PolicySnapshotService : Service() {
             if (generation <= 0L || handoffToken <= 0L) return
             val uid = Binder.getCallingUid()
             val pid = Binder.getCallingPid()
-            if (authorizeCapabilityCaller(uid, pid, processName) == null) return
+            if (authorizeCapabilityCaller(uid, processName) == null) return
             val endpoint = currentHandoffEndpoint(uid, pid, processName!!) ?: return
             handoffCoordinator.acknowledgeLsposedInactive(
                 endpoint,
@@ -306,13 +323,13 @@ class PolicySnapshotService : Service() {
             if (callback == null) return
             val callingUid = Binder.getCallingUid()
             val callingPid = Binder.getCallingPid()
-            val packageName = authorizeCapabilityCaller(callingUid, callingPid, processName)
-            val endpoint = if (packageName != null) {
+            val authorized = authorizeCapabilityCaller(callingUid, processName)
+            val endpoint = if (authorized != null) {
                 currentHandoffEndpoint(callingUid, callingPid, processName!!)
             } else {
                 null
             }
-            if (packageName == null || endpoint == null) {
+            if (authorized == null || endpoint == null) {
                 notifyCapability(
                     callback,
                     LegacyCapabilityResult(
@@ -325,7 +342,7 @@ class PolicySnapshotService : Service() {
             }
             val request = LegacyCapabilityRequest(
                 uid = callingUid,
-                packageName = packageName,
+                packageName = authorized.identity.packageName,
                 processName = processName!!,
                 audioSessionId = audioSessionId,
                 generation = generation,
@@ -406,8 +423,9 @@ class PolicySnapshotService : Service() {
             val callingUid = Binder.getCallingUid()
             val callingPid = Binder.getCallingPid()
             val receivedAtMs = SystemClock.elapsedRealtime()
-            val packageName = authorizeCapabilityCaller(callingUid, callingPid, processName)
+            val authorized = authorizeCapabilityCaller(callingUid, processName)
                 ?: return
+            val packageName = authorized.identity.packageName
             val ownedProcess = processName ?: return
             val endpoint = currentHandoffEndpoint(callingUid, callingPid, ownedProcess) ?: return
             if (
@@ -465,8 +483,9 @@ class PolicySnapshotService : Service() {
             val callingUid = Binder.getCallingUid()
             val callingPid = Binder.getCallingPid()
             val receivedAtMs = SystemClock.elapsedRealtime()
-            val packageName = authorizeCapabilityCaller(callingUid, callingPid, processName)
+            val authorized = authorizeCapabilityCaller(callingUid, processName)
                 ?: return
+            val packageName = authorized.identity.packageName
             val ownedProcess = processName ?: return
             val endpoint = currentHandoffEndpoint(callingUid, callingPid, ownedProcess) ?: return
             if (
@@ -522,10 +541,15 @@ class PolicySnapshotService : Service() {
         uid: Int,
         pid: Int,
         processName: String,
-    ): BinderLsposedEndpoint? = synchronized(registrationLock) {
-        (handoffEndpoints.values + pendingHandoffEndpoints.values).singleOrNull { endpoint ->
+    ): BinderLsposedEndpoint? {
+        val endpoint = synchronized(registrationLock) {
+            (handoffEndpoints.values + pendingHandoffEndpoints.values).singleOrNull { endpoint ->
             endpoint.uid == uid && endpoint.pid == pid && endpoint.processName == processName
-        }
+            }
+        } ?: return null
+        if (!endpoint.listener.asBinder().isBinderAlive) return null
+        val current = authorizeCapabilityCaller(uid, processName) ?: return null
+        return endpoint.takeIf { current.identity == endpoint.identityBinding.identity }
     }
 
     private fun isCurrentLsposedOwner(
@@ -546,29 +570,12 @@ class PolicySnapshotService : Service() {
 
     private fun authorizeCapabilityCaller(
         callingUid: Int,
-        callingPid: Int,
         processName: String?,
-    ): String? {
-        val packages = packageManager.getPackagesForUid(callingUid)?.asList().orEmpty()
-        val running = getSystemService(ActivityManager::class.java)
-            ?.runningAppProcesses
-            .orEmpty()
-            .map { process ->
-                CallerPolicyAuthorizer.RunningProcess(
-                    pid = process.pid,
-                    uid = process.uid,
-                    processName = process.processName,
-                    packageNames = process.pkgList?.toSet().orEmpty(),
-                )
-            }
-        return CallerPolicyAuthorizer.authorizeCapability(
-            callingUid,
-            callingPid,
-            packages,
-            running,
-            processName,
-        )
-    }
+    ): PublishedProcessIdentityBinding? = PublishedPolicyRegistry.authorizeProcess(
+        callingUid,
+        processName,
+        identityResolver,
+    )
 
     private fun notifyCapability(
         callback: IEchidnaCapabilityCallback,
@@ -593,6 +600,20 @@ class PolicySnapshotService : Service() {
         val file = File(File(filesDir, "profiles"), "profiles.json")
         if (!file.isFile || file.length() > MAX_POLICY_ENVELOPE_BYTES) return
         runCatching { readProfileStoreAtomic(file) }
+            .mapCatching { payload ->
+                val parsed = PolicyEnvelopeCodec.parsePublished(payload)
+                    ?: throw IllegalArgumentException("Persisted policy has no bound identities")
+                val revalidated = parsed.copy(
+                    envelope = parsed.envelope.copy(
+                        appIdentities = revalidatePublishedAppIdentities(
+                            parsed.envelope,
+                            identityResolver,
+                        ),
+                    ),
+                )
+                PolicyEnvelopeCodec.encode(revalidated.envelope, revalidated.generation)
+                    ?: throw IllegalArgumentException("Persisted policy identity rewrite failed")
+            }
             .onSuccess(PublishedPolicyRegistry::publish)
             .onFailure { error ->
                 Log.w(POLICY_PROVIDER_TAG, "Unable to load persisted policy", error)
