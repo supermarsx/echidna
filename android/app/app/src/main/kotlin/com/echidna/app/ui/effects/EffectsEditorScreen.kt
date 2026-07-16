@@ -126,9 +126,9 @@ fun EffectsEditorScreen(viewModel: EffectsEditorViewModel) {
             }
         }
         items(items = warnings, key = { "$WARNING_KEY_PREFIX${it.message}" }) { warning ->
-            // A dismiss-only advisory: there is no single destination for a preset-tuning note,
-            // so onAction is left null (a follow-up may route CRITICAL notes to the offending
-            // effect card — see t8-e7).
+            // A preset-tuning note has no single in-app destination, so onAction is left null (no
+            // dead button). It still offers a plain "Dismiss" (reconciled against live warnings)
+            // and the permanent "Don't remind" affordance provided by PersistentDismissibleAlert.
             PersistentDismissibleAlert(
                 alertKey = "$WARNING_KEY_PREFIX${warning.message}",
                 store = alertStore,

@@ -56,19 +56,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.DspEngineMode
-import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.LegacyPreprocessorControlState
-import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
-import com.echidna.app.model.TelemetrySnapshot
-import com.echidna.app.model.WhitelistBindings
-import com.echidna.app.ui.components.AlertSeverity
-import com.echidna.app.ui.components.PersistentDismissibleAlert
-import com.echidna.app.ui.components.rememberDismissedAlertsStore
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -77,7 +69,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     onLaunchCompatibility: () -> Unit,
     onLaunchWhitelist: () -> Unit,
-    onLaunchInstaller: () -> Unit
+    onLaunchInstaller: () -> Unit,
+    onOpenAlerts: () -> Unit
 ) {
     val engineStatus by viewModel.engineStatus.collectAsStateWithLifecycle()
     val presets by viewModel.presets.collectAsStateWithLifecycle()
@@ -86,9 +79,6 @@ fun SettingsScreen(
     val profiles by viewModel.settingsProfiles.collectAsStateWithLifecycle()
     val activeProfileId by viewModel.activeSettingsProfileId.collectAsStateWithLifecycle()
     val moduleStatus by viewModel.moduleStatus.collectAsStateWithLifecycle()
-    val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
-    val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
-    val whitelistBindings by viewModel.whitelistBindings.collectAsStateWithLifecycle()
     val legacyPreprocessor by viewModel.legacyPreprocessorState.collectAsStateWithLifecycle()
 
     var newProfileName by remember { mutableStateOf("") }
@@ -106,14 +96,6 @@ fun SettingsScreen(
 
     val defaultPresetName = presets.firstOrNull { it.id == defaultId }?.name ?: "Unknown"
     val selectedProfile = profiles.firstOrNull { it.id == selectedProfileId }
-    val alerts = buildAdvisoryAlerts(
-        settings = settings,
-        engineStatus = engineStatus,
-        moduleStatus = moduleStatus,
-        compatibility = compatibility,
-        telemetry = telemetry,
-        whitelistBindings = whitelistBindings
-    )
 
     Column(
         modifier = Modifier
@@ -132,11 +114,7 @@ fun SettingsScreen(
 
         when (selectedTab) {
             SettingsTab.ALERTS -> {
-                AdvisoryAlertsSection(
-                    alerts = alerts,
-                    onLaunchCompatibility = onLaunchCompatibility,
-                    onLaunchWhitelist = onLaunchWhitelist
-                )
+                AlertsLinkSection(onOpenAlerts = onOpenAlerts)
                 AlertPreferencesSection(
                     settings = settings,
                     onShowInstallAlerts = viewModel::setShowInstallAlerts,
@@ -314,82 +292,21 @@ private fun HeaderSection(
 }
 
 @Composable
-private fun AdvisoryAlertsSection(
-    alerts: List<AdvisoryAlert>,
-    onLaunchCompatibility: () -> Unit,
-    onLaunchWhitelist: () -> Unit
-) {
-    // Advisory alerts are live and condition-driven. Each is individually dismissible and keyed
-    // on its condition (category + title); the dismissed set is reconciled to the currently-active
-    // conditions so a dismissed advisory returns if its condition clears and later recurs, rather
-    // than being permanently silenced (important for the safety-relevant fails-closed advisories).
-    val alertStore = rememberDismissedAlertsStore()
-    val activeKeys = remember(alerts) { alerts.map(::advisoryAlertKey).toSet() }
-    LaunchedEffect(activeKeys) {
-        alertStore.reconcileActive(activeKeys, ADVISORY_KEY_PREFIX)
-    }
+private fun AlertsLinkSection(onOpenAlerts: () -> Unit) {
+    // The live advisory alerts moved to the dedicated top-level Alerts tab. Settings keeps only the
+    // preferences that decide which advisories are computed; this row links to the tab itself.
     SettingsSection(title = "Advisory Alerts") {
         Text(
-            text = "Alerts never block controls. They call out install, bridge, hardware, and " +
-                "hook-scope conditions that can interfere with Echidna. Dismiss one to hide it; " +
-                "it returns if the condition clears and later recurs.",
+            text = "Live install, bridge, hardware, and hook-scope advisories now live on the " +
+                "Alerts tab, where each can be dismissed or permanently silenced with " +
+                "\"Don't remind\". The preferences below decide which of them are shown.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (alerts.isEmpty()) {
-            StatusPill(text = "No active advisories")
-        } else {
-            alerts.forEach { alert ->
-                val action = advisoryAction(alert.category, onLaunchCompatibility, onLaunchWhitelist)
-                PersistentDismissibleAlert(
-                    alertKey = advisoryAlertKey(alert),
-                    store = alertStore,
-                    title = alert.title,
-                    message = alert.detail,
-                    severity = advisorySeverity(alert.category),
-                    actionLabel = action?.first,
-                    onAction = action?.second,
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = onLaunchCompatibility, modifier = Modifier.weight(1f)) {
-                Text("Compatibility", maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            OutlinedButton(onClick = onLaunchWhitelist, modifier = Modifier.weight(1f)) {
-                Text("Whitelist", maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+        Button(onClick = onOpenAlerts, modifier = Modifier.fillMaxWidth()) {
+            Text("Open Alerts")
         }
     }
-}
-
-/** Stable namespace prefix for dismissed advisory-alert keys. */
-private const val ADVISORY_KEY_PREFIX = "settings.advisory:"
-
-/** Condition-stable dismiss key for an advisory alert (category + title). */
-private fun advisoryAlertKey(alert: AdvisoryAlert): String =
-    "$ADVISORY_KEY_PREFIX${alert.category}|${alert.title}"
-
-private fun advisorySeverity(category: String): AlertSeverity = when (category) {
-    "Incomplete install", "Incomplete bridge", "Bridge risk" -> AlertSeverity.ERROR
-    else -> AlertSeverity.WARNING
-}
-
-/**
- * Directing action for an advisory, where an obvious in-app destination already exists.
- * "Hook scope" → the Per-App Whitelist; probe/bridge/hardware advisories → the Compatibility
- * Wizard (re-probe). Install-related advisories are left dismiss-only: their destinations
- * (Install engine / open Magisk) are owned by t8-e1 / to be wired by t8-e7.
- */
-private fun advisoryAction(
-    category: String,
-    onLaunchCompatibility: () -> Unit,
-    onLaunchWhitelist: () -> Unit
-): Pair<String, () -> Unit>? = when (category) {
-    "Hook scope" -> "Open Whitelist" to onLaunchWhitelist
-    "Bridge status", "Bridge risk", "Bridge note", "Hardware compatibility" ->
-        "Run Wizard" to onLaunchCompatibility
-    else -> null
 }
 
 @Composable
@@ -996,388 +913,3 @@ private fun profileSummary(profile: SettingsProfile): String {
     val notification = if (settings.persistentNotification) "notification on" else "notification off"
     return "$engine - $latency - $notification"
 }
-
-private data class AdvisoryAlert(
-    val title: String,
-    val detail: String,
-    val category: String
-)
-
-private fun buildAdvisoryAlerts(
-    settings: SettingsState,
-    engineStatus: EngineStatus,
-    moduleStatus: ModuleStatus?,
-    compatibility: CompatibilityResult?,
-    telemetry: TelemetrySnapshot,
-    whitelistBindings: WhitelistBindings
-): List<AdvisoryAlert> = buildList {
-    if (settings.showInstallAlerts) {
-        if (moduleStatus == null) {
-            add(
-                AdvisoryAlert(
-                    title = "Control service status unavailable",
-                    detail = "The companion has not received module status yet. The UI remains usable, " +
-                        "but native install checks may be stale or incomplete.",
-                    category = "Incomplete install"
-                )
-            )
-        } else if (!moduleStatus.magiskModuleInstalled) {
-            add(
-                AdvisoryAlert(
-                    title = "Magisk module not detected",
-                    detail = "Install or re-flash echidna-magisk.zip, reboot, then rerun the " +
-                        "compatibility probe before relying on native hooks.",
-                    category = "Incomplete install"
-                )
-            )
-        }
-        if (!engineStatus.nativeInstalled && settings.masterEnabled && !settings.bypass) {
-            add(
-                AdvisoryAlert(
-                    title = "Native engine is not installed",
-                    detail = "Master processing is enabled, but the native engine is not reported as " +
-                        "installed. Audio should pass through until the module is present.",
-                    category = "Incomplete install"
-                )
-            )
-        }
-    }
-
-    if (settings.showBridgeAlerts) {
-        if (settings.masterEnabled && !settings.bypass && whitelistBindings.enabledCount() == 0) {
-            add(
-                AdvisoryAlert(
-                    title = "No target apps are whitelisted",
-                    detail = "Echidna fails closed until at least one app is enabled in the " +
-                        "Per-App Whitelist. Open the whitelist and enable each app you expect " +
-                        "to intercept.",
-                    category = "Hook scope"
-                )
-            )
-        }
-        engineStatus.lastError?.let { error ->
-            add(
-                AdvisoryAlert(
-                    title = "Engine status reports an error",
-                    detail = error.compactForAlert(),
-                    category = "Incomplete bridge"
-                )
-            )
-        }
-        moduleStatus?.let { status ->
-            if (!status.zygiskEnabled) {
-                add(
-                    AdvisoryAlert(
-                        title = "Zygisk is disabled or not visible",
-                        detail = "The native hook path depends on Zygisk. Enable it in Magisk and reboot " +
-                            "if you expect native injection.",
-                        category = "Incomplete bridge"
-                    )
-                )
-            }
-            if (status.selinuxState.containsAdvisoryWord() ||
-                status.selinuxStatus.containsAdvisoryWord()
-            ) {
-                add(
-                    AdvisoryAlert(
-                        title = "SELinux or policy probe needs attention",
-                        detail = "Reported SELinux state ${status.selinuxState}; status " +
-                            "${status.selinuxStatus}. Native readers may fail closed if policy " +
-                            "blocks the profile or telemetry bridge.",
-                        category = "Bridge risk"
-                    )
-                )
-            }
-            status.notes?.takeIf { it.containsAdvisoryWord() }?.let { note ->
-                add(
-                    AdvisoryAlert(
-                        title = "Module status includes a warning note",
-                        detail = note.compactForAlert(),
-                        category = "Bridge note"
-                    )
-                )
-            }
-            status.lastError?.let { error ->
-                if (error != engineStatus.lastError) {
-                    add(
-                        AdvisoryAlert(
-                            title = "Control bridge reported an error",
-                            detail = error.compactForAlert(),
-                            category = "Incomplete bridge"
-                        )
-                    )
-                }
-            }
-        }
-        if (settings.remindCompatibilityProbe && compatibility == null) {
-            add(
-                AdvisoryAlert(
-                    title = "Compatibility probe has not run",
-                    detail = "Run the wizard after installing or updating modules so hardware, SELinux, " +
-                        "and bridge status are based on a fresh probe.",
-                    category = "Bridge status"
-                )
-            )
-        }
-        compatibility?.notes
-            ?.filter { it.containsAdvisoryWord() }
-            ?.take(3)
-            ?.forEach { note ->
-                add(
-                    AdvisoryAlert(
-                        title = "Compatibility probe note needs review",
-                        detail = note.compactForAlert(),
-                        category = "Bridge status"
-                    )
-                )
-            }
-    }
-
-    if (settings.showHardwareAlerts) {
-        moduleStatus?.cpu?.let { cpu ->
-            if (!cpu.moduleSupported) {
-                add(
-                    AdvisoryAlert(
-                        title = "CPU ABI is not packaged by Echidna",
-                        detail = cpu.message.ifBlank {
-                            "Primary ABI ${cpu.primaryAbi.ifBlank { "unknown" }} is not supported."
-                        },
-                        category = "Hardware compatibility"
-                    )
-                )
-            } else if (!cpu.nativeHooksSupported) {
-                add(
-                    AdvisoryAlert(
-                        title = "CPU ABI has limited native hook support",
-                        detail = cpu.message.ifBlank {
-                            "The module may load, but active audio hooks are not enabled for " +
-                                cpu.zygiskAbi.ifBlank { "this ABI" } + "."
-                        },
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            Unit
-        }
-        moduleStatus?.audioStack?.let { stack ->
-            if (stack.vendorFamily.equals("Unknown", ignoreCase = true) ||
-                stack.vendorFamily.contains("unclassified", ignoreCase = true)
-            ) {
-                add(
-                    AdvisoryAlert(
-                        title = "Vendor audio family is not classified",
-                        detail = "HAL label ${stack.hal.ifBlank { "unknown" }} did not match " +
-                            "known emulator, Qualcomm, MediaTek, Exynos, or Tensor patterns.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (!stack.aaudioSupported) {
-                add(
-                    AdvisoryAlert(
-                        title = "AAudio low-latency path unavailable",
-                        detail = "This device did not report native AAudio support. Echidna can still try " +
-                            "fallback hooks, but latency and app coverage may vary.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (!stack.openSlEsAvailable) {
-                add(
-                    AdvisoryAlert(
-                        title = "OpenSL ES library not found",
-                        detail = "The compatibility probe could not find libOpenSLES.so in common " +
-                            "system or vendor paths. OpenSL hook coverage is unlikely on this image.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (!stack.audioFlingerClientAvailable) {
-                add(
-                    AdvisoryAlert(
-                        title = "AudioFlinger client library not found",
-                        detail = "The compatibility probe could not find libaudioclient.so in common " +
-                            "system or vendor paths. AudioFlinger client hook coverage is unlikely.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (!stack.tinyAlsaAvailable) {
-                add(
-                    AdvisoryAlert(
-                        title = "tinyalsa library not found",
-                        detail = "The compatibility probe could not find libtinyalsa.so in common " +
-                            "system or vendor paths. tinyalsa/HAL fallback coverage is unlikely.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (!stack.lowLatency) {
-                add(
-                    AdvisoryAlert(
-                        title = "Low-latency audio feature absent",
-                        detail = "Android does not report FEATURE_AUDIO_LOW_LATENCY. Calls and live " +
-                            "monitoring may need balanced or compatibility mode.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (!stack.proAudio) {
-                add(
-                    AdvisoryAlert(
-                        title = "Pro audio feature absent",
-                        detail = "Android does not report FEATURE_AUDIO_PRO. Echidna remains usable, " +
-                            "but device routing may not be tuned for stable low-latency capture.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (stack.hal.isBlank() || stack.hal.equals("unknown", ignoreCase = true)) {
-                add(
-                    AdvisoryAlert(
-                        title = "Audio HAL could not be identified",
-                        detail = "Vendor audio routing is unknown. Validate the target apps manually " +
-                            "before using the native hook path.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-            if (stack.sampleRate <= 0 || stack.framesPerBuffer <= 0) {
-                add(
-                    AdvisoryAlert(
-                        title = "Incomplete audio stack probe",
-                        detail = "Sample rate or buffer size was not reported. This can indicate an " +
-                            "incomplete bridge or a vendor HAL that hides useful diagnostics.",
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-        }
-        if (telemetry.averageLatencyMs > settings.alertLatencyThresholdMs) {
-            add(
-                AdvisoryAlert(
-                    title = "High processing latency",
-                    detail = "Telemetry average is ${telemetry.averageLatencyMs.roundToInt()} ms, above " +
-                        "the configured ${settings.alertLatencyThresholdMs} ms alert threshold.",
-                    category = "Runtime performance"
-                )
-            )
-        }
-        if (telemetry.xruns >= settings.alertXrunThreshold) {
-            add(
-                AdvisoryAlert(
-                    title = "Audio XRuns detected",
-                    detail = "Telemetry reports ${telemetry.xruns} XRuns. Reduce DSP load, use bypass, " +
-                        "or switch latency mode if audio glitches.",
-                    category = "Runtime performance"
-                )
-            )
-        }
-        compatibility?.audioStack
-            ?.filter { !it.supported }
-            ?.filterNot { probe ->
-                moduleStatus != null &&
-                    (probe.name.contains("AAudio", ignoreCase = true) ||
-                        probe.name.contains("Low-latency", ignoreCase = true) ||
-                        probe.name.contains("Pro audio", ignoreCase = true))
-            }
-            ?.take(3)
-            ?.forEach { probe ->
-                add(
-                    AdvisoryAlert(
-                        title = "${probe.name} probe is unsupported",
-                        detail = probe.message.compactForAlert(),
-                        category = "Hardware compatibility"
-                    )
-                )
-            }
-        if (telemetry.warnings.isNotEmpty()) {
-            add(
-                AdvisoryAlert(
-                    title = "Runtime telemetry has warnings",
-                    detail = telemetry.warnings.joinToString("; ").compactForAlert(),
-                    category = "Runtime performance"
-                )
-            )
-        }
-    }
-
-    if (settings.showInstallMixupAlerts) {
-        moduleStatus?.let { status ->
-            if (status.magiskModuleInstalled && !status.zygiskEnabled) {
-                add(
-                    AdvisoryAlert(
-                        title = "Magisk module present but Zygisk is not active",
-                        detail = "The module package appears installed, but the expected Zygisk " +
-                            "bridge is disabled or not visible after boot.",
-                        category = "Install mix-up"
-                    )
-                )
-            }
-            if (status.zygiskEnabled && status.javaFallbackRecommended) {
-                add(
-                    AdvisoryAlert(
-                        title = "Native capture route remains unverified",
-                        detail = "Zygisk availability does not prove audio buffers were transformed. " +
-                            "Use LSPosed compatibility mode only for targets assigned to that owner.",
-                        category = "Install mix-up"
-                    )
-                )
-            }
-            if (!status.zygiskEnabled && status.javaFallbackRecommended) {
-                add(
-                    AdvisoryAlert(
-                        title = "LSPosed compatibility mode recommended",
-                        detail = "No native route is verified. LSPosed may cover selected AudioRecord " +
-                            "targets after its scope and capture owner are configured.",
-                        category = "Install mix-up"
-                    )
-                )
-            }
-            if (!status.magiskModuleInstalled && status.javaFallbackRecommended) {
-                add(
-                    AdvisoryAlert(
-                        title = "Native module missing; fallback is only a recommendation",
-                        detail = "The app has not verified an active LSPosed route. Install and scope " +
-                            "the shim before relying on Java AudioRecord coverage.",
-                        category = "Install mix-up"
-                    )
-                )
-            }
-        }
-        if (settings.engineMode == DspEngineMode.COMPATIBILITY && engineStatus.nativeInstalled) {
-            add(
-                AdvisoryAlert(
-                    title = "Compatibility mode selected with native module present",
-                    detail = "This is allowed, but native hooks may be intentionally de-emphasized. " +
-                        "Switch modes if you expected the native-first path.",
-                    category = "Install mix-up"
-                )
-            )
-        }
-    }
-}
-
-private fun String.containsAdvisoryWord(): Boolean {
-    val lower = lowercase()
-    return listOf(
-        "absent",
-        "denied",
-        "disabled",
-        "error",
-        "fail",
-        "missing",
-        "not installed",
-        "partial",
-        "unavailable",
-        "unbound",
-        "unknown",
-        "unsupported",
-        "warning"
-    ).any(lower::contains)
-}
-
-private fun WhitelistBindings.enabledCount(): Int = whitelist.count { it.value }
-
-private fun String.compactForAlert(maxLength: Int = 220): String =
-    if (length <= maxLength) this else take(maxLength - 3).trimEnd() + "..."

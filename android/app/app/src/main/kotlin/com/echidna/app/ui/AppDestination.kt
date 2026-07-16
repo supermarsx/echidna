@@ -5,12 +5,14 @@ data class AppDestination(val route: String, val label: String) {
         val Dashboard = AppDestination("dashboard", "Dashboard")
         val PresetManager = AppDestination("presets", "Presets")
         val EffectsEditor = AppDestination("effects", "Effects")
+        val Alerts = AppDestination("alerts", "Alerts")
         val Diagnostics = AppDestination("diagnostics", "Diagnostics")
         val Settings = AppDestination("settings", "Settings")
         val CompatibilityWizard = AppDestination("compatibility", "Compatibility")
         val WhitelistEditor = AppDestination("whitelist", "Whitelist")
         val InstallEngine = AppDestination("install", "Install engine")
 
-        val bottomDestinations = listOf(Dashboard, PresetManager, EffectsEditor, Diagnostics, Settings)
+        val bottomDestinations =
+            listOf(Dashboard, PresetManager, EffectsEditor, Alerts, Diagnostics, Settings)
     }
 }

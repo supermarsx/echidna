@@ -8,6 +8,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
+import com.echidna.app.ui.alerts.AlertsScreen
+import com.echidna.app.ui.alerts.AlertsViewModel
 import com.echidna.app.ui.compatibility.CompatibilityWizardScreen
 import com.echidna.app.ui.compatibility.CompatibilityWizardViewModel
 import com.echidna.app.ui.dashboard.DashboardScreen
@@ -63,6 +65,19 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
         val viewModel: EffectsEditorViewModel = viewModel()
         EffectsEditorScreen(viewModel = viewModel)
     }
+    composable(AppDestination.Alerts.route) {
+        val viewModel: AlertsViewModel = viewModel()
+        AlertsScreen(
+            viewModel = viewModel,
+            onOpenInstall = { navController.navigate(AppDestination.InstallEngine.route) },
+            onLaunchWhitelist = {
+                navController.navigate(AppDestination.WhitelistEditor.route)
+            },
+            onLaunchCompatibility = {
+                navController.navigate(AppDestination.CompatibilityWizard.route)
+            }
+        )
+    }
     composable(AppDestination.Diagnostics.route) {
         val viewModel: DiagnosticsViewModel = viewModel()
         DiagnosticsScreen(viewModel = viewModel)
@@ -79,6 +94,12 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
             },
             onLaunchInstaller = {
                 navController.navigate(AppDestination.InstallEngine.route)
+            },
+            onOpenAlerts = {
+                navController.navigate(AppDestination.Alerts.route) {
+                    popUpTo(AppDestination.Dashboard.route)
+                    launchSingleTop = true
+                }
             }
         )
     }
