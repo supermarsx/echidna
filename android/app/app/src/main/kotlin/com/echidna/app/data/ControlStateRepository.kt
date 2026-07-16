@@ -1073,8 +1073,8 @@ object ControlStateRepository {
             )
             is LegacyPreprocessorServiceResult.Failure -> previous.copy(
                 enabled = result.confirmedEnabled ?: previous.enabled,
-                loaded = result.confirmedEnabled != null || previous.loaded,
-                available = serviceClient.isBound(),
+                loaded = !result.available || result.confirmedEnabled != null || previous.loaded,
+                available = result.available && serviceClient.isBound(),
                 updating = false,
                 error = result.message,
             )

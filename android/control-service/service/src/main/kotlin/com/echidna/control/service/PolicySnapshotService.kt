@@ -103,7 +103,9 @@ class PolicySnapshotService : Service() {
             PublishedPolicyRegistry::generation,
             telemetryProofVerifier,
         )
-        telemetryExecutor.execute { telemetryProofVerifier.prepare() }
+        if (flagStore.isSupported) {
+            telemetryExecutor.execute { telemetryProofVerifier.prepare() }
+        }
         val signingExecutor = BoundedCapabilityExecutor()
         capabilityIssuer = LegacyCapabilityIssuer(
             enabled = flagStore::isEnabled,
@@ -112,7 +114,9 @@ class PolicySnapshotService : Service() {
             signer = AndroidKeyStoreLegacyCapabilitySigner(applicationContext),
             executor = signingExecutor,
         )
-        capabilityIssuer.prepareKey()
+        if (flagStore.isSupported) {
+            capabilityIssuer.prepareKey()
+        }
         executor.execute(::loadPersistedPolicy)
     }
 

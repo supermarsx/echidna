@@ -351,7 +351,8 @@ Current route expectations:
 - The legacy input preprocessor is packaged and may be registered for the next boot on a proven
   legacy-HIDL system/vendor registry. The default-off **Legacy AudioFlinger preprocessor
   (experimental)** setting only permits authorized LSPosed attachment for eligible user-0
-  `AudioRecord` sessions; it is not processing proof.
+  `AudioRecord` sessions; the switch is unavailable from work profiles and other secondary users,
+  and it is not processing proof.
 
 !!! warning "Assign one capture owner per process"
     Zygisk receives UID-scoped v2 policy over an authenticated socket; LSPosed receives

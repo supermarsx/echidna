@@ -17,6 +17,15 @@ import org.junit.Test
 
 class LegacyPreprocessorCapabilityTest {
     @Test
+    fun `legacy trust domain accepts only ordinary application UIDs in Android user zero`() {
+        assertTrue(LegacyPreprocessorSupport.isSupportedUid(10_000))
+        assertTrue(LegacyPreprocessorSupport.isSupportedUid(99_999))
+        assertFalse(LegacyPreprocessorSupport.isSupportedUid(9_999))
+        assertFalse(LegacyPreprocessorSupport.isSupportedUid(100_000))
+        assertFalse(LegacyPreprocessorSupport.isSupportedUid(110_234))
+    }
+
+    @Test
     fun `codec matches the frozen native unsigned fixture byte for byte`() {
         val preset = (
             "{\"name\":\"F\",\"engine\":{\"latencyMode\":\"LL\",\"blockMs\":10}," +

@@ -61,6 +61,24 @@ class LegacyPreprocessorKeyStoreInstrumentedTest {
     }
 
     @Test
+    fun featureFlagClearsAndRejectsEnablementOutsideAndroidUserZero() {
+        context.getSharedPreferences(LEGACY_PREPROCESSOR_PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, true)
+            .commit()
+
+        val unsupported = LegacyPreprocessorFlagStore(context, ownerUid = 110_234)
+
+        assertFalse(unsupported.isEnabled())
+        assertFalse(unsupported.setEnabled(true))
+        assertFalse(
+            context.getSharedPreferences(LEGACY_PREPROCESSOR_PREFERENCES, Context.MODE_PRIVATE)
+                .getBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, true),
+        )
+        assertTrue(unsupported.setEnabled(false))
+    }
+
+    @Test
     fun telemetryProofKeyLoaderRejectsModeSizeZeroAndSymlinkDrift() {
         val directory = File(context.filesDir, "telemetry-proof-loader").apply {
             deleteRecursively()

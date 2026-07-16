@@ -142,6 +142,25 @@ class ControlServiceClientTest {
     }
 
     @Test
+    fun `legacy preprocessor is unavailable outside Android user zero without binder access`() {
+        val context = RecordingBindingContext()
+        val client = client(context, legacyPreprocessorSupported = { false })
+        val service = RecordingControlService(initialLegacyPreprocessorEnabled = true)
+        assertTrue(client.bind())
+        context.connectCurrent(service)
+
+        val expected = LegacyPreprocessorServiceResult.Failure(
+            message = "Experimental capture attachment is available only in Android user 0.",
+            confirmedEnabled = false,
+            available = false,
+        )
+        assertEquals(expected, client.readLegacyPreprocessorEnabled())
+        assertEquals(expected, client.updateLegacyPreprocessorEnabled(enabled = true))
+        assertEquals(0, service.legacyPreprocessorReadCalls.get())
+        assertEquals(0, service.legacyPreprocessorSetCalls.get())
+    }
+
+    @Test
     fun `legacy preprocessor update reports only read back confirmed state`() {
         val context = RecordingBindingContext()
         val client = client(context)
@@ -238,8 +257,11 @@ class ControlServiceClientTest {
         assertEquals("policy", replayed.getJSONObject("appBindings").getString("com.example.recorder"))
     }
 
-    private fun client(context: Context): ControlServiceClient =
-        ControlServiceClient(context).also(clients::add)
+    private fun client(
+        context: Context,
+        legacyPreprocessorSupported: () -> Boolean = { true },
+    ): ControlServiceClient =
+        ControlServiceClient(context, legacyPreprocessorSupported).also(clients::add)
 
     private fun snapshot(
         presetId: String,

@@ -581,8 +581,9 @@ internal fun LegacyPreprocessorSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "Current authorization is limited to trusted, explicitly whitelisted user 0 " +
-                "targets with the LSPosed capture owner. Device behavior remains unproven; " +
+            text = "This switch is available only from a companion installed in Android user 0, " +
+                "and authorization is limited to trusted, explicitly whitelisted user 0 targets " +
+                "with the LSPosed capture owner. Device behavior remains unproven; " +
                 "Stable-AIDL-only devices are unsupported. The switch itself is not an SDK-level " +
                 "compatibility verdict; runtime HIDL and effect evidence determine eligibility.",
             style = MaterialTheme.typography.bodySmall,

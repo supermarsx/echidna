@@ -11,6 +11,7 @@ import android.util.Log
 import com.echidna.control.service.EchidnaControlService
 import com.echidna.control.service.IEchidnaControlService
 import com.echidna.control.service.IEchidnaTelemetryListener
+import com.echidna.control.service.LegacyPreprocessorSupport
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -42,10 +43,16 @@ sealed interface LegacyPreprocessorServiceResult {
     data class Failure(
         val message: String,
         val confirmedEnabled: Boolean? = null,
+        val available: Boolean = true,
     ) : LegacyPreprocessorServiceResult
 }
 
-class ControlServiceClient(private val context: Context) {
+class ControlServiceClient(
+    private val context: Context,
+    private val legacyPreprocessorSupported: () -> Boolean = {
+        LegacyPreprocessorSupport.isSupportedUid(context.applicationInfo.uid)
+    },
+) {
     // The control service is hosted inside THIS APK (com.echidna.app); bind the
     // in-app component rather than the former phantom com.echidna.control package.
     private val intent = Intent().apply {
@@ -358,6 +365,7 @@ class ControlServiceClient(private val context: Context) {
 
     /** Reads the separate, service-persisted attachment gate without deriving it from policy. */
     fun readLegacyPreprocessorEnabled(): LegacyPreprocessorServiceResult {
+        if (!legacyPreprocessorSupported()) return unsupportedLegacyPreprocessorResult()
         val connectedService = service ?: return LegacyPreprocessorServiceResult.Failure(
             "Control service is not connected.",
         )
@@ -380,6 +388,7 @@ class ControlServiceClient(private val context: Context) {
      * state.
      */
     fun updateLegacyPreprocessorEnabled(enabled: Boolean): LegacyPreprocessorServiceResult {
+        if (!legacyPreprocessorSupported()) return unsupportedLegacyPreprocessorResult()
         val connectedService = service ?: return LegacyPreprocessorServiceResult.Failure(
             "Control service is not connected.",
         )
@@ -427,6 +436,12 @@ class ControlServiceClient(private val context: Context) {
             "Unable to $action the attachment setting. Reconnect and try again.",
         )
     }
+
+    private fun unsupportedLegacyPreprocessorResult() = LegacyPreprocessorServiceResult.Failure(
+        message = "Experimental capture attachment is available only in Android user 0.",
+        confirmedEnabled = false,
+        available = false,
+    )
 
     private fun releaseBinding() {
         if (!bindRequested.getAndSet(false)) return

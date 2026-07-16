@@ -34,6 +34,19 @@ internal const val LEGACY_CAPABILITY_KEY_ALIAS =
 internal const val LEGACY_PREPROCESSOR_PREFERENCES = "legacy_preprocessor_internal"
 internal const val LEGACY_PREPROCESSOR_ENABLED_KEY = "enabled_v1"
 
+/**
+ * The optional legacy AudioFlinger effect has one global, root-provisioned trust domain. Keep its
+ * capability and UI gate limited to ordinary application UIDs in Android user 0 until trust can be
+ * provisioned independently for every Android user.
+ */
+object LegacyPreprocessorSupport {
+    private const val FIRST_APPLICATION_UID = 10_000
+    private const val ANDROID_USER_UID_RANGE = 100_000
+
+    @JvmStatic
+    fun isSupportedUid(uid: Int): Boolean = uid in FIRST_APPLICATION_UID until ANDROID_USER_UID_RANGE
+}
+
 internal object LegacyCapabilityStatus {
     const val OK = 0
     const val DENIED = -1
@@ -120,7 +133,8 @@ internal object LegacyCapabilityCodec {
     ): ByteArray? {
         val process = processName.toByteArray(StandardCharsets.UTF_8)
         if (
-            audioSessionId <= 0 || uid !in 10_000..99_999 || generation !in 1..Long.MAX_VALUE ||
+            audioSessionId <= 0 || !LegacyPreprocessorSupport.isSupportedUid(uid) ||
+            generation !in 1..Long.MAX_VALUE ||
             issuedBoottimeMs < 0L || expiryBoottimeMs <= issuedBoottimeMs ||
             expiryBoottimeMs - issuedBoottimeMs > LEGACY_CAPABILITY_LIFETIME_MS ||
             nonce.size != 16 || nonce.all { it == 0.toByte() } ||
@@ -160,23 +174,34 @@ internal object LegacyCapabilityCodec {
     }
 }
 
-internal class LegacyPreprocessorFlagStore(context: Context) {
+internal class LegacyPreprocessorFlagStore(
+    context: Context,
+    ownerUid: Int = context.applicationInfo.uid,
+) {
+    internal val isSupported = LegacyPreprocessorSupport.isSupportedUid(ownerUid)
     private val preferences = context.getSharedPreferences(
         LEGACY_PREPROCESSOR_PREFERENCES,
         Context.MODE_PRIVATE,
     )
 
     init {
-        if (!preferences.contains(LEGACY_PREPROCESSOR_ENABLED_KEY)) {
+        if (!isSupported || !preferences.contains(LEGACY_PREPROCESSOR_ENABLED_KEY)) {
             // Persist the fail-closed migration explicitly without changing strict policy JSON.
+            // Clear any stale true value when app data is restored into a nonzero Android user.
             preferences.edit().putBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, false).commit()
         }
     }
 
-    fun isEnabled(): Boolean = preferences.getBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, false)
+    fun isEnabled(): Boolean =
+        isSupported && preferences.getBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, false)
 
-    internal fun setEnabled(enabled: Boolean): Boolean =
-        preferences.edit().putBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, enabled).commit()
+    internal fun setEnabled(enabled: Boolean): Boolean {
+        val persisted = enabled && isSupported
+        val committed = preferences.edit()
+            .putBoolean(LEGACY_PREPROCESSOR_ENABLED_KEY, persisted)
+            .commit()
+        return committed && persisted == enabled
+    }
 }
 
 internal class AndroidKeyStoreLegacyCapabilitySigner(private val context: Context) :
@@ -558,7 +583,8 @@ internal class LegacyCapabilityIssuer(
     }
 
     private fun validRequest(request: LegacyCapabilityRequest): Boolean =
-        request.uid in 10_000..99_999 && request.audioSessionId > 0 && request.generation > 0L &&
+        LegacyPreprocessorSupport.isSupportedUid(request.uid) &&
+            request.audioSessionId > 0 && request.generation > 0L &&
             request.nonce.size == 16 && request.nonce.any { it != 0.toByte() } &&
             request.packageName == request.processName.substringBefore(':')
 

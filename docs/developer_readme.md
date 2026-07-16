@@ -465,6 +465,10 @@ ambiguous-PID, and active-ODM configurations fail closed. Registration adds no a
 (experimental)** switch is a separate, companion-UID-only persisted flag. Enabling it only permits
 LSPosed to request a short-lived capability and attach the registered effect to an eligible
 `AudioRecord` session; policy/profile updates do not overwrite the flag.
+Because the module has one global user-0 signer/HMAC trust domain, the control service clears and
+rejects this flag, and skips legacy key preparation, when its companion UID belongs to another
+Android user. This limitation is specific to the optional legacy effect; the authenticated Zygisk
+and LSPosed policy transports remain same-user, full-UID scoped.
 
 Attachment still requires signer trust and effect registration staged on a prior boot, a restart,
 a supported legacy HIDL factory, an LSPosed-injected target, an explicit trusted user-0 whitelist

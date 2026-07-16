@@ -54,6 +54,8 @@ class LegacyPreprocessorSettingsSectionInstrumentedTest {
             .assertExists()
         composeRule.onNodeWithText("trusted, explicitly whitelisted user 0", substring = true)
             .assertExists()
+        composeRule.onNodeWithText("available only from a companion installed", substring = true)
+            .assertExists()
         composeRule.onNodeWithText("Stable-AIDL-only devices are unsupported", substring = true)
             .assertExists()
         composeRule.onNodeWithText("not an SDK-level compatibility verdict", substring = true)
