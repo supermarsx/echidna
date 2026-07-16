@@ -62,7 +62,7 @@ class LegacyPreprocessorKeyStoreInstrumentedTest {
 
     @Test
     fun telemetryProofKeyLoaderRejectsModeSizeZeroAndSymlinkDrift() {
-        val directory = File(context.cacheDir, "telemetry-proof-loader").apply {
+        val directory = File(context.filesDir, "telemetry-proof-loader").apply {
             deleteRecursively()
             assertTrue(mkdirs())
         }
