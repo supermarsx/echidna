@@ -634,6 +634,33 @@ object ControlStateRepository {
         TelemetryParser.parseModuleStatus(json)?.also { applyModuleStatus(it) }
     }
 
+    /**
+     * Unload-first quiesce: master-off + bypass so the live native engine stops mutating audio
+     * before a module install/uninstall. A live Zygisk module can't be hot-unloaded, but this
+     * stops the DSP immediately and the state persists (survives to the reboot that finishes the
+     * unload). Uses the same persisted control path as the user-facing master/bypass toggles.
+     */
+    fun quiesceEngineForModuleOp() {
+        setMasterEnabled(false)
+        setBypass(true)
+    }
+
+    /**
+     * Writes the Magisk disable marker via the privileged service so Zygisk stops loading the
+     * module on the next boot. Returns true only when the marker is confirmed present; callers
+     * abort the flow on false rather than proceeding to a half-removed state.
+     */
+    suspend fun disableEngineModule(): Boolean = withContext(Dispatchers.IO) {
+        if (!::serviceClient.isInitialized) return@withContext false
+        serviceClient.disableModule()
+    }
+
+    /** Best-effort privileged reboot to finish loading/unloading the engine. */
+    suspend fun rebootDevice(): Boolean = withContext(Dispatchers.IO) {
+        if (!::serviceClient.isInitialized) return@withContext false
+        serviceClient.rebootDevice()
+    }
+
     /** Requests a privileged install of [archivePath]. The outcome is observed via the status poll. */
     fun installEngineModule(archivePath: String) {
         if (::serviceClient.isInitialized) {

@@ -117,6 +117,97 @@ class InstallEngineViewModelTest {
     }
 
     @Test
+    fun `uninstall quiesces and disables the engine BEFORE removing it`() {
+        val controller = FakeController().apply { refreshResult = status(installed = true, zygisk = true) }
+        val vm = viewModel(controller)
+        assertTrue(await { vm.state.value.canUninstall })
+
+        controller.onUninstall = { controller.refreshResult = status(installed = false, zygisk = true) }
+        vm.uninstall()
+
+        assertTrue(await { vm.state.value.phase == InstallPhase.UNINSTALL_REBOOT })
+        // Unload-first: master-off (quiesce) and the disable marker precede the remove command.
+        assertEquals(listOf("quiesce", "disable", "remove"), controller.events.toList())
+        assertEquals(1, controller.quiesceCalls.get())
+        assertEquals(1, controller.disableCalls.get())
+    }
+
+    @Test
+    fun `uninstall aborts honestly when the disable step fails and never removes the module`() {
+        val controller = FakeController().apply {
+            refreshResult = status(installed = true, zygisk = true)
+            disableResult = false
+        }
+        val vm = viewModel(controller)
+        assertTrue(await { vm.state.value.canUninstall })
+
+        vm.uninstall()
+
+        assertTrue(await { vm.state.value.phase == InstallPhase.FAILED })
+        // Quiesce + disable were attempted, but the remove command must NOT run on a failed disable.
+        assertEquals(0, controller.uninstallCalls.get())
+        assertEquals(listOf("quiesce", "disable"), controller.events.toList())
+        assertTrue(vm.state.value.message!!.contains("disable", ignoreCase = true))
+    }
+
+    @Test
+    fun `updating an already-installed module unloads it first, then installs, then requires reboot`() {
+        val controller = FakeController().apply { refreshResult = status(installed = true, zygisk = true) }
+        val archive = FakeArchive(bundled = "/cache/echidna-magisk.zip")
+        val vm = viewModel(controller, archive)
+        // Module already installed: canUninstall true, canInstall false — drive install() directly.
+        assertTrue(await { vm.state.value.moduleInstalled })
+
+        vm.install()
+
+        assertTrue(await { vm.state.value.phase == InstallPhase.INSTALL_REBOOT })
+        // Unload-first: quiesce + disable the existing module BEFORE writing the replacement.
+        assertEquals(listOf("quiesce", "disable", "install"), controller.events.toList())
+        assertTrue(vm.state.value.message!!.contains("Reboot", ignoreCase = true))
+    }
+
+    @Test
+    fun `fresh install does not quiesce or disable when no module is present`() {
+        val controller = FakeController().apply { refreshResult = status(installed = false, zygisk = true) }
+        val archive = FakeArchive(bundled = "/cache/echidna-magisk.zip")
+        val vm = viewModel(controller, archive)
+        assertTrue(await { vm.state.value.canInstall })
+
+        controller.onInstall = { controller.refreshResult = status(installed = true, zygisk = true) }
+        vm.install()
+
+        assertTrue(await { vm.state.value.phase == InstallPhase.INSTALL_REBOOT })
+        assertEquals(listOf("install"), controller.events.toList())
+        assertEquals(0, controller.quiesceCalls.get())
+        assertEquals(0, controller.disableCalls.get())
+    }
+
+    @Test
+    fun `reboot dispatches the privileged reboot`() {
+        val controller = FakeController().apply { refreshResult = status(installed = true, zygisk = true) }
+        val vm = viewModel(controller)
+        assertTrue(await { vm.state.value.phase == InstallPhase.IDLE })
+
+        vm.reboot()
+
+        assertTrue(await { controller.rebootCalls.get() == 1 })
+    }
+
+    @Test
+    fun `reboot failure surfaces a manual-reboot message`() {
+        val controller = FakeController().apply {
+            refreshResult = status(installed = true, zygisk = true)
+            rebootResult = false
+        }
+        val vm = viewModel(controller)
+        assertTrue(await { vm.state.value.phase == InstallPhase.IDLE })
+
+        vm.reboot()
+
+        assertTrue(await { vm.state.value.message?.contains("manually", ignoreCase = true) == true })
+    }
+
+    @Test
     fun `install is refused when the control service is disconnected`() {
         val controller = FakeController().apply {
             connected = false
@@ -200,9 +291,16 @@ class InstallEngineViewModelTest {
         @Volatile var refreshResult: ModuleStatus? = null
         val installCalls = AtomicInteger(0)
         val uninstallCalls = AtomicInteger(0)
+        val quiesceCalls = AtomicInteger(0)
+        val disableCalls = AtomicInteger(0)
+        val rebootCalls = AtomicInteger(0)
+        @Volatile var disableResult = true
+        @Volatile var rebootResult = true
         @Volatile var lastInstallPath: String? = null
         @Volatile var onInstall: (() -> Unit)? = null
         @Volatile var onUninstall: (() -> Unit)? = null
+        // Ordered record of the module-op steps so tests can assert unload-first ordering.
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
 
         override fun isServiceConnected(): Boolean = connected
 
@@ -211,14 +309,33 @@ class InstallEngineViewModelTest {
             return refreshResult
         }
 
+        override fun quiesceEngine() {
+            quiesceCalls.incrementAndGet()
+            events += "quiesce"
+        }
+
+        override suspend fun disableModule(): Boolean {
+            disableCalls.incrementAndGet()
+            events += "disable"
+            return disableResult
+        }
+
+        override suspend fun rebootDevice(): Boolean {
+            rebootCalls.incrementAndGet()
+            events += "reboot"
+            return rebootResult
+        }
+
         override fun install(archivePath: String) {
             installCalls.incrementAndGet()
+            events += "install"
             lastInstallPath = archivePath
             onInstall?.invoke()
         }
 
         override fun uninstall() {
             uninstallCalls.incrementAndGet()
+            events += "remove"
             onUninstall?.invoke()
         }
     }

@@ -26,6 +26,19 @@ interface EngineInstallController {
     val engineStatus: StateFlow<EngineStatus>
     fun isServiceConnected(): Boolean
     suspend fun refreshStatus(): ModuleStatus?
+
+    /** Master-off + bypass so the live engine stops mutating audio before a module op. */
+    fun quiesceEngine()
+
+    /**
+     * Writes the Magisk disable marker so Zygisk stops loading the module on the next boot.
+     * Returns true only when confirmed — a false result aborts the flow honestly.
+     */
+    suspend fun disableModule(): Boolean
+
+    /** Best-effort privileged reboot to complete the load/unload. Returns whether it dispatched. */
+    suspend fun rebootDevice(): Boolean
+
     fun install(archivePath: String)
     fun uninstall()
 }
@@ -45,6 +58,9 @@ private class RepositoryEngineInstallController : EngineInstallController {
     override val engineStatus = repo.engineStatus
     override fun isServiceConnected(): Boolean = repo.isServiceBound()
     override suspend fun refreshStatus(): ModuleStatus? = repo.refreshModuleStatus()
+    override fun quiesceEngine() = repo.quiesceEngineForModuleOp()
+    override suspend fun disableModule(): Boolean = repo.disableEngineModule()
+    override suspend fun rebootDevice(): Boolean = repo.rebootDevice()
     override fun install(archivePath: String) = repo.installEngineModule(archivePath)
     override fun uninstall() = repo.uninstallEngineModule()
 }
@@ -62,6 +78,13 @@ enum class InstallPhase {
 
     /** Ready — show install or uninstall actions based on the detected state. */
     IDLE,
+
+    /**
+     * Unload-first step: master-off + bypass, then the Magisk disable marker is written so Zygisk
+     * stops loading the module. A live Zygisk module can't be hot-unloaded, so this precedes every
+     * module op (existing-module update, or uninstall).
+     */
+    QUIESCING,
 
     /** Staging the module archive (extract asset / copy picked file). */
     PREPARING,
@@ -98,6 +121,7 @@ data class InstallUiState(
 ) {
     val busy: Boolean
         get() = phase == InstallPhase.DETECTING ||
+            phase == InstallPhase.QUIESCING ||
             phase == InstallPhase.PREPARING ||
             phase == InstallPhase.INSTALLING ||
             phase == InstallPhase.UNINSTALLING
@@ -201,7 +225,7 @@ class InstallEngineViewModel(
         }
     }
 
-    /** Remove the installed module. */
+    /** Remove the installed module — unload-first: quiesce + disable, then remove, then reboot. */
     fun uninstall() {
         if (_state.value.busy) return
         workScope.launch {
@@ -209,43 +233,84 @@ class InstallEngineViewModel(
                 fail(DISCONNECTED_MESSAGE)
                 return@launch
             }
-            _state.update { it.copy(phase = InstallPhase.UNINSTALLING, message = "Removing module via Magisk…") }
+            // 1. Quiesce the live engine so it stops mutating audio immediately (master-off + bypass).
+            _state.update {
+                it.copy(phase = InstallPhase.QUIESCING, message = "Disabling the engine (master off)…")
+            }
+            controller.quiesceEngine()
+            // 2. Disable the module so Zygisk stops loading it on the next boot. Fail-safe: abort if
+            //    this fails so we never leave the module active-but-being-removed silently.
+            if (!controller.disableModule()) {
+                fail(DISABLE_FAILED_MESSAGE)
+                return@launch
+            }
+            // 3. Remove the module (reboot-completed by Magisk).
+            _state.update {
+                it.copy(phase = InstallPhase.UNINSTALLING, message = "Removing module via Magisk…")
+            }
             controller.uninstall()
             val removed = pollForInstalled(desired = false)
             val lastError = controller.moduleStatus.value?.lastError
             when {
-                removed -> _state.update {
-                    it.copy(
-                        phase = InstallPhase.UNINSTALL_REBOOT,
-                        message = "Module removed. Reboot to finish removing the engine.",
-                    )
-                }
+                removed -> rebootRequired(
+                    InstallPhase.UNINSTALL_REBOOT,
+                    "Engine disabled and module removed. Reboot to finish unloading it — a live " +
+                        "Zygisk module stays in running processes until the device restarts.",
+                )
                 lastError?.contains("uninstall failed", ignoreCase = true) == true -> fail(lastError)
-                else -> _state.update {
-                    it.copy(
-                        phase = InstallPhase.UNINSTALL_REBOOT,
-                        message = "Uninstall scheduled. Reboot to complete removal of the engine.",
-                    )
-                }
+                else -> rebootRequired(
+                    InstallPhase.UNINSTALL_REBOOT,
+                    "Engine disabled; removal scheduled. Reboot to complete unloading and removal — " +
+                        "a live Zygisk module can't be hot-unloaded.",
+                )
+            }
+        }
+    }
+
+    /** Best-effort privileged reboot, offered from the reboot-required screen. */
+    fun reboot() {
+        workScope.launch {
+            val dispatched = controller.rebootDevice()
+            if (!dispatched) {
+                _state.update { it.copy(message = REBOOT_MANUAL_MESSAGE) }
             }
         }
     }
 
     private suspend fun runInstall(path: String) {
+        // Unload-first: if a module is already present, quiesce + disable it before overwriting so
+        // Zygisk stops loading the old copy — a live Zygisk module can't be hot-swapped. Staging has
+        // already succeeded here, so we only disable a working module when a replacement is in hand.
+        if (_state.value.moduleInstalled) {
+            _state.update {
+                it.copy(
+                    phase = InstallPhase.QUIESCING,
+                    message = "Disabling the current engine before updating…",
+                )
+            }
+            controller.quiesceEngine()
+            if (!controller.disableModule()) {
+                fail(DISABLE_FAILED_MESSAGE)
+                return
+            }
+        }
         _state.update { it.copy(phase = InstallPhase.INSTALLING, message = "Installing module via Magisk…") }
         controller.install(path)
         val installed = pollForInstalled(desired = true)
         if (installed) {
-            _state.update {
-                it.copy(
-                    phase = InstallPhase.INSTALL_REBOOT,
-                    message = "Module installed. Reboot to activate the engine, then reopen Echidna.",
-                )
-            }
+            rebootRequired(
+                InstallPhase.INSTALL_REBOOT,
+                "Module installed. A reboot is required to load the engine because a live Zygisk " +
+                    "module can't be hot-swapped. Reboot, then reopen Echidna.",
+            )
         } else {
             val lastError = controller.moduleStatus.value?.lastError
             fail(lastError ?: "The module did not register after installation. Check Magisk and try again.")
         }
+    }
+
+    private fun rebootRequired(phase: InstallPhase, message: String) {
+        _state.update { it.copy(phase = phase, message = message) }
     }
 
     /** Polls the privileged status until the module reaches [desired] presence, or times out. */
@@ -324,5 +389,12 @@ class InstallEngineViewModel(
         const val DISCONNECTED_MESSAGE = "The Echidna control service is not connected yet."
         const val NO_BUNDLED_ARCHIVE_MESSAGE =
             "No engine package is bundled in this build. Select the Echidna Magisk module .zip to continue."
+        const val DISABLE_FAILED_MESSAGE =
+            "Couldn't disable the engine module — the privileged disable step failed. Nothing else " +
+                "was changed: the module was left as-is rather than half-removed. Check Magisk root " +
+                "access and try again."
+        const val REBOOT_MANUAL_MESSAGE =
+            "Couldn't trigger a reboot automatically. Reboot the device manually to finish " +
+                "loading/unloading the engine."
     }
 }

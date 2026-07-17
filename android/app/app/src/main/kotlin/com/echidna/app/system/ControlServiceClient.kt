@@ -318,6 +318,31 @@ class ControlServiceClient(
         }
     }
 
+    /**
+     * Unload-first step: writes the Magisk disable marker so Zygisk stops loading the module on the
+     * next boot. Synchronous (in-process AIDL runs on the caller's thread) and returns whether the
+     * marker was confirmed present, so the installer can abort honestly when it fails. Returns false
+     * when the service is unbound rather than pretending the module was disabled.
+     */
+    fun disableModule(): Boolean {
+        return try {
+            service?.disableModule() ?: false
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to disable module", ex)
+            false
+        }
+    }
+
+    /** Best-effort privileged reboot to complete the load/unload. Returns whether it was dispatched. */
+    fun rebootDevice(): Boolean {
+        return try {
+            service?.rebootDevice() ?: false
+        } catch (ex: RemoteException) {
+            Log.w(TAG, "Failed to request device reboot", ex)
+            false
+        }
+    }
+
     fun setMasterEnabled(enabled: Boolean) {
         try {
             service?.setMasterEnabled(enabled)

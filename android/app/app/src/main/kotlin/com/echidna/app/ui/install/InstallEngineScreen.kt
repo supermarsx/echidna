@@ -96,7 +96,11 @@ fun InstallEngineScreen(
 
         when (state.phase) {
             InstallPhase.INSTALL_REBOOT, InstallPhase.UNINSTALL_REBOOT -> {
-                RebootCard(onRecheck = viewModel::refresh)
+                RebootCard(
+                    removing = state.phase == InstallPhase.UNINSTALL_REBOOT,
+                    onReboot = viewModel::reboot,
+                    onRecheck = viewModel::refresh,
+                )
             }
             else -> {
                 ActionsCard(
@@ -245,7 +249,11 @@ private fun MessageCard(phase: InstallPhase, message: String) {
 }
 
 @Composable
-private fun RebootCard(onRecheck: () -> Unit) {
+private fun RebootCard(
+    removing: Boolean,
+    onReboot: () -> Unit,
+    onRecheck: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = AmberAccent.copy(alpha = 0.15f))
@@ -268,11 +276,23 @@ private fun RebootCard(onRecheck: () -> Unit) {
                 )
             }
             Text(
-                text = "Reboot your device, then reopen Echidna. This screen will confirm whether the " +
-                    "engine is active once the module has loaded.",
+                text = if (removing) {
+                    "The engine is disabled and removal is scheduled, but a live Zygisk module stays " +
+                        "loaded in running processes until the device restarts. Reboot to finish " +
+                        "unloading and removing it, then reopen Echidna to confirm it's gone."
+                } else {
+                    "The module is installed, but a Zygisk module only loads at boot — it can't be " +
+                        "hot-swapped into running processes. Reboot to activate the engine, then " +
+                        "reopen Echidna to confirm it's active."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Button(onClick = onReboot, modifier = Modifier.fillMaxWidth()) {
+                Icon(imageVector = Icons.Filled.RestartAlt, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Reboot now")
+            }
             OutlinedButton(onClick = onRecheck, modifier = Modifier.fillMaxWidth()) {
                 Text("Re-check status")
             }

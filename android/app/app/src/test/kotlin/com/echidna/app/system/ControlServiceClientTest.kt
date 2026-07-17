@@ -296,6 +296,30 @@ class ControlServiceClientTest {
         assertFalse(client.isBound())
     }
 
+    @Test
+    fun `disableModule and rebootDevice forward to the bound service`() {
+        val context = RecordingBindingContext()
+        val client = client(context)
+        val service = RecordingControlService()
+        assertTrue(client.bind())
+        context.connectCurrent(service)
+
+        assertTrue(client.disableModule())
+        assertTrue(client.rebootDevice())
+        assertEquals(1, service.disableCalls.get())
+        assertEquals(1, service.rebootCalls.get())
+    }
+
+    @Test
+    fun `disableModule reports false when the service is unbound rather than pretending`() {
+        val context = RecordingBindingContext()
+        val client = client(context)
+
+        // No connection: must not throw and must not fake a successful disable.
+        assertFalse(client.disableModule())
+        assertFalse(client.rebootDevice())
+    }
+
     private fun client(
         context: Context,
         legacyPreprocessorSupported: () -> Boolean = { true },
@@ -394,6 +418,10 @@ private class RecordingControlService(
     val legacyPreprocessorSetCalls = AtomicInteger(0)
     val installCalls = AtomicInteger(0)
     val uninstallCalls = AtomicInteger(0)
+    val disableCalls = AtomicInteger(0)
+    val rebootCalls = AtomicInteger(0)
+    @Volatile var disableResult = true
+    @Volatile var rebootResult = true
     @Volatile var lastInstallPath: String? = null
     @Volatile var legacyPreprocessorEnabled = initialLegacyPreprocessorEnabled
 
@@ -419,6 +447,16 @@ private class RecordingControlService(
 
     override fun uninstallModule() {
         uninstallCalls.incrementAndGet()
+    }
+
+    override fun disableModule(): Boolean {
+        disableCalls.incrementAndGet()
+        return disableResult
+    }
+
+    override fun rebootDevice(): Boolean {
+        rebootCalls.incrementAndGet()
+        return rebootResult
     }
     override fun refreshStatus(): String = "{}"
     override fun getModuleStatus(): String = "{}"
