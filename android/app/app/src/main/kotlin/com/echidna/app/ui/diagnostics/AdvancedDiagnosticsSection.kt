@@ -6,9 +6,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -34,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.echidna.app.model.DspMetrics
 import com.echidna.app.model.HookTelemetry
@@ -154,14 +158,21 @@ private fun HookAdvancedRow(hook: HookTelemetry) {
     val installed = hook.successes > 0
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(meta.label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                meta.label,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             InfoTooltip(meta.description)
             StatusPill(text = status, positive = installed)
         }
         Text(
             text = "attempts ${hook.attempts} • ok ${hook.successes} • failed ${hook.failures}",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         val detail = buildList {
             if (hook.library.isNotBlank()) add("lib=${hook.library}")
@@ -172,7 +183,9 @@ private fun HookAdvancedRow(hook: HookTelemetry) {
             Text(
                 text = detail,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -235,7 +248,7 @@ private fun AudioPipelineGroup(
         description = "Device output sample rate (AudioManager)."
     )
     MetricRow(
-        label = "Frames per buffer (block size)",
+        label = "Block size (frames)",
         value = stack?.framesPerBuffer?.takeIf { it > 0 }?.toString(),
         description = "Native audio block size the low-latency path uses."
     )
@@ -315,7 +328,7 @@ private fun EnvironmentGroup(moduleStatus: ModuleStatus?) {
     )
     if (cpu.supportedAbis.isNotEmpty()) {
         MetricRow(
-            label = "Android supported ABIs",
+            label = "Supported ABIs",
             value = cpu.supportedAbis.joinToString(),
             description = "ABI order reported by Build.SUPPORTED_ABIS."
         )
@@ -361,7 +374,7 @@ private fun EnvironmentGroup(moduleStatus: ModuleStatus?) {
         description = "Whether libOpenSLES.so exists in common system/vendor library paths."
     )
     MetricRow(
-        label = "AudioFlinger client library",
+        label = "AudioFlinger client lib",
         value = if (stack.audioFlingerClientAvailable) "present" else "not found",
         description = "Whether libaudioclient.so exists for client-path hook probing."
     )
@@ -463,10 +476,20 @@ private fun MetricRow(label: String, value: String?, description: String) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = value ?: "—",
                 style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 color = if (value == null) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
@@ -509,6 +532,8 @@ private fun StatusPill(text: String, positive: Boolean) {
             text = text,
             style = MaterialTheme.typography.labelSmall,
             color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
         )
     }

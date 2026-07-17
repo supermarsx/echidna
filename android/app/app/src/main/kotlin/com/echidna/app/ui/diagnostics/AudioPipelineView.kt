@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.echidna.app.model.HookTelemetry
 import com.echidna.app.model.ModuleStatus
@@ -127,9 +128,9 @@ fun AudioPipelineView(
 
             // 3 — DSP
             PipelineNode(
-                title = "DSP · echidna_process_block",
-                subtitle = if (bypass) "libech_dsp.so — bypassed (passthrough)"
-                else "libech_dsp.so",
+                title = "DSP engine",
+                subtitle = if (bypass) "echidna_process_block — bypassed"
+                else "echidna_process_block · libech_dsp.so",
                 metric = if (processing) {
                     "${telemetry.totalCallbacks} blocks"
                 } else null,
@@ -219,6 +220,8 @@ private fun PipelineNode(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     color = if (active) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -226,6 +229,8 @@ private fun PipelineNode(
                     Text(
                         text = it,
                         style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -235,6 +240,8 @@ private fun PipelineNode(
                     text = it,
                     style = MaterialTheme.typography.labelMedium,
                     fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     color = if (active) accent else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -269,13 +276,17 @@ private fun HookLayerNode(
                 Text(
                     text = "Capture hook layer",
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 activeHook?.let {
                     Text(
                         text = "ok ${it.successes} · failed ${it.failures}",
                         style = MaterialTheme.typography.labelMedium,
                         fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         color = accent
                     )
                 }
@@ -317,12 +328,16 @@ private fun HookRow(label: String, isActive: Boolean, statusText: String) {
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                 color = fg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
             Text(
                 text = statusText,
                 style = MaterialTheme.typography.labelSmall,
-                color = fg
+                color = fg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

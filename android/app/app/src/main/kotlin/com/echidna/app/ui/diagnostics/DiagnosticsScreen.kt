@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.echidna.app.model.CompatibilityResult
@@ -538,7 +539,14 @@ private fun StatusLine(label: String, value: String, positive: Boolean) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
         StatusPill(text = value, positive = positive)
     }
 }
@@ -549,12 +557,16 @@ private fun MetricText(label: String, value: String) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = value,
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -658,7 +670,9 @@ private fun HookStatusRow(hook: HookTelemetry) {
     Text(
         "$label: ${hook.successes}/${hook.attempts} " +
             "(${String.format(Locale.US, "%.0f", successRate * 100)}%)",
-        style = MaterialTheme.typography.bodySmall
+        style = MaterialTheme.typography.bodySmall,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
     )
     if (hook.symbol.isNotBlank() || hook.library.isNotBlank() || hook.reason.isNotBlank()) {
         val details = buildList {
@@ -666,7 +680,12 @@ private fun HookStatusRow(hook: HookTelemetry) {
             if (hook.symbol.isNotBlank()) add("sym=${hook.symbol}")
             if (hook.reason.isNotBlank()) add("reason=${hook.reason}")
         }.joinToString(" | ")
-        Text(details, style = MaterialTheme.typography.bodySmall)
+        Text(
+            details,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -686,6 +705,8 @@ private fun StatusPill(text: String, positive: Boolean) {
             text = text,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
         )
     }
