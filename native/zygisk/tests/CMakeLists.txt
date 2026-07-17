@@ -155,6 +155,18 @@ target_include_directories(tinyalsa_stream_registry_test
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_features(tinyalsa_stream_registry_test PRIVATE cxx_std_20)
 
+# t9-e3: per-fd audio-device verdict cache (moves the libc read route's
+# fstat()+readlink() classification off the hot path). Compiles only the
+# portable cache TU + its harness; the libc read hook manager itself is not
+# host-buildable (Android/POSIX-only), so the cache is exercised directly.
+add_executable(fd_verdict_cache_test
+    fd_verdict_cache_test.cpp
+    ../src/hooks/fd_verdict_cache.cpp)
+target_link_libraries(fd_verdict_cache_test PRIVATE Threads::Threads)
+target_include_directories(fd_verdict_cache_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(fd_verdict_cache_test PRIVATE cxx_std_20)
+
 add_executable(capture_route_reachability_test
     capture_route_reachability_test.cpp
     ../src/hooks/audioflinger_hook_manager.cpp
@@ -263,6 +275,7 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     opensl_stream_registry_test
     tinyalsa_contract_test
     tinyalsa_stream_registry_test
+    fd_verdict_cache_test
     capture_route_reachability_test
     profile_sync_protocol_test
     activation_gate_test
@@ -296,6 +309,7 @@ add_test(NAME opensl_lifecycle_test COMMAND opensl_lifecycle_test)
 add_test(NAME opensl_stream_registry_test COMMAND opensl_stream_registry_test)
 add_test(NAME tinyalsa_contract_test COMMAND tinyalsa_contract_test)
 add_test(NAME tinyalsa_stream_registry_test COMMAND tinyalsa_stream_registry_test)
+add_test(NAME fd_verdict_cache_test COMMAND fd_verdict_cache_test)
 add_test(NAME capture_route_reachability_test COMMAND capture_route_reachability_test)
 add_test(NAME profile_sync_protocol_test COMMAND profile_sync_protocol_test)
 add_test(NAME activation_gate_test COMMAND activation_gate_test)

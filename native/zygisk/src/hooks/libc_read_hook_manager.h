@@ -34,8 +34,24 @@ namespace echidna
 
         private:
             static ssize_t Replacement(int fd, void *buffer, size_t bytes);
+            // Resolve @p symbol from libc.so and inline-hook it into @p hook,
+            // publishing the trampoline via @p original. Returns false (leaving
+            // the route usable) when the symbol is absent or the patch fails.
+            bool InstallLifecycleHook(const char *symbol,
+                                      void *replacement,
+                                      void **original,
+                                      runtime::InlineHook &hook);
             utils::PltResolver &resolver_;
             runtime::InlineHook hook_;
+            // fd-lifecycle hooks that keep the per-fd verdict cache honest under
+            // fd reuse: close evicts, dup/dup2/dup3 alias. Best-effort — read
+            // still installs if these are unavailable, but the cache then falls
+            // back to per-read classification (see the .cpp) rather than trusting
+            // a verdict that a missed close/dup2 could have made stale.
+            runtime::InlineHook close_hook_;
+            runtime::InlineHook dup_hook_;
+            runtime::InlineHook dup2_hook_;
+            runtime::InlineHook dup3_hook_;
             HookInstallInfo last_info_;
         };
 
