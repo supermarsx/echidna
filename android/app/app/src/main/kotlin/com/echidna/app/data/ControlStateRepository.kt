@@ -37,6 +37,7 @@ import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
 import com.echidna.app.ui.diagnostics.NoteUtils
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -244,6 +245,12 @@ object ControlStateRepository {
 
     private var observersStarted = false
 
+    // Guards the one-time automatic privileged status probe (t17). The first-run wizard must not
+    // trigger any `su` in the background — the Welcome page would otherwise inherit the eager probe
+    // that used to run on service bind. We defer that probe until onboarding is complete and run it
+    // at most once; a root denial is remembered by the service's cached root gate, not re-asked.
+    private val privilegedProbeStarted = AtomicBoolean(false)
+
     fun initialize(appContext: Context) {
         if (!::context.isInitialized) {
             context = appContext.applicationContext
@@ -277,6 +284,10 @@ object ControlStateRepository {
                     if (connected) {
                         fetchWhitelistBindings()
                         refreshLegacyPreprocessorState(showLoading = true)
+                        // Kick the one-time privileged status probe now that the service is up — but
+                        // only if onboarding is already complete (returning users). During first-run
+                        // this is a no-op, so the Welcome page triggers zero su prompts.
+                        maybeStartPrivilegedStatusProbe()
                     } else {
                         markLegacyPreprocessorDisconnected()
                     }
@@ -656,6 +667,40 @@ object ControlStateRepository {
     fun setOnboardingComplete(complete: Boolean) {
         _onboardingComplete.value = complete
         commitSettingsChange(clearActiveProfile = false)
+        // The wizard just finished: now it is legitimate to run the initial privileged status probe
+        // once, so a returning user lands on populated status instead of a stale "not queried".
+        if (complete) maybeStartPrivilegedStatusProbe()
+    }
+
+    /**
+     * Kicks the ONE automatic privileged module/SELinux status probe, at most once per process, and
+     * never while the first-run onboarding wizard is still showing (t17). The wizard's own
+     * Compatibility/Engine steps request root explicitly when the user chooses to advance to them;
+     * this covers the returning-user / post-onboarding case without ever prompting on the Welcome
+     * page. The service's cached root gate ensures the probe (and any later ones) cost at most a
+     * single grant prompt and never re-ask after a denial, so this degrades honestly to
+     * "not detected" without a poll-time su loop.
+     */
+    private fun maybeStartPrivilegedStatusProbe() {
+        if (!::serviceClient.isInitialized) return
+        if (!claimPrivilegedProbeIfEligible()) return
+        scope.launch { refreshModuleStatus() }
+    }
+
+    /**
+     * Returns true at most once, and only after onboarding is complete. Extracted so a test can
+     * prove the first-run wizard never claims the background privileged probe (no automatic root
+     * during onboarding) and that completion arms it exactly once. Independent of service binding,
+     * which [maybeStartPrivilegedStatusProbe] guards separately.
+     */
+    internal fun claimPrivilegedProbeIfEligible(): Boolean {
+        if (!_onboardingComplete.value) return false
+        return privilegedProbeStarted.compareAndSet(false, true)
+    }
+
+    /** Test-only reset of the one-shot privileged-probe token so the once-gate is assertable. */
+    internal fun resetPrivilegedProbeForTest() {
+        privilegedProbeStarted.set(false)
     }
 
     fun setLegacyPreprocessorEnabled(enabled: Boolean) {
