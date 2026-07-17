@@ -104,6 +104,7 @@ nav:
       - Threat Model: hardening/threat-model.md
       - Real-Time Safety Audit: hardening/rt-safety.md
       - Evidence & State Model: hardening/evidence-state-model.md
+      - AudioFlinger Route: hardening/audioflinger-route.md
   - Developer:
       - Developer Guide: developer_readme.md
       - Signing: signing.md

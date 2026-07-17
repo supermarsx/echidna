@@ -33,6 +33,16 @@ namespace echidna::hooks
         // are not stable AOSP contracts and cannot establish PCM format or
         // object layout safely. Device-specific AudioFlinger support must be
         // supplied by a separately proven audioserver injection boundary.
+        //
+        // The rationale, the audioserver-injection prerequisite, and the honest
+        // status (device-gated / not viable from the Zygisk vantage) are
+        // documented in docs/hardening/audioflinger-route.md. The one piece that
+        // is safely landable without a device — the fail-closed capture-buffer
+        // admission guard a future companion would satisfy before touching a
+        // RecordThread buffer — lives, host-tested and hard-OFF by default, in
+        // hooks/audioflinger_format.h (ECHIDNA_AUDIOFLINGER_BOUNDARY_PROVEN).
+        // It is intentionally NOT wired in here: this install() stays a plain
+        // truthful refusal until that boundary is separately proven.
         __android_log_print(ANDROID_LOG_WARN,
                             "echidna",
                             "AudioFlinger transform disabled: unsupported audioserver boundary");

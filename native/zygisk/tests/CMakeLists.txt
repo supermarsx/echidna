@@ -69,6 +69,19 @@ target_include_directories(audiohal_contract_test
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_features(audiohal_contract_test PRIVATE cxx_std_20)
 
+# t9-e1 (A1 AudioFlinger): host harness for the hard-OFF capture-buffer
+# admission guard. Compiles the shared PCM layout resolver it reuses; the
+# audioserver injection boundary itself stays disabled (see
+# docs/hardening/audioflinger-route.md).
+add_executable(audioflinger_format_test
+    audioflinger_format_test.cpp
+    ../src/audio/pcm_buffer_processor.cpp)
+target_include_directories(audioflinger_format_test
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_features(audioflinger_format_test PRIVATE cxx_std_20)
+
 add_executable(aaudio_callback_registry_test
     aaudio_callback_registry_test.cpp
     ../src/hooks/aaudio_callback_registry.cpp)
@@ -273,6 +286,7 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     aarch64_instruction_test
     armv7_instruction_test
     audiohal_contract_test
+    audioflinger_format_test
     aaudio_callback_registry_test
     aaudio_stream_registry_test
     aaudio_hook_install_test
@@ -308,6 +322,7 @@ add_test(NAME capture_buffer_router_test COMMAND capture_buffer_router_test)
 add_test(NAME aarch64_instruction_test COMMAND aarch64_instruction_test)
 add_test(NAME armv7_instruction_test COMMAND armv7_instruction_test)
 add_test(NAME audiohal_contract_test COMMAND audiohal_contract_test)
+add_test(NAME audioflinger_format_test COMMAND audioflinger_format_test)
 add_test(NAME aaudio_callback_registry_test COMMAND aaudio_callback_registry_test)
 add_test(NAME aaudio_stream_registry_test COMMAND aaudio_stream_registry_test)
 add_test(NAME aaudio_hook_install_test COMMAND aaudio_hook_install_test)
