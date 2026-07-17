@@ -20,6 +20,8 @@ import com.echidna.app.ui.effects.EffectsEditorScreen
 import com.echidna.app.ui.effects.EffectsEditorViewModel
 import com.echidna.app.ui.install.InstallEngineScreen
 import com.echidna.app.ui.install.InstallEngineViewModel
+import com.echidna.app.ui.lab.LabScreen
+import com.echidna.app.ui.lab.LabViewModel
 import com.echidna.app.ui.preset.PresetManagerScreen
 import com.echidna.app.ui.preset.PresetManagerViewModel
 import com.echidna.app.ui.settings.SettingsScreen
@@ -81,6 +83,10 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
     composable(AppDestination.Diagnostics.route) {
         val viewModel: DiagnosticsViewModel = viewModel()
         DiagnosticsScreen(viewModel = viewModel)
+    }
+    composable(AppDestination.Lab.route) {
+        val viewModel: LabViewModel = viewModel()
+        LabScreen(viewModel = viewModel)
     }
     composable(AppDestination.Settings.route) {
         val viewModel: SettingsViewModel = viewModel()
