@@ -19,12 +19,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -35,6 +37,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -69,6 +72,7 @@ fun WhitelistEditorScreen(viewModel: WhitelistEditorViewModel) {
     val presets by viewModel.presets.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
+    val onlyInstalled by viewModel.onlyInstalled.collectAsStateWithLifecycle()
 
     var showAddField by remember { mutableStateOf(false) }
     var newPackageName by remember { mutableStateOf("") }
@@ -149,6 +153,44 @@ fun WhitelistEditorScreen(viewModel: WhitelistEditorViewModel) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    text = "Suggested apps",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Text(
+                    text = if (onlyInstalled) {
+                        "Only apps installed on this device"
+                    } else {
+                        "Showing all curated suggestions"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            FilterChip(
+                selected = onlyInstalled,
+                onClick = { viewModel.setOnlyInstalled(!onlyInstalled) },
+                label = { Text("Only installed") },
+                leadingIcon = if (onlyInstalled) {
+                    {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(FilterChipDefaults.IconSize)
+                        )
+                    }
+                } else {
+                    null
+                }
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 text = "${enabledApps.size} enabled | ${suggestedApps.size} suggested",
                 style = MaterialTheme.typography.labelLarge,
@@ -211,7 +253,11 @@ fun WhitelistEditorScreen(viewModel: WhitelistEditorViewModel) {
                 )
                 appSection(
                     title = "Suggested",
-                    subtitle = "Common voice, calls, social, games, and streaming apps",
+                    subtitle = if (onlyInstalled) {
+                        "Common voice, calls, social, games, and streaming apps installed here"
+                    } else {
+                        "Common voice, calls, social, games, and streaming apps (all, incl. not installed)"
+                    },
                     apps = suggestedApps,
                     presets = presets,
                     viewModel = viewModel
@@ -228,25 +274,30 @@ fun WhitelistEditorScreen(viewModel: WhitelistEditorViewModel) {
     }
 }
 
+/**
+ * Category filter chips on a SINGLE horizontally-scrollable line (t8-e8). A [LazyRow] is used rather
+ * than a wrapping [FlowRow] so the chips never spill onto multiple lines or clip; extra categories
+ * scroll off the edge instead.
+ */
 @Composable
-@OptIn(ExperimentalLayoutApi::class)
 private fun CategoryFilterRow(
     categories: List<String>,
     selectedCategory: String?,
     onSelected: (String?) -> Unit
 ) {
     if (categories.isEmpty()) return
-    FlowRow(
+    LazyRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        FilterChip(
-            selected = selectedCategory == null,
-            onClick = { onSelected(null) },
-            label = { Text("All") }
-        )
-        categories.forEach { category ->
+        item(key = "category-all") {
+            FilterChip(
+                selected = selectedCategory == null,
+                onClick = { onSelected(null) },
+                label = { Text("All") }
+            )
+        }
+        items(categories, key = { it }) { category ->
             FilterChip(
                 selected = selectedCategory == category,
                 onClick = { onSelected(category) },
