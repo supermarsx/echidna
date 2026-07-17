@@ -110,16 +110,17 @@ sharply in how hard they are.
   decoder doesn't fully recognize (VEX/EVEX, unusual encodings). It's built with an
   allow-listed decoder that **fails closed on anything it can't prove safe**, and still
   needs on-device/emulator confirmation.
-- **armeabi-v7a (32-bit ARM / Thumb-2)** — **not shipped as an active hook.** Correct
-  Thumb-2 relocation must handle variable-length (2/4-byte) Thumb encoding, **IT-block**
-  hazards (patching mid-IT-block corrupts execution), ARM/Thumb interworking on the low
-  address bit, and PC-relative prologue relocation. Getting any of these wrong crashes a
-  system audio process, so armv7 hooking is deliberately **disabled** (it logs
-  `hook_unsupported_abi` and installs nothing) rather than shipped as fragile untested
-  code. See [Limitations §6](limitations.md#6-armeabi-v7a-32-bit-arm-hooking-is-disabled).
+- **armeabi-v7a (32-bit ARM / Thumb-2)** — **relocator host-proven, on-device execution
+  device-gated.** Correct Thumb-2 relocation must handle variable-length (2/4-byte) Thumb
+  encoding, **IT-block** hazards (patching mid-IT-block corrupts execution), ARM/Thumb
+  interworking on the low address bit, and PC-relative prologue relocation. A relocator that
+  handles these now exists and is proven on the host; because getting any case wrong crashes a
+  system audio process, it fails closed per function and its on-hardware install/execution is
+  withheld until proven on a real armv7 device. See [Limitations §6](limitations.md#6-armeabi-v7a-32-bit-arm-direct-hooking-is-host-proven-on-device-device-gated).
 
 "Just support all ABIs" hides an enormous amount of per-architecture instruction-decoding
-work, and the safe answer for the hardest ABI is to **not** hook rather than risk a crash.
+work, and the safe answer for the hardest ABI is to prove the relocator on the host and gate
+its on-hardware execution rather than risk a crash.
 
 ## 6. SELinux on modern Android is trying to stop you
 

@@ -323,13 +323,14 @@ does not own audioserver or a stable vendor stream ABI, so HAL and AudioFlinger 
 **ABI support.** `arm64-v8a` is the locked primary implementation, but live arm64 Zygisk loading
 and hook installation still need physical-device proof. `x86_64` has a complete inline-hook
 trampoline; its earlier rooted-emulator `AudioRecord.read` probe predates the current route
-contract. Broader target-app injection is not claimed. `armeabi-v7a` builds but **gracefully
-degrades**: AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, and libc-read report
-`unsupported_armv7_late_symbol_hooking` before installation. Thumb-2/IT-block relocation is not
-implemented, and the one-shot Zygisk v3 PLT API cannot cover caller libraries loaded after
-specialization and authenticated policy delivery. LSPosed Java/JNI and the official legacy
-preprocessor use separate attachment boundaries and remain eligible. Real armv7 runtime telemetry
-still needs device proof.
+contract. Broader target-app injection is not claimed. `armeabi-v7a` builds, and its direct
+inline-symbol routes (AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, libc-read) are now backed
+by a **host-proven ARM32/Thumb-2 prologue relocator**; on-device install/execution is
+**device-gated** (`armv7_inline_relocation_host_proven_on_device_gated`), and the relocator fails
+closed per function on any prologue it cannot provably relocate. The one-shot Zygisk v3 PLT API
+still cannot cover caller libraries loaded after specialization and authenticated policy delivery.
+LSPosed Java/JNI and the official legacy preprocessor use separate attachment boundaries and remain
+eligible. Real armv7 runtime execution still needs device proof.
 
 ## Safety Watchdog
 
@@ -453,12 +454,13 @@ Retained v2-v6 one-way report transactions cannot supply a caller PID and theref
 Do not assign one process to both capture owners. The policy schema permits only `zygisk` or
 `lsposed`, and each consumer requires its own owner before processing.
 
-### armeabi-v7a hooking degrades
+### armeabi-v7a direct hooking is host-proven, on-device device-gated
 
-As noted above, armv7 builds and loads but rejects direct inline-symbol routes before installation
-(graceful degrade with an exact diagnostic reason). LSPosed Java/JNI and the official legacy
-preprocessor remain eligible through their separate boundaries. arm64 is the primary native-hook
-target.
+As noted above, armv7 builds and loads, and a host-proven ARM32/Thumb-2 prologue relocator now backs
+its direct inline-symbol routes; `install()` attempts the route and the relocator fails closed per
+function on any prologue it cannot provably relocate, while on-hardware install/execution stays
+device-gated. LSPosed Java/JNI and the official legacy preprocessor remain eligible through their
+separate boundaries. arm64 is the primary native-hook target.
 
 ### Capture routes are not all operational
 
@@ -541,7 +543,7 @@ effect load, enablement, linker/label access, enforced-SELinux operation, or tra
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |
 | x86_64 trampoline under real injection | **Host harness verified; full current release injection NOT verified** |
-| armv7 degrade behavior | **Build/code-path covered; real armv7 runtime NOT verified** |
+| armv7 direct-route relocator | **Host-proven (relocation harness + armv7 `libechidna.so` links under NDK); on-device execution device-gated** |
 | APK install -> service bind -> live AIDL round-trip | **Emulator/rooted-emulator verified** |
 
 **Still release-device-only / NOT verified here:**
@@ -556,7 +558,7 @@ effect load, enablement, linker/label access, enforced-SELinux operation, or tra
 - On-device SELinux enforcement and vendor audio-stack behavior for supported candidates.
 - Effect-host reads of the separately labelled controller SPKI and telemetry HMAC key under
   enforcing SELinux.
-- armeabi-v7a graceful-degrade at runtime.
+- armeabi-v7a direct inline-symbol routes on real armv7 hardware (relocator host-proven; on-device execution device-gated).
 
 Echidna is a root/sideload application; on-device validation is a required, separate step before any
 release is considered functional.

@@ -131,7 +131,7 @@ Requested coverage, explicitly:
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** | These routes require explicit `ECHIDNA_AR_*` / `ECHIDNA_LIBC_*` sample-rate, channel, and format values that normal app specialization does not supply. |
 | Audio HAL / AudioFlinger transformation | **Unsupported** | Both fail closed with `unsupported_injection_boundary`; app-process Zygisk does not own a safe audioserver/vendor-stream ABI. |
 | x86_64 trampoline under real injection | **Host harness verified; current release path NOT verified** | The older rooted probe predates the current route contract; Magisk manager flash/reboot and arbitrary target-app injection are not claimed. |
-| armv7 degrade behavior | **Build/code-path covered; runtime device behavior NOT verified** | `armeabi-v7a` artifacts build, and the hook path is intended to fail closed with `hook_unsupported_abi`; no real armv7 device run has proved the runtime telemetry. |
+| armv7 direct-route relocator | **Host-proven; on-device execution device-gated** | `armeabi-v7a` artifacts build and the ARM32/Thumb-2 prologue relocator is host-proven (relocation harness + `libechidna.so` links under NDK); the relocator fails closed per function, and no real armv7 device run has yet proved on-hardware install/execution. |
 | APK install -> service bind -> live AIDL round-trip | **Verified on emulator/rooted emulator** | App instrumentation covers installable APK execution, in-app `EchidnaControlService` bind, and live AIDL round-trips; this does not prove Magisk/LSPosed hardware paths. |
 
 Still not claimed as verified:
@@ -148,7 +148,7 @@ Still not claimed as verified:
 - **Narrow config and effect-trust SELinux policy** on a real enforcing device, including separate
   controller-SPKI and telemetry-HMAC labels and effect-host reads.
 - **arm64 primary hardware and armeabi-v7a runtime behavior** — arm64 still needs physical-device
-  proof, and armv7 intentionally fails closed.
+  proof; the armv7 relocator is host-proven but its on-hardware install/execution is device-gated.
 - **Live authenticated policy delivery under SELinux** — UID-scoped Zygisk socket frames and
   caller/process-scoped LSPosed Binder views build and have host/unit coverage, but simultaneous
   injected-app delivery still needs enforcing-device validation.

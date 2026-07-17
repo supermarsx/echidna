@@ -123,8 +123,9 @@ of claiming that every manager is operational:
 - Echidna attempts every eligible normal-flow candidate because an app may touch multiple APIs
   (see [Architecture](architecture.md)). “Operational candidate” is code reachability, not device
   proof.
-- The native rows are ABI-qualified. On `armeabi-v7a`, AAudio, OpenSL ES, tinyalsa, native
-  `AudioRecord`, and libc-read are unsupported before installation; see item 6. LSPosed Java/JNI
+- The native rows are ABI-qualified. On `armeabi-v7a`, the direct inline-symbol routes (AAudio,
+  OpenSL ES, tinyalsa, native `AudioRecord`, libc-read) are now backed by a host-proven ARM32/Thumb-2
+  prologue relocator; on-device install/execution is device-gated (see item 6). LSPosed Java/JNI
   and the legacy input preprocessor remain eligible under their separate policy and device gates.
 - Even so, some apps or devices route audio through a path Echidna does not yet hook, or
   through a vendor-specific HAL variation, in which case that app's capture is **not**
@@ -161,7 +162,7 @@ Remaining caveats:
 - **Late/restarted publisher:** native processing is revoked on disconnect and reconnects with
   bounded backoff. LSPosed fails closed and rebinds. Neither uses stale policy as admission proof.
 
-## 6. `armeabi-v7a` (32-bit ARM) hooking is disabled
+## 6. `armeabi-v7a` (32-bit ARM) direct hooking is host-proven, on-device device-gated
 
 Echidna's inline hooking is **ABI-specific**:
 
@@ -169,12 +170,14 @@ Echidna's inline hooking is **ABI-specific**:
 | --- | --- |
 | **arm64-v8a (aarch64)** | Primary, fully implemented. |
 | **x86_64** | Implemented (absolute-jump patch + relocating trampoline with a fail-closed length decoder); host harness verified. The older rooted `AudioRecord` slice predates the current route contract. |
-| **armeabi-v7a (32-bit ARM / Thumb-2)** | **Graceful degrade — direct inline-symbol routes disabled.** The module builds and loads, but AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, and libc-read report `unsupported_armv7_late_symbol_hooking` before installation. |
+| **armeabi-v7a (32-bit ARM / Thumb-2)** | **Relocator implemented and host-verified; on-device execution device-gated.** A real ARM32/Thumb-2 prologue relocator now backs the direct inline-symbol routes (AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, libc-read); the armv7 `libechidna.so` links under the NDK and the relocation harness passes on the host. The orchestrator attempts installation and the relocator fails closed per function on any prologue it cannot provably relocate (`armv7_inline_relocation_host_proven_on_device_gated`); on-hardware install/execution stays device-gated. |
 
-Why armv7 degrades instead of shipping a trampoline: correct ARM/Thumb-2 relocation must
-handle variable-length (2/4-byte) Thumb encoding, IT-block hazards (patching mid-IT-block
-corrupts execution), ARM/Thumb interworking on the low pointer bit, and PC-relative
-prologue relocation — and the failure mode is a **crash inside a system audio process**.
+Why on-device armv7 stays gated even though the relocator now exists: correct ARM/Thumb-2
+relocation must handle variable-length (2/4-byte) Thumb encoding, IT-block hazards (patching
+mid-IT-block corrupts execution), ARM/Thumb interworking on the low pointer bit, and PC-relative
+prologue relocation. The relocator now implements this and is proven on the host, but the failure
+mode of any missed case is a **crash inside a system audio process**, so on-hardware execution is
+withheld until it is proven on a real armv7 device.
 Zygisk's PLT API is not a safe late-load replacement. The bundled API v3 contract says API
 functions stop working after `postAppSpecialize`; its Magisk v25.2 implementation registers with
 `xhook`, refreshes the ELFs currently loaded in memory, and then clears the registration set.
@@ -191,18 +194,19 @@ and
 plus the current compatibility implementation
 [`module.cpp` lines 164–220](https://github.com/topjohnwu/Magisk/blob/14ea5cfb4a5771c742f7c3fd1e685bdbfac7aa8c/native/src/core/zygisk/module.cpp#L164-L220).
 
-Since arm64 is the locked primary target and neither a complete PLT transaction nor an armv7
-trampoline can be validated safely, direct armv7 symbol hooking ships inactive. This does not
-disable the LSPosed Java/JNI route or the official legacy input preprocessor, which use different
-attachment boundaries and retain their existing policy and device gates.
+Since arm64 is the locked primary target and a complete PLT transaction still cannot be validated
+safely, armv7 relies on the inline relocator; it is host-proven but its on-hardware install/execution
+is device-gated rather than claimed at parity with arm64. This does not change the LSPosed Java/JNI
+route or the official legacy input preprocessor, which use different attachment boundaries and retain
+their existing policy and device gates.
 
 The 64-bit path (arm64-v8a) covers essentially all current mainstream devices, so in
 practice this affects only older/32-bit hardware.
 
 The app now reports CPU/ABI support directly in Compatibility and Diagnostics. A supported
 module ABI does not always mean active hooks are enabled: `arm64-v8a` and `x86_64` report native
-hook support, while `armeabi-v7a` reports that direct inline-symbol routes are disabled
-fail-closed.
+hook support, while `armeabi-v7a` reports that its direct inline-symbol routes are host-proven but
+device-gated for on-hardware execution.
 
 ## 7. What runs today vs. what needs hardware
 
@@ -220,7 +224,7 @@ To keep expectations honest:
 | Audio HAL / AudioFlinger transform | **Unsupported injection boundary** |
 | SELinux interaction for supported routes | **Device-gated** — per-device |
 | Multi-app simultaneous policy delivery | **Implemented with scoped socket/Binder transports; live capture still device-gated** |
-| armv7 voice transformation | **Not available** (item 6) |
+| armv7 voice transformation | **Device-gated** — relocator host-proven, on-device execution unproven (item 6) |
 
 See [Verification](verification.md) for the full proven-vs-device-gated matrix and a
 reproduce-on-hardware procedure.

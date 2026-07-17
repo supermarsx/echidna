@@ -127,9 +127,10 @@ PCM back in place. All hooking is gated on `hooksEnabled()` **and**
 Operational means the route has a reachable code contract, not that it has passed on a physical
 device. The orchestrator reports support, metadata source, and the exact unavailable reason in hook
 telemetry. This matrix is ABI-qualified: on `armeabi-v7a`, AAudio, OpenSL ES, tinyalsa, native
-`AudioRecord`, and libc-read are reported as unsupported before installation. The LSPosed Java/JNI
-route and the legacy input preprocessor do not use Echidna's inline-symbol backend and remain
-eligible subject to their normal policy and device gates.
+`AudioRecord`, and libc-read are backed by a host-proven ARM32/Thumb-2 prologue relocator, with
+on-device install/execution device-gated. The LSPosed Java/JNI route and the legacy input
+preprocessor do not use Echidna's inline-symbol backend and remain eligible subject to their normal
+policy and device gates.
 
 ```mermaid
 flowchart TB
@@ -207,16 +208,18 @@ trampoline support differs by ABI (t2-e11):
   operands, failing closed on anything unrecognized). Verified with a host
   decoder + end-to-end hook harness. The earlier rooted-emulator `AudioRecord`
   probe predates the current route contract.
-- **armeabi-v7a** — **graceful degrade**: it builds and loads, but `install()`
-  rejects direct inline-symbol routes before manager installation with
-  `unsupported_armv7_late_symbol_hooking`. This covers AAudio, OpenSL ES, tinyalsa,
-  native `AudioRecord`, and libc-read. Thumb-2 / IT-block relocation is unsafe and
-  untested, and Zygisk API v3 is not a late-load substitute: its API ends after
-  specialization, while its PLT commit applies to ELFs already loaded in memory and
-  clears the registrations. Echidna receives authenticated policy after that callback,
-  so a complete, process-scoped PLT transaction cannot be installed safely. The LSPosed
-  Java/JNI route and official legacy preprocessor remain eligible because they do not
-  depend on this inline-symbol backend.
+- **armeabi-v7a** — **relocator implemented, host-proven, on-device device-gated**: it
+  builds and loads, and a real ARM32/Thumb-2 prologue relocator
+  (`runtime/armv7_instruction.h`, host-proven by `armv7_instruction_test.cpp`) now backs the
+  direct inline-symbol routes (AAudio, OpenSL ES, tinyalsa, native `AudioRecord`, libc-read).
+  `install()` attempts the route and the relocator fails closed per function on any prologue it
+  cannot provably relocate; on-hardware install/execution is device-gated
+  (`armv7_inline_relocation_host_proven_on_device_gated`). Zygisk API v3 is still not a late-load
+  substitute: its API ends after specialization, while its PLT commit applies to ELFs already
+  loaded in memory and clears the registrations, and Echidna receives authenticated policy after
+  that callback, so a complete, process-scoped PLT transaction cannot be installed safely. The
+  LSPosed Java/JNI route and official legacy preprocessor remain eligible through their separate
+  attachment boundaries.
 
 ## Authenticated policy v2 delivery
 

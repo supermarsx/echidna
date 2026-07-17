@@ -381,7 +381,7 @@ Current route expectations:
 | Native AudioRecord/libc normal-flow metadata | **Not implemented; developer contract only** |
 | Audio HAL / AudioFlinger transformation | **Unsupported injection boundary** |
 | x86_64 trampoline under real injection | Host harness verified; full current release injection NOT verified |
-| armv7 degrade behavior | Build/code-path covered; real armv7 runtime NOT verified |
+| armv7 direct-route relocator | Host-proven (relocation harness + `libechidna.so` links under NDK); on-device execution device-gated |
 
 The full matrix and a step-by-step reproduce-on-real-device procedure are in
 [Verification](verification.md).

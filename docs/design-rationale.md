@@ -113,7 +113,7 @@ arm64-v8a, armeabi-v7a, and x86_64; zero were being produced correctly.
 way the trampoline code (which is inherently architecture-specific — see
 [Architecture](architecture.md#multi-abi-hooking)) can be compiled and shipped for
 each target. arm64-v8a is the locked primary; x86_64 is fully supported; armv7
-degrades gracefully rather than shipping unsafe relocation.
+now has a host-proven ARM32/Thumb-2 prologue relocator, with on-device execution device-gated.
 
 ## Why fail-closed security
 
