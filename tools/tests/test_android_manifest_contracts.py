@@ -102,8 +102,20 @@ class AndroidManifestContractsTest(unittest.TestCase):
                 root = ET.parse(manifest).getroot()
                 permissions = self._permissions(root)
                 self.assertNotIn("android.permission.QUERY_ALL_PACKAGES", permissions)
-                self.assertNotIn("android.permission.RECORD_AUDIO", permissions)
                 self.assertEqual([], root.findall("queries/provider"))
+
+        # RECORD_AUDIO must never leak into the HEADLESS surfaces: the LSPosed shim
+        # and the control service only hold it in their debug (session-proof) source
+        # sets, verified separately above. The companion app, by contrast, ships the
+        # Lab tab, which records the device's OWN microphone in-app to run the local
+        # DSP engine on the user's voice — a deliberate, runtime-granted permission.
+        for headless in (SHIM_MAIN_MANIFEST, SERVICE_MAIN_MANIFEST):
+            with self.subTest(manifest=headless.relative_to(REPO_ROOT)):
+                headless_permissions = self._permissions(ET.parse(headless).getroot())
+                self.assertNotIn("android.permission.RECORD_AUDIO", headless_permissions)
+
+        app_permissions = self._permissions(ET.parse(APP_MANIFEST).getroot())
+        self.assertIn("android.permission.RECORD_AUDIO", app_permissions)
 
         shim_queries = ET.parse(SHIM_MAIN_MANIFEST).getroot().findall("queries")
         self.assertEqual(1, len(shim_queries))
