@@ -174,6 +174,12 @@ apply_sepolicy() {
     magiskpolicy --live "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }" 2>/dev/null || true
     magiskpolicy --live "allow audioserver echidna_controller_spki_file file { getattr open read }" 2>/dev/null || true
     magiskpolicy --live "allow hal_audio_server echidna_controller_spki_file file { getattr open read }" 2>/dev/null || true
+    # Trusted-publisher UID resolution: the module reads /data/system/packages.list
+    # (packages_list_file) from the forking zygote during preAppSpecialize to resolve
+    # the companion UID the profile-sync socket authenticates. Stock policy denies
+    # zygote this read, so profile sync stays disabled and no app is admitted. Keep
+    # in sync with magisk/sepolicy.rule.
+    magiskpolicy --live "allow zygote packages_list_file file { getattr open read }" 2>/dev/null || true
 }
 
 prepare_effect_trust() {

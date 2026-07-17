@@ -59,3 +59,14 @@ allow hal_audio_server echidna_telemetry_key_file file { getattr open read }
 # a distinct type so neither trust input can inherit the other's file contract.
 allow audioserver echidna_controller_spki_file file { getattr open read }
 allow hal_audio_server echidna_controller_spki_file file { getattr open read }
+
+# Trusted-publisher UID resolution. During preAppSpecialize the module still runs
+# in the forking zygote (u:r:zygote:s0) and reads the root/system-owned package
+# registry /data/system/packages.list (packages_list_file) to resolve the
+# companion's kernel UID — the identity the negotiated v2/v3 profile-sync socket
+# authenticates against. Stock policy denies zygote this read, so without the
+# grant the publisher UID never resolves ("trusted publisher UID unresolved;
+# profile sync disabled") and no app is ever admitted, even after the shared
+# config/telemetry regions above propagate. Read-only; the registry is never
+# written. Keep in sync with post-fs-data.sh apply_sepolicy().
+allow zygote packages_list_file file { getattr open read }
