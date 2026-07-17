@@ -95,6 +95,11 @@ Intended module failsafes are documented for users and release testers:
 - Treat the automatic boot watchdog as a last-resort guard, not as a substitute for knowing how to
   disable the module yourself.
 
+**Already bootlooping?** Follow the step-by-step recovery ladder in
+[Recovering from a bootloop](docs/recovery.md) — boot with all modules off, create an Echidna disable
+marker, or, as a last resort, `fastboot flash boot boot.img` to remove Magisk (method contributed by
+[issue #17](https://github.com/supermarsx/echidna/issues/17)).
+
 ## Features
 
 | Area | Capabilities |
@@ -255,6 +260,7 @@ The full documentation site is built with MkDocs Material and published to
 | Design rationale | [design-rationale.md](docs/design-rationale.md) |
 | Why this is hard to build | [why-hard.md](docs/why-hard.md) |
 | Build & install | [build-install.md](docs/build-install.md) |
+| Recovering from a bootloop | [recovery.md](docs/recovery.md) |
 | DSP & effects reference | [dsp-effects.md](docs/dsp-effects.md) |
 | Screenshots gallery | [screenshots.md](docs/screenshots.md) |
 | Comparison vs alternatives | [comparison.md](docs/comparison.md) |
