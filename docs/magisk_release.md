@@ -50,6 +50,10 @@ Intended disable paths:
   while disabled, reinstall the trusted app/module pair, then reboot. Never replace a pin under a
   live audio service.
 
+For a step-by-step recovery ladder once a device is already bootlooping — safe-mode/all-modules-off
+boot, the disable markers above, a `fastboot flash` of a stock `boot.img` (removes Magisk), and a
+clean Magisk reinstall — see [Recovering from a bootloop](recovery.md).
+
 The install path should be loud about compatibility before reboot. Hard requirements should abort
 the install where they are known locally, while device-compatibility signals should alert without
 pretending to prove success. The checks to surface include:

@@ -50,6 +50,10 @@ unavailable, `/cache` or `/metadata` is absent or inaccessible, another module b
 boot, or the device has vendor-specific recovery behavior. Treat every install as experimental and
 device-specific.
 
+If the device has already stopped booting, see **[Recovering from a bootloop](recovery.md)** for a
+least-invasive-first recovery ladder (all-modules-off boot → disable markers → `fastboot flash` of a
+stock `boot.img` → clean Magisk reinstall).
+
 ## 1. Root is required — there is no rootless mode
 
 Echidna hooks the capture path **inside** the target app's process. Android gives normal

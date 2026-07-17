@@ -279,6 +279,8 @@ routes are still **device-gated**.
     `/cache/echidna-disable`, and `/metadata/echidna-disable`. The automatic
     boot watchdog is intended to disable Echidna after repeated boots that do
     not reach the late-start service, but it must not be your only recovery plan.
+    If the device is already bootlooping, follow
+    [Recovering from a bootloop](recovery.md).
 
 !!! warning "⚠️ Install guard expectations"
     Before a release is treated as safe to flash on hardware, the install path
