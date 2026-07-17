@@ -130,6 +130,20 @@ class EchidnaControlService : Service() {
             dispatchPrivileged { privilegedController.uninstallModule() }
         }
 
+        override fun disableModule(): Boolean {
+            // Synchronous so the installer can gate on the result: a failing disable must abort the
+            // flow before the module op rather than silently continue (unload-first fail-safe).
+            return safeBinder("disable module", false) {
+                privilegedController.disableModule()
+            }
+        }
+
+        override fun rebootDevice(): Boolean {
+            return safeBinder("reboot device", false) {
+                privilegedController.rebootDevice()
+            }
+        }
+
         override fun refreshStatus(): String {
             // Synchronous refresh so the caller reads a fresh combined status.
             return safeBinder("refresh status", fallbackStatusJson("status refresh failed")) {

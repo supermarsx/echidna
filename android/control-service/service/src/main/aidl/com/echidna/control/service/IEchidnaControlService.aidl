@@ -7,6 +7,13 @@ import com.echidna.control.service.IEchidnaTelemetryListener;
 interface IEchidnaControlService {
     void installModule(String archivePath);
     void uninstallModule();
+    // Unload-first support: a live Zygisk module cannot be hot-unloaded, so it must be
+    // disabled (Zygisk stops loading it on the next boot) before the module op + reboot.
+    // Writes the Magisk 'disable' marker (/data/adb/modules/echidna/disable); returns true
+    // only when the marker is confirmed present. Fail-closed so callers can abort honestly.
+    boolean disableModule();
+    // Best-effort privileged reboot to complete the load/unload. Returns true if dispatched.
+    boolean rebootDevice();
     // Forces a privileged status refresh and returns the fresh combined status
     // JSON (module + SELinux + audio-stack). See getModuleStatus for the schema.
     String refreshStatus();

@@ -4,6 +4,7 @@ import android.util.Log
 
 private const val PRIV_TAG = "EchidnaPriv"
 private const val MODULE_ID = "echidna"
+private const val MODULE_DIR = "/data/adb/modules/$MODULE_ID"
 private const val ZYGISK_NEXT_MODULE_ID = "zygisksu"
 private const val REZYGISK_MODULE_ID = "rezygisk"
 
@@ -58,6 +59,53 @@ class PrivilegedController(
         }
         Log.i(PRIV_TAG, "Requested Magisk installation from $moduleArchivePath")
         return refreshStatus()
+    }
+
+    /**
+     * Writes the Magisk `disable` marker so Zygisk stops loading the module on the next boot. A
+     * live Zygisk module cannot be hot-unloaded, so this is the unload-first step that both the
+     * install (clean-slate before overwrite) and uninstall flows run before touching the module.
+     * Returns true only when the marker is confirmed present, so a failing disable can abort the
+     * flow honestly instead of leaving the module active-but-being-removed.
+     */
+    fun disableModule(): Boolean {
+        // Guard on the module directory: touch fails if the module was never installed. When it
+        // does not exist there is nothing loaded to disable, which is a successful no-op.
+        val result = rootExecutor.runCommand(
+            listOf(
+                "sh",
+                "-c",
+                "if [ -d $MODULE_DIR ]; then touch $MODULE_DIR/disable && " +
+                    "test -f $MODULE_DIR/disable; else exit 0; fi",
+            ),
+        )
+        if (!result.success) {
+            Log.w(PRIV_TAG, "Failed to write module disable marker: ${result.stderr}")
+            updateStatus(lastError = "disable failed: ${result.stderr}")
+        } else {
+            Log.i(PRIV_TAG, "Wrote Magisk disable marker for $MODULE_ID")
+        }
+        return result.success
+    }
+
+    /**
+     * Best-effort privileged reboot to complete the load/unload. Prefers the graceful
+     * `svc power reboot`, falling back to the plain `reboot` binary. The process may be torn down
+     * mid-command as the system goes down, so the return value is advisory only.
+     */
+    fun rebootDevice(): Boolean {
+        val graceful = rootExecutor.runCommand(listOf("svc", "power", "reboot"))
+        if (graceful.success) {
+            Log.i(PRIV_TAG, "Requested reboot via svc power reboot")
+            return true
+        }
+        val fallback = rootExecutor.runCommand(listOf("reboot"))
+        if (fallback.success) {
+            Log.i(PRIV_TAG, "Requested reboot via reboot binary")
+        } else {
+            Log.w(PRIV_TAG, "Reboot request failed: ${fallback.stderr}")
+        }
+        return fallback.success
     }
 
     fun uninstallModule(): ModuleStatus {

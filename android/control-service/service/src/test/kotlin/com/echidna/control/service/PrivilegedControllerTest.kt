@@ -39,6 +39,28 @@ class PrivilegedControllerTest {
     }
 
     @Test
+    fun `disableModule writes the Magisk disable marker and reports success`() {
+        val runner = DisableRunner(disableSucceeds = true)
+        val controller = PrivilegedController(runner, SelinuxCompatChecker(runner))
+
+        val disabled = controller.disableModule()
+
+        assertTrue(disabled)
+        val command = runner.commands.joinToString(" ")
+        // The disable step touches the Magisk disable marker so Zygisk stops loading the module.
+        assertTrue(command.contains("touch"))
+        assertTrue(command.contains("/data/adb/modules/echidna/disable"))
+    }
+
+    @Test
+    fun `disableModule reports failure so the caller can abort honestly`() {
+        val runner = DisableRunner(disableSucceeds = false)
+        val controller = PrivilegedController(runner, SelinuxCompatChecker(runner))
+
+        assertFalse(controller.disableModule())
+    }
+
+    @Test
     fun `reports zygisk enabled from standalone Zygisk Next module`() {
         val runner = FakeCommandRunner(
             magiskSqlite = CommandResult(true, "value=0", ""),
@@ -48,6 +70,27 @@ class PrivilegedControllerTest {
 
         assertTrue(status.magiskModuleInstalled)
         assertTrue(status.zygiskEnabled)
+    }
+}
+
+private class DisableRunner(
+    private val disableSucceeds: Boolean,
+) : PrivilegedCommandRunner {
+    val commands = mutableListOf<String>()
+
+    override fun runCommand(command: String): CommandResult {
+        commands += command
+        return CommandResult(false, "", "", 1)
+    }
+
+    override fun runCommand(arguments: List<String>): CommandResult {
+        val joined = arguments.joinToString(" ")
+        commands += joined
+        return when {
+            arguments.firstOrNull() == "sh" && joined.contains("/disable") ->
+                CommandResult(disableSucceeds, "", if (disableSucceeds) "" else "touch: permission denied", if (disableSucceeds) 0 else 1)
+            else -> CommandResult(false, "", "", 1)
+        }
     }
 }
 
