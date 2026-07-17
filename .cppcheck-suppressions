@@ -3,10 +3,18 @@ useStlAlgorithm:native/dsp/tests/effects_test.cpp:198
 constParameterPointer:native/zygisk/src/hooks/opensl_hook_manager.cpp:203
 constParameterPointer:native/zygisk/src/hooks/tinyalsa_hook_manager.cpp:58
 constParameterPointer:native/zygisk/src/hooks/tinyalsa_hook_manager.cpp:104
-useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:378
-useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:505
-useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:513
-useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:521
+useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:379
+useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:506
+useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:514
+useStlAlgorithm:native/zygisk/src/runtime/inline_hook.cpp:522
 useStlAlgorithm:native/zygisk/src/runtime/profile_sync_server.cpp:296
 useStlAlgorithm:native/zygisk/src/runtime/profile_sync_server.cpp:313
 useStlAlgorithm:native/zygisk/tests/dsp_smoke_test.cpp:152
+# Read-only fake-engine / callback-buffer pointers in the DSP callback-route and
+# stream-handle registry tests. cppcheck 2.13 flags these local pointers as
+# const-declarable; they are deliberately plain in the fixtures.
+constVariablePointer:native/zygisk/tests/aaudio_stream_registry_test.cpp:633
+constVariablePointer:native/zygisk/tests/aaudio_stream_registry_test.cpp:708
+constVariablePointer:native/zygisk/tests/stream_handle_registry_test.cpp:505
+constVariablePointer:native/zygisk/tests/stream_handle_registry_test.cpp:523
+constVariablePointer:native/zygisk/tests/stream_handle_registry_test.cpp:545
