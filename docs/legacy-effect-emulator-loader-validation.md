@@ -4,6 +4,14 @@ This record covers the Android 13 legacy-HIDL effect loader boundary required by
 `spec.md`. It must be read with the [developer guide](developer_readme.md) and the
 [signing and trust contract](signing.md).
 
+!!! success "What this run proves — and what it does not"
+    **Proven (one API 33 x86_64 emulator, SELinux enforcing):** the registered legacy-HIDL factory
+    can load and describe the exact Echidna `AELI` library, and a clean rollback restores stock
+    state — with zero relevant AVC denials.
+    **Not proven:** Magisk install/boot ordering, any OEM device, controller-SPKI access, capability
+    verification, effect creation/enablement, `AudioRecord` attachment, mic input, DSP mutation, or
+    transformed audio. This is a **loader-boundary** proof only (see [Verification](verification.md)).
+
 ## Scope
 
 Validation ran on 2026-07-15 using only the disposable `echidna_e2e33` AVD:

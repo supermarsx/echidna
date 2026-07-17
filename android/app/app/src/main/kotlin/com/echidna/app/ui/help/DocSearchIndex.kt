@@ -176,6 +176,7 @@ class DocSearchIndex(docs: List<HelpDoc>) {
                 block.children.forEach { appendBlockText(it, sb) }
             }
             is MarkdownBlock.Heading -> sb.append(block.text).append('\n') // nested headings (e.g. in admonitions)
+            is MarkdownBlock.Image -> if (block.alt.isNotBlank()) sb.append(block.alt).append('\n') // caption is searchable
             MarkdownBlock.HorizontalRule -> {}
         }
     }

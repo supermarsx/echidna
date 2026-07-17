@@ -5,6 +5,14 @@ module, this page walks through recovery options from the **least invasive** to
 the **most invasive**. Try the gentlest one that your device supports and that
 actually brings the phone back, then stop.
 
+!!! note ":material-shield-alert: This is the situation the setup wizard made you acknowledge"
+    The [first-run wizard](getting-started.md#step-4-before-you-install-a-root-module)
+    requires you to tick *"I understand how to recover if a root module bootloops
+    my device"* before you can proceed — it is the one step you cannot skip. This
+    page is that recovery knowledge. If you flashed anyway without a plan, read it
+    now, and see [Limitations](limitations.md) for why the failsafes are guardrails,
+    not guarantees.
+
 !!! danger "⚠️ These are guardrails, not guarantees"
     Echidna is **experimental** software for rooted-device power users. The
     failsafe markers and boot watchdog below are *intended* to help a prepared

@@ -14,6 +14,13 @@ This page is the reproducible, end-to-end guide to building Echidna's shippable 
 installing them on a device. A successful build, APK install, or Magisk zip install is not a
 guarantee that capture hooks will work on the target phone.
 
+!!! tip ":material-rocket-launch: New to the app? Start with the wizard"
+    Once the companion APK is installed, the app opens a
+    [13-step first-run setup wizard](getting-started.md) that runs a compatibility
+    probe, walks you through the recovery acknowledgement, and detects your engine
+    state honestly. You can also hear the DSP transform locally — no root — in
+    [the Lab](usage-lab.md) before you ever flash anything.
+
 | Artifact | Produced by | What it is |
 | -------- | ----------- | ---------- |
 | `app-debug.apk` / `app-release.apk` | Gradle | The companion app (UI + in-app control service + `libechidna_control_jni.so`). |
@@ -311,6 +318,12 @@ adb install -r android/app/app/build/outputs/apk/debug/app-debug.apk
 Launch it and accept the consent/legal warnings. On an unrooted device the app runs, all
 screens render, and Diagnostics honestly reports **module not active** (the native engine is
 not present without the Magisk module).
+
+![Echidna Install-engine screen on an unrooted device showing the engine as not installed](assets/screenshots/24-install-engine.png)
+
+*The guided Install-engine screen on an unrooted emulator. It detects and reports
+state honestly — the engine reads **not installed** because nothing has been
+flashed. Installing the module is the device-gated step below.*
 
 ### 2. Flash the Magisk module *(device-gated — needs root)*
 

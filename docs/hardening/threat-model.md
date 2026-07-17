@@ -69,7 +69,52 @@ sensitivity.
 ## 3. Trust boundaries
 
 Each row is one boundary a request or artifact crosses, the **existing control**
-(with the file it lives in), and the **residual / open risk**.
+(with the file it lives in), and the **residual / open risk**. The map below
+places the actors (T1–T10) against the boundaries they cross; solid edges are
+authenticated/controlled paths, dashed edges are the residual/DoS surfaces called
+out in the tables:
+
+```mermaid
+flowchart LR
+    subgraph untrusted["Untrusted / lower-trust"]
+        T1[T1 malicious app]
+        T4[T4 malicious module]
+        T5[T5 adb / shell]
+        T8[T8 CI / supply chain]
+    end
+    subgraph app["Companion app UID"]
+        UI[Companion UI]
+        SVC["EchidnaControlService<br/><small>exported=false, UID-gated</small>"]
+        POL["PolicySnapshotService<br/><small>exported, read-only, authenticated</small>"]
+    end
+    subgraph engine["Injected engine"]
+        ZY[Zygisk libechidna.so]
+        DSP[DSP + audio thread]
+    end
+    subgraph atrest["Trust inputs at rest"]
+        SE["SELinux-labelled config /<br/>telemetry / keys"]
+    end
+
+    UI -->|in-process Binder| SVC
+    SVC -->|installModule / control| ZY
+    SVC -.->|"T7: compromised companion<br/>inherits app authority"| ZY
+    T1 -->|authenticated, UID-scoped| POL
+    T4 -.->|"bind-first DoS on<br/>single-holder socket"| ZY
+    ZY -->|SO_PEERCRED verified<br/>profile-sync AF_UNIX| SVC
+    ZY --> DSP
+    T1 -.->|"enforcing-SELinux propagation<br/>device-gated"| SE
+    ZY -->|narrow labels| SE
+    T8 -.->|"unattested build inputs"| ZY
+
+    classDef bad fill:#7f1d1d,stroke:#b71c1c,color:#fff;
+    classDef ok fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    class T1,T4,T5,T8 bad;
+    class SVC,POL,ZY ok;
+```
+
+*Dashed edges are this model's honest residuals: the compromised-companion
+inheritance (§3.1/§3.4), the profile-sync single-holder DoS (§3.1), device-gated
+enforcing-SELinux propagation (§3.1), and unattested supply chain (§3.4).*
 
 ### 3.1 On-device IPC and policy
 
@@ -85,7 +130,7 @@ Each row is one boundary a request or artifact crosses, the **existing control**
 
 | Boundary | Actors | Existing control | File(s) | Residual / open | Status |
 | --- | --- | --- | --- | --- | --- |
-| **Telemetry producer ↔ verifier (wire)** | T1, T2, T10 | **Strict exact-key-set validator**: root + delta key sets must match exactly, `schemaVersion` pinned `2..2`, RFC-8259 pre-validation, numeric range checks, process-name grammar, per-peer rate limit, TTL + generation + monotonic-sequence staleness; `processing` state must carry `mutations>0`+fresh mutation | `AuthenticatedTelemetry.kt` (:125/:144 `keysSet()==`, :126 schema pin, `StrictJsonValidator`, `PeerTelemetryRateLimiter`, `AuthenticatedTelemetryStore`) | The validator is deliberately unforgiving — appending keys rejects **every** frame. This is exactly why §18-F2 (richer wire schema) needs a coordinated v3, not a loosened check. See §3.4 (t8-e2). | Implemented |
+| **Telemetry producer ↔ verifier (wire)** | T1, T2, T10 | **Strict exact-key-set validator**: root + delta key sets must match exactly, `schemaVersion` accepted `2..3` (each version validated against its **own** exact key-set), RFC-8259 pre-validation, numeric range checks, process-name grammar, per-peer rate limit, TTL + generation + monotonic-sequence staleness; `processing` state must carry `mutations>0`+fresh mutation | `AuthenticatedTelemetry.kt` (`keysSet()==` per-version, `schemaVersion` `2..3`, `StrictJsonValidator`, `PeerTelemetryRateLimiter`, `AuthenticatedTelemetryStore`) | The validator is deliberately unforgiving — appending keys to a *given* version rejects **every** frame. §18-F2 (richer wire schema) landed as a **coordinated schema-v3 superset** (t8-e2), not a loosened check: v3 adds `bypasses`/`installEvents`/`installFailures`/`installed` and is validated against its own strict key-set. See [evidence-state-model §7-F2](evidence-state-model.md#7-findings). | Implemented |
 | **Effect host ↔ telemetry-proof key** | T2, T9 | HMAC-SHA256 over the telemetry proof with **constant-time compare** (`CRYPTO_memcmp`); key is `echidna_telemetry_key_file` root:audio 0440, readable only by `audioserver`/`hal_audio_server` | `telemetry_protocol.cpp` (`HMAC(EVP_sha256())` :285, `ConstantTimeEqual`/`CRYPTO_memcmp` :100-105, verify :306/:317), `magisk/sepolicy.rule` (:24,:54-55) | Depends on the SELinux label restricting the key to audio hosts holding on-device (Device-gated for enforcing propagation). Constant-time compare mitigates timing oracles. | Implemented |
 | **Capability signer ↔ effect / preprocessor** | T2, T4, T9 | ECDSA-over-SPKI capability verification (BoringSSL), bounded SPKI size, explicit authorize flag, time-bounded capability; controller SPKI on its own `echidna_controller_spki_file` type (0444) | `capability_protocol.cpp` (`kMaximumSpkiBytes`, verify path), `magisk/sepolicy.rule` (:26,:60-61) | The legacy-preprocessor **attach/enable** manager that would consume these capabilities is itself **Open** (§7 checklist); the crypto exists, the session-attach caller does not. | Partial |
 
@@ -103,7 +148,7 @@ Each row is one boundary a request or artifact crosses, the **existing control**
 
 | Boundary | Actors | Existing control | File(s) | Residual / open | Status |
 | --- | --- | --- | --- | --- | --- |
-| **In-app installer ↔ filesystem / root** | T7 | *(landing via t8-e1)* Guided install flow: detect Magisk/root → install bundled zip via `su`/`magisk --install-module` → reboot prompt → confirm active. Runs only with the user's root grant. | t8-e1 (installer UI + AIDL `installModule`/`uninstallModule`) — **In progress** | New privileged AIDL surface reachable by a compromised companion (T7); installer must fail closed when Magisk absent and must not widen the Binder UID gate. Reconcile once t8-e1 lands + is gated. | Open (In progress, t8-e1) |
+| **In-app installer ↔ filesystem / root** | T7 | Guided install flow: detect Magisk/root → stage + install bundled/picked zip via `magisk --install-module` → unload-first (master-off + Magisk disable marker) → reboot prompt → confirm via status poll. Runs only with the user's root grant; fails closed when Magisk is absent. The new privileged AIDL setters (`installModule`/`uninstallModule`) stay **same-UID-only** — `EchidnaControlService` remains `exported="false"`, so they are no more reachable than the existing control commands. | `EchidnaControlService.kt` (installer methods, same UID gate as control commands), `ui/install/**`, `EngineModuleArchive`; GATE-3 security review | A compromised companion (T7) inherits the app's authority by design — the same residual as every control method (§3.1); the installer did **not** widen the Binder UID gate. Runtime signature verification of the bundled zip on-device is not claimed (see next row). | Implemented (t8-e1) |
 | **Installer ↔ bundled module zip** | T8 | Deterministic Magisk zip with verified exact-file layout; single module id `echidna`; per-ABI payloads bound to trusted NDK outputs | `tools/build_magisk_module.sh`, `docs/magisk_release.md`, checklist §15 | Zip is only as trustworthy as the CI that built it (T8). Runtime signature verification of the bundled zip on-device is not claimed. | Partial |
 | **Release workflow ↔ secrets** | T8 | Fail-closed signing preflight, pinned non-debug cert verification, temporary-keystore cleanup, tag/dispatch-gated publish; keystore never committed | `tools/check_release_signing.py`, `docs/signing.md`, checklist §21 | Provision a real trusted plugin key; enable R8 only after keep-rules proven (both `todo.md`). CI trust is assumed, not attested (no reproducible-build attestation / SLSA). | Partial |
 | **Effect host ↔ trust inputs at rest (SELinux)** | T1, T9 | Narrow per-type labels: config (app RO), telemetry (app RW), telemetry-key (audio-host RO 0440), controller-SPKI (0444); no private-service offset staging; module verifier checks the read-only trust-input label lifecycle | `magisk/sepolicy.rule`, checklist §14 | Enforcing-SELinux propagation to hooked apps is Device-gated (§14). | Implemented (policy) / Device-gated (effect) |
@@ -142,9 +187,14 @@ A compact cross-check of the classic categories against the boundaries above.
 5. **libc `read` route RT residual** (`fstat`+`readlink` classification) — fixed on host
    in t9 via a per-fd verdict cache (off the hot path); opt-in only; on-device
    descriptor-reuse timing device-gated ([rt-safety FINDING-1](rt-safety.md#finding-1-libc-read-route-ran-fstat-readlink-on-the-hot-path-resolved-per-fd-verdict-cache-t9)).
-6. **Widening AIDL surface via the in-app installer** (t8-e1, in progress) — a new
-   privileged path that a compromised companion (T7) inherits; must fail closed
-   without Magisk and keep the UID gate.
+6. **In-app installer AIDL surface** (t8-e1, landed) — the guided installer added
+   privileged `installModule`/`uninstallModule` methods. These a compromised
+   companion (T7) inherits, but they are **same-UID-only** (`EchidnaControlService`
+   stays `exported="false"`) — the installer did **not** widen the Binder UID gate,
+   and it fails closed without Magisk. Residual is the *existing* §3.1 one (a
+   compromised companion has the app's authority), not a new external surface.
+   On-device runtime signature verification of the bundled zip is still not
+   claimed (§3.4).
 7. **Supply-chain trust is assumed, not attested** — no reproducible-build
    attestation / provenance signing beyond the signing preflight (T8).
 

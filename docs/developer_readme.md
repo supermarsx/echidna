@@ -347,6 +347,20 @@ Runtime tuning is available via environment variables:
 
 Bypassed callbacks set telemetry flags and increment XRuns in shared memory for diagnostics.
 
+### Telemetry wire schema (v2 / v3)
+
+The realtime accumulator records lock-free per-route edge counters (`blocks`, `frames`, `mutations`,
+`bypasses`, `failures`, `installEvents`, `installFailures`) plus a latched `installed` level, and
+`telemetry_socket_exporter.cpp` serializes them to the authenticated wire. As of the **schema-v3**
+evolution, the exporter emits a strict **superset** of v2: the v3 `deltas` object adds `bypasses` /
+`installEvents` / `installFailures`, and `root` adds `installed`, with `schemaVersion` 3. The
+controller's `AuthenticatedTelemetry.kt` accepts **both** v2 and v3, each against its **own** exact
+key-set (`schemaVersion` `2..3`); unknown or mixed keys are still rejected, and the peer-cred /
+published-identity / anti-replay checks are untouched. The strict validator was **not** weakened to
+carry the richer schema. The DSP path itself never stores PCM — only frame *counts*. See
+[Evidence & State Model](hardening/evidence-state-model.md) for the non-conflation guarantees the
+counters exist to preserve.
+
 ## Control Service Binder Surface
 
 The control service exposes `IEchidnaControlService` over Binder. Because the service is hosted
@@ -503,6 +517,20 @@ path now exists for Android 14/15; see
 does not make an SDK-level compatibility verdict;
 runtime HIDL and effect evidence determine eligibility. The switch is permission, not proof of
 effect load, enablement, linker/label access, enforced-SELinux operation, or transformed audio.
+
+## Guides & troubleshooting
+
+For task-oriented walkthroughs that build on this reference:
+
+- **[Installer guide](installer-guide.md)** — the guided in-app engine installer (detect Magisk/
+  Zygisk → stage → unload-first + disable → reboot → confirm), including the honest device-gated
+  last mile and the bundled-zip-vs-picker split.
+- **[Troubleshooting & FAQ](troubleshooting-faq.md)** — the common failure modes and their fixes:
+  why an unrooted device shows *Engine Not Installed*, the unload-first + reboot-required rule, Lab
+  reporting *engine unavailable* on a lite build, the armv7 relocator / libc-read RT-cache notes,
+  telemetry schema-v3, and the hidden/repackaged-Magisk *Open Magisk* fallback.
+- **[Recovering from a bootloop](recovery.md)** — the least-invasive-first recovery ladder if a
+  flash leaves the device not booting.
 
 ## Status: verified vs. needs a device
 

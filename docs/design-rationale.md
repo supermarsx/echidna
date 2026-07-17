@@ -56,6 +56,36 @@ synchronous call so it drops straight into any capture callback the hook chain
 intercepts. A managed-language engine on the callback thread would risk
 non-deterministic pauses precisely where determinism matters most.
 
+The engine offers two paths off the same C ABI. The **low-latency** path runs the whole chain
+in-place inside the capture callback; the **hybrid** path hands heavier transforms to a worker
+across a lock-free ring buffer, with an overrun watchdog that trips to pass-through rather than
+glitch. Either way the DSP flow through the effect chain is the same block of synchronous work:
+
+```mermaid
+flowchart LR
+    IN["Captured PCM block<br/>(sr · channels · frames)"] --> MODE{"Latency mode"}
+    MODE -->|"Low-Latency"| CB["Process in capture callback<br/>(in place)"]
+    MODE -->|"Balanced / High-Quality"| RING["Lock-free ring buffer<br/>→ worker thread"]
+    subgraph CHAIN["echidna_process_block → dsp.process() — the effect chain"]
+        direction LR
+        NG["Noise gate"] --> EQ["EQ"] --> COMP["Compressor / AGC"] --> PITCH["Pitch shift"] --> FORMANT["Formant shift"] --> AT["Auto-Tune"] --> REV["Reverb"] --> MIX["Dry/Wet mix"]
+    end
+    CB --> CHAIN
+    RING --> CHAIN
+    CHAIN --> WD{"Overrun / xrun<br/>watchdog"}
+    WD -->|"within block deadline"| OUT["Processed PCM written in place"]
+    WD -->|"risk of overrun"| BYP["Fail-safe pass-through<br/>(auto-bypass on repeat)"]
+
+    classDef safe fill:#12492f,stroke:#1f8f5f,color:#eafff4;
+    class OUT,BYP safe;
+```
+
+!!! note "Why this shape"
+    The chain is a single synchronous call so it drops into any capture callback unchanged. The
+    watchdog exit on the right is the real-time contract: a voice-interception tool must *never*
+    glitch a foreign app's audio, so overrun resolves to clean pass-through, and a process that
+    repeatedly overruns has its hook auto-bypassed. See [Why It's Hard §3](why-hard.md#3-a-hard-real-time-latency-budget--while-doing-nontrivial-dsp).
+
 ## Why the in-app service topology (single APK)
 
 **Constraint:** the original design bound the companion app to a **phantom
@@ -120,6 +150,29 @@ now has a host-proven ARM32/Thumb-2 prologue relocator, with on-device execution
 The security posture is **default-deny at every layer**, because the failure mode
 of a voice-interception tool is severe: a hook that runs when it shouldn't
 silently rewrites a user's microphone in an app they didn't authorize.
+
+Every ambiguous input resolves toward the non-acting branch. The diagram below traces one
+`AudioRecord.read` (or native capture block) through the gates: any missing, stale, or unverifiable
+signal ends at **preserve original bytes**, never at "transform and hope".
+
+```mermaid
+flowchart TD
+    READ(["Capture block / AudioRecord.read"]) --> SNAP{"Policy snapshot<br/>readable & parseable?"}
+    SNAP -->|"No snapshot / unparseable / not yet bound"| DENY
+    SNAP -->|"Yes"| GATES{"Global on · outside panic ·<br/>whitelisted true · owner matches?"}
+    GATES -->|"Any false / absent"| DENY
+    GATES -->|"All true"| GEN{"Generation permit<br/>still current?"}
+    GEN -->|"Revoked mid-read"| DENY
+    GEN -->|"Current"| PLUG{"Plugin signature<br/>(Ed25519) verifies?"}
+    PLUG -->|"No key / unverifiable / BoringSSL absent"| DENY
+    PLUG -->|"Verified"| COMMIT["Commit transformed bytes"]
+    DENY["Preserve original bytes<br/>+ original read result"]
+
+    classDef deny fill:#5b1f1f,stroke:#b5473f,color:#ffecec;
+    classDef ok fill:#12492f,stroke:#1f8f5f,color:#eafff4;
+    class DENY deny;
+    class COMMIT ok;
+```
 
 - **Whitelist default-deny.** The default profile snapshot is `empty()` — empty
   whitelist, global off. Processing is admitted **only** when the global gates pass, the specific

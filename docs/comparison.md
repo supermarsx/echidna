@@ -44,6 +44,13 @@ unsupported injection boundaries (see [Architecture](architecture.md)). Nearly a
 alternatives below target the **playback path** or run on a PC. That is the core reason
 they are not substitutes for one another.
 
+<figure markdown>
+  ![Echidna Effects editor showing per-app pitch and formant controls for the outgoing microphone chain.](assets/screenshots/03b-effects-pitch.png){ width="320" }
+  <figcaption>Echidna's effect chain acts on the <strong>outgoing microphone</strong> — real-time
+  pitch/formant per app. The playback-path tools compared below never touch this direction; a
+  desktop voice changer does, but only on a PC via a virtual mic device.</figcaption>
+</figure>
+
 ---
 
 ## Feature comparison

@@ -6,6 +6,20 @@ control service in-process. The optional Java fallback ships as a separate LSPos
 co-signing problem is moot: the old `signature`-level `BIND_CONTROL_SERVICE` permission has been
 removed as self-referential. This document covers how the release APKs are signed.
 
+!!! abstract "Trust model at a glance"
+    - :material-key-variant: **APK signing** — companion + shim signed with the release key;
+      `verify_android_artifacts.py` pins the certificate SHA-256 and rejects debug certs.
+    - :material-shield-lock: **Fail-closed hosting** — absent secrets *skip* publication; partial or
+      invalid material *fails*. No path ever ships a publishable debug-signed artifact.
+    - :material-fingerprint: **On-device trust bootstrap** — the module verifies the companion's
+      signer against the embedded pin before staging the controller SPKI and telemetry HMAC key.
+    - :material-file-sign: **Plugin signing** — third-party DSP `.so` plugins need a valid Ed25519
+      signature; verification is fail-closed when no trusted key or crypto backend is present.
+
+    Every one of these is verified at build/host level today; the on-device SELinux label and
+    transformed-audio evidence for the effect-trust path remain device-gated (see
+    [Verification](verification.md)).
+
 ## Distribution model
 
 Distribution is **root / sideload via Magisk only** — there is no Play Store channel. `compileSdk`

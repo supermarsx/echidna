@@ -24,6 +24,38 @@ itself aliases the app-owned capture buffer in place, which is safe for capture
 writing output and rejects non-finite output (`stream_handle_registry`,
 audited by `t6-e2`).
 
+The shared hot-path shape — nothing on it allocates, locks, blocks, or logs; every
+branch either transforms in a pre-allocated slot or fails **open** (original buffer
+byte-exact):
+
+```mermaid
+flowchart TD
+    cb([capture callback / read<br/>on the platform audio thread])
+    adm{acquireAdmission<br/><small>lock-free CAS, bounded</small>}
+    slot{acquireSlot<br/><small>fixed pre-allocated pool</small>}
+    dsp[DSP in-place on app buffer<br/><small>decode → process → finite-check → encode</small>]
+    finite{output finite<br/>and changed?}
+    ok[commit mutated buffer<br/>recordBlock kMutated]
+    passopen[leave buffer byte-exact<br/>fail-OPEN]
+    cb --> adm
+    adm -->|not admitted / revoked| passopen
+    adm -->|admitted| slot
+    slot -->|pool exhausted| passopen
+    slot -->|leased| dsp
+    dsp --> finite
+    finite -->|no / decline| passopen
+    finite -->|yes| ok
+
+    classDef safe fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    classDef open fill:#e65100,stroke:#ef6c00,color:#fff;
+    class ok safe;
+    class passopen open;
+```
+
+*Every non-happy branch lands on the amber **fail-open** node — the app's original
+audio is preserved, never silence and never a partial mutation. `recordBlock` on
+each outcome is a single lock-free atomic `fetch_add`.*
+
 ---
 
 ## Route-by-route table

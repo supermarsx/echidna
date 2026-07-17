@@ -28,6 +28,14 @@ sealed interface MarkdownInline {
      * resolution happen at render time via [HelpLinks].
      */
     data class Link(val children: List<MarkdownInline>, val destination: String) : MarkdownInline
+
+    /**
+     * `![alt](destination)` sitting *inside* a paragraph (i.e. alongside other text). A lone image on
+     * its own line is promoted to the block-level [MarkdownBlock.Image] instead; this inline variant
+     * covers the rarer case of an image mixed with surrounding prose, where it degrades to its [alt].
+     * [destination] is the raw target as written; resolution happens at render time.
+     */
+    data class Image(val alt: String, val destination: String) : MarkdownInline
 }
 
 /** One item of a bullet or ordered list. */
@@ -77,6 +85,15 @@ sealed interface MarkdownBlock {
         val children: List<MarkdownBlock>,
     ) : MarkdownBlock
 
+    /**
+     * A block-level image: `![alt](destination)` alone on its line. [destination] is the raw target as
+     * written in the source (relative to the doc, e.g. `assets/screenshots/14-help-tab.png`, or a
+     * remote URL). The renderer resolves it against the bundled Help assets and decodes PNG/WebP
+     * inline; SVG, remote `http(s)`, and missing/undecodable assets degrade to a captioned
+     * placeholder. [alt] doubles as the caption / content description.
+     */
+    data class Image(val alt: String, val destination: String) : MarkdownBlock
+
     object HorizontalRule : MarkdownBlock
 }
 
@@ -99,6 +116,7 @@ fun List<MarkdownInline>.plainText(): String = buildString {
             is MarkdownInline.Bold -> walk(node.children)
             is MarkdownInline.Italic -> walk(node.children)
             is MarkdownInline.Link -> walk(node.children)
+            is MarkdownInline.Image -> append(node.alt)
         }
     }
     walk(this@plainText)

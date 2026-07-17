@@ -42,6 +42,9 @@ release-device work.
 
 ## Start Here
 
+- [Getting Started](getting-started.md) - the 13-step first-run setup wizard, from
+  permissions and a compatibility probe to the mandatory recovery acknowledgement
+  and a hands-on Lab demo. Honest about what is and isn't installed.
 - [Verification](verification.md) - the proven host/emulator checks, the
   remaining device-gated items, and the rooted-device procedure for live hook
   validation.
@@ -52,6 +55,23 @@ release-device work.
   [spec sections 3-4][spec-3-4].
 - [Limitations](limitations.md) - root, SELinux, HAL, ABI, and duplicate hook-scope
   constraints to read before flashing.
+
+## Using Echidna
+
+The companion app is usable even on an unrooted device — you can explore every
+screen and hear the DSP transform locally in the Lab, while the interception
+engine honestly reports itself as **not installed**.
+
+- [The Lab](usage-lab.md) - hear and see the DSP transform locally (mic + test-tone
+  A/B), with **no root**. This is a local DSP proof, **not** interception.
+- [In-app Help & search](usage-help.md) - the whole doc set bundled in the app with
+  offline full-text search.
+- [Theming](usage-theming.md) - Light/Dark/System, Material You dynamic color
+  (Android 12+), and six curated accents.
+- [Widgets & Quick Settings](usage-widgets-quicksettings.md) - four home-screen
+  widgets and a Quick Settings tile, all with honest engine status.
+- [Alerts](usage-alerts.md) - live, advisory-only warnings about install, bridge,
+  and hardware conditions; dismissible or actionable.
 
 ## App And User Docs
 
@@ -86,11 +106,15 @@ release-device work.
 
 | Need | Read |
 | --- | --- |
+| "How do I set the app up the first time?" | [Getting Started](getting-started.md) |
+| "Can I hear it work without rooting?" | [The Lab](usage-lab.md) |
 | "Can I trust this build?" | [Verification](verification.md) |
 | "How do I build the APK and module?" | [Build & Install](build-install.md) |
 | "How does audio flow through the system?" | [Architecture](architecture.md) |
 | "What does the app look like today?" | [Screenshots](screenshots.md) |
 | "Which effects and presets exist?" | [DSP & Effects](dsp-effects.md) |
+| "How do I change the theme?" | [Theming](usage-theming.md) |
+| "What are those warnings in the app?" | [Alerts](usage-alerts.md) |
 | "How do I benchmark processing cost?" | [Performance Testing](performance-testing.md) |
 | "What will break on real devices?" | [Limitations](limitations.md) |
 | Build/topology/signing facts | [Developer Guide](developer_readme.md), [Signing](signing.md) |

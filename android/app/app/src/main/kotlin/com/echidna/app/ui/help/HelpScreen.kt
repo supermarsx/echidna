@@ -81,6 +81,7 @@ fun HelpScreen(
     } else {
         val doc = viewModel.doc(openDocId)
         HelpDocView(
+            docId = openDocId,
             docTitle = doc?.title ?: openDocId,
             markdown = doc?.markdown ?: "",
             highlight = state.highlight,
@@ -224,6 +225,7 @@ private fun DocIndexList(groups: List<HelpGroup>, onOpenDoc: (String) -> Unit) {
 
 @Composable
 private fun HelpDocView(
+    docId: String,
     docTitle: String,
     markdown: String,
     highlight: String?,
@@ -264,6 +266,7 @@ private fun HelpDocView(
             onLinkClick = onLinkClick,
             highlight = highlight,
             listState = listState,
+            docId = docId,
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         )
     }

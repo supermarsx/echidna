@@ -68,6 +68,12 @@ Two orthogonal knobs control the latency/quality trade-off.
 Ranges and defaults below are taken from the effect headers in `native/dsp/src/effects/` and
 the parameter reference in `spec.md`. "Default" is the value the parameter struct ships with.
 
+![Echidna Effects tab showing the per-stage effect chain controls](assets/screenshots/03-effects.png)
+
+*The Effects tab exposes each stage with an independent on/off toggle. A disabled
+stage passes audio through untouched. You can preview any preset's chain locally in
+[the Lab](usage-lab.md) — no root required.*
+
 ### 1. Noise Gate
 
 Attenuates signal below a threshold with soft attack/release and hysteresis to avoid chatter.
@@ -125,9 +131,16 @@ Shifts pitch with a granular (low-latency) or phase-vocoder (high-quality) backe
 Safe range is −6 … +6 st (a warning is shown beyond ±8); Low-Latency prefers ≤ ±4. When
 "preserve formants" is on, formant correction is delegated to the formant stage.
 
+![Echidna pitch-shift controls with the safe-range warning](assets/screenshots/03b-effects-pitch.png)
+
+*The Pitch stage. The UI warns beyond the safe range (±8 st) and, under
+Low-Latency, forces the granular backend to keep in-callback cost bounded.*
+
 ### 5. Formant Shift
 
-Alters perceived vocal-tract size independently of pitch.
+Alters perceived vocal-tract size independently of pitch. The
+[Pitch Shift screenshot above](#4-pitch-shift) also shows the formant-preserve
+control that ties these two stages together.
 
 | Parameter | Range | Default | Unit |
 | --------- | ----- | ------- | ---- |
@@ -188,6 +201,12 @@ output gain.
 ---
 
 ## Preset catalog
+
+![Echidna Preset Manager with the built-in preset cards](assets/screenshots/02-presets.png)
+
+*The Preset Manager. Presets can be activated, renamed, duplicated, and
+imported/exported; per-app bindings are stored separately so presets stay
+portable.*
 
 Echidna ships with eight built-in presets. Badges: **NAT** natural, **FX** heavy effect,
 **LL** low-latency, **HQ** high-quality.

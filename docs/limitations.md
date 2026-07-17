@@ -69,6 +69,13 @@ apps no way to do this. That means:
   "Not Installed"** and no audio is transformed. This is exactly what the app reports on
   an unrooted emulator today: *Native: Not Installed, SELinux: Enforcing (Java-only
   fallback)*.
+
+<figure markdown>
+  ![Echidna dashboard on an unrooted emulator showing the engine reported as Not Installed — no audio is transformed in this state.](assets/screenshots/01-dashboard.png){ width="320" }
+  <figcaption>Dashboard on an <strong>unrooted</strong> emulator: the engine is honestly reported
+  as <em>Not Installed</em>. Nothing is hooked and no capture is transformed until Magisk + Zygisk
+  are present on a rooted device.</figcaption>
+</figure>
 - Rooting carries real risk (bootloader unlock wipes data; some devices lose banking/DRM
   attestation). That is a decision only you can make for your device.
 
@@ -142,6 +149,13 @@ of claiming that every manager is operational:
   whether common native audio libraries (`libOpenSLES.so`, `libaudioclient.so`,
   `libtinyalsa.so`) are present. These checks help identify obvious install and hardware
   mismatches, but they do **not** prove live AAudio, OpenSL ES, tinyalsa, or LSPosed processing.
+
+<figure markdown>
+  ![Compatibility Wizard on an unrooted emulator: engine path blocked with no root/service access, ABI and audio-library signals listed.](assets/screenshots/05-compatibility.png){ width="320" }
+  <figcaption>The Compatibility Wizard surfaces device <em>signals</em> (ABI, vendor family, audio
+  libraries present) and the honest unrooted verdict — the engine path is <em>blocked</em> without
+  root/service access. A present library is a hint, not proof that its capture route processes audio.</figcaption>
+</figure>
 - **Device-gated:** which combinations work is inherently a per-device matrix and is not
   characterized on hardware in this project.
 

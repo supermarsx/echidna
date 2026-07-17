@@ -1,5 +1,8 @@
 package com.echidna.app.ui.help
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -27,6 +30,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -52,10 +59,11 @@ fun MarkdownBlocks(
     onLinkClick: (String) -> Unit,
     modifier: Modifier = Modifier,
     highlight: String? = null,
+    docId: String? = null,
 ) {
     val highlightTerms = remember(highlight) { highlight?.let { DocSearchIndex.tokenize(it) }.orEmpty() }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEach { block -> MarkdownBlockView(block, highlightTerms, onLinkClick) }
+        blocks.forEach { block -> MarkdownBlockView(block, highlightTerms, onLinkClick, docId) }
     }
 }
 
@@ -72,6 +80,7 @@ fun MarkdownDocument(
     listState: LazyListState = rememberLazyListState(),
     highlight: String? = null,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    docId: String? = null,
 ) {
     val highlightTerms = remember(highlight) { highlight?.let { DocSearchIndex.tokenize(it) }.orEmpty() }
     LazyColumn(
@@ -80,7 +89,7 @@ fun MarkdownDocument(
         contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        itemsIndexed(model.blocks) { _, block -> MarkdownBlockView(block, highlightTerms, onLinkClick) }
+        itemsIndexed(model.blocks) { _, block -> MarkdownBlockView(block, highlightTerms, onLinkClick, docId) }
     }
 }
 
@@ -89,6 +98,7 @@ private fun MarkdownBlockView(
     block: MarkdownBlock,
     highlightTerms: List<String>,
     onLinkClick: (String) -> Unit,
+    docId: String?,
 ) {
     when (block) {
         is MarkdownBlock.Heading -> {
@@ -130,22 +140,32 @@ private fun MarkdownBlockView(
                 }
             }
 
-        is MarkdownBlock.CodeBlock -> {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(12.dp),
-            ) {
-                Text(
-                    text = block.code,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        is MarkdownBlock.CodeBlock ->
+            // Mermaid renders natively on the web docs; there is no dependency-free in-app renderer,
+            // so degrade the fence to a labeled caption instead of dumping raw diagram source.
+            if (block.language.equals("mermaid", ignoreCase = true)) {
+                CaptionCard(
+                    label = "Diagram — view in the web docs",
+                    body = "This diagram renders in the web documentation.",
                 )
+            } else {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(12.dp),
+                ) {
+                    Text(
+                        text = block.code,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        }
+
+        is MarkdownBlock.Image -> ImageBlockView(block.alt, block.destination, docId)
 
         is MarkdownBlock.Quote ->
             Row(
@@ -158,7 +178,7 @@ private fun MarkdownBlockView(
                 InlineText(block.inlines, highlightTerms, onLinkClick, MaterialTheme.typography.bodyMedium)
             }
 
-        is MarkdownBlock.Admonition -> AdmonitionView(block, highlightTerms, onLinkClick)
+        is MarkdownBlock.Admonition -> AdmonitionView(block, highlightTerms, onLinkClick, docId)
 
         is MarkdownBlock.Table -> TableView(block, highlightTerms, onLinkClick)
 
@@ -177,6 +197,7 @@ private fun AdmonitionView(
     block: MarkdownBlock.Admonition,
     highlightTerms: List<String>,
     onLinkClick: (String) -> Unit,
+    docId: String?,
 ) {
     val accent = when (block.kind.lowercase()) {
         "danger", "error", "bug", "caution" -> MaterialTheme.colorScheme.error
@@ -197,7 +218,7 @@ private fun AdmonitionView(
                 style = MaterialTheme.typography.labelLarge,
                 color = accent,
             )
-            block.children.forEach { MarkdownBlockView(it, highlightTerms, onLinkClick) }
+            block.children.forEach { MarkdownBlockView(it, highlightTerms, onLinkClick, docId) }
         }
     }
 }
@@ -313,8 +334,101 @@ private fun AnnotatedString.Builder.appendInlines(
                 }
                 pop()
             }
+            // An image mixed inline with prose degrades to its alt text (a lone image line is instead
+            // promoted to a block-level image and rendered as a real picture — see ImageBlockView).
+            is MarkdownInline.Image -> appendHighlighted(inline.alt, highlightTerms, highlightBackground)
         }
     }
+}
+
+/**
+ * Renders a block-level image. PNG/WebP are decoded from the bundled Help assets via [AssetManager]
+ * and drawn full-width with an italic caption. SVG, remote `http(s)` URLs, and missing/undecodable
+ * assets degrade to a labeled caption card (never raw `![...]` markup), keeping the Help APK
+ * dependency-free while staying honest about what it cannot show inline.
+ */
+@Composable
+private fun ImageBlockView(alt: String, dest: String, docId: String?) {
+    val context = LocalContext.current
+    val bare = dest.trim().substringBefore('#').substringBefore('?').lowercase()
+    when {
+        bare.startsWith("http://") || bare.startsWith("https://") ->
+            CaptionCard(label = "Image — view in the web docs", body = alt)
+
+        bare.endsWith(".svg") ->
+            CaptionCard(label = "Vector image — view in the web docs", body = alt)
+
+        else -> {
+            val bitmap = remember(dest, docId) { decodeHelpAsset(context, docId, dest) }
+            if (bitmap != null) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = alt.ifBlank { null },
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)),
+                        contentScale = ContentScale.FillWidth,
+                    )
+                    if (alt.isNotBlank()) {
+                        Text(
+                            text = alt,
+                            style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                CaptionCard(label = "Image unavailable", body = alt)
+            }
+        }
+    }
+}
+
+/** A labeled surface-tinted card used for images/diagrams that cannot be drawn inline. */
+@Composable
+private fun CaptionCard(label: String, body: String) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        if (body.isNotBlank()) {
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Decodes a doc-relative image [dest] from the bundled Help assets, or null if absent/undecodable. */
+private fun decodeHelpAsset(context: Context, docId: String?, dest: String): ImageBitmap? {
+    val assetPath = helpAssetPath(docId, dest) ?: return null
+    return runCatching {
+        context.assets.open(assetPath).use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
+    }.getOrNull()
+}
+
+/**
+ * Resolves a doc-relative image [dest] (as written in the Markdown) to its staged Help asset path,
+ * e.g. `assets/screenshots/x.png` in `screenshots.md` → `help/docs/assets/screenshots/x.png`, and
+ * `../assets/x.png` in `hardening/y.md` → `help/docs/assets/x.png`. Returns null if [dest] has no
+ * path (pure anchor) or escapes the docs root. Pure (no Android deps) so it is unit-tested directly.
+ */
+internal fun helpAssetPath(docId: String?, dest: String): String? {
+    val path = dest.trim().substringBefore('#').substringBefore('?')
+    if (path.isEmpty()) return null
+    val normalized = if (docId != null) HelpLinks.normalize(docId, path) else path.trimStart('/').ifEmpty { null }
+    if (normalized.isNullOrEmpty()) return null
+    return "${HelpRepository.ASSET_ROOT}/$normalized"
 }
 
 /** Appends [text], wrapping any [highlightTerms] occurrences (case-insensitive) in a tint background. */

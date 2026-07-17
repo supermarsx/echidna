@@ -14,6 +14,14 @@ boundaries rather than unverified routes.
 > lists exactly what was **not** run here, and why, followed by a step-by-step procedure
 > to reproduce it on release hardware.
 
+<figure markdown>
+  ![Compatibility Wizard captured on the unrooted verification emulator, reporting Magisk not installed and Zygisk unavailable.](assets/screenshots/05-compatibility.png){ width="320" }
+  <figcaption>The honest starting point of end-to-end verification: on the unrooted
+  <code>echidna_e2e</code> emulator the Compatibility Wizard reports the engine path <em>blocked</em>
+  (no root / service access). Everything in the "Verified" table was reached from this build;
+  everything in "Still not verified" needs the rooted hardware inverse of this screen.</figcaption>
+</figure>
+
 Verification host: Windows 11, PowerShell + Bash. Toolchain: Android SDK `C:\android-sdk`,
 NDK r27 (`27.0.12077973`), JBR OpenJDK 21, Gradle 8.5 (wrapper), CMake 4.2.1 / Ninja 1.13.2,
 apksigner (build-tools 34.0.0), Docker Desktop 4.72.0 (engine 29.4.2), stock emulator
@@ -200,6 +208,13 @@ release path that the rooted-emulator probe did not cover:
    capability signals only; require recent transformed-buffer telemetry for a verified route.
    The **Compatibility Wizard** should then report Magisk **installed** + Zygisk **enabled** — the
    inverse of the unrooted state captured on the emulator.
+
+<figure markdown>
+  ![Diagnostics pipeline & hooks view on the unrooted emulator: no live hook signal, latency and CPU panels empty.](assets/screenshots/25-diagnostics-pipeline.png){ width="320" }
+  <figcaption>The Diagnostics <em>pipeline &amp; hooks</em> view on the unrooted emulator — no live
+  hook signal. On a rooted device with an active route these panels populate (Tuner Hz/cents,
+  latency histogram, CPU heatmap); an empty view here is itself an honest device-gated signal.</figcaption>
+</figure>
 8. **Export diagnostics for support.** In **Diagnostics -> Logs & safety**, enable telemetry export
    and use **Export diagnostic internals**. The bundle is sanitized and includes action codes such
    as `configure_whitelist` when no target apps are enabled. Combine it with a static HAL analyzer

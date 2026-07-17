@@ -352,24 +352,35 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }
 }
 tasks.named("preBuild").configure { dependsOn(stageLabDspJniLibs) }
 
-// Mirror the repository Markdown docs into the generated Help assets dir at build time.
-// Sync (not Copy) so a doc removed from docs/ is pruned from the bundle — the in-app Help
-// is a canonical mirror of the current repo docs, never a stale accumulation. Fully dynamic:
-// every *.md under docs/ (recursively) is included, so new docs appear in Help with no code
-// change. Honest about absence: if docs/ is missing entirely the task simply stages nothing.
+// Mirror the repository Markdown docs (and the image assets they reference) into the generated
+// Help assets dir at build time. Sync (not Copy) so a doc/image removed from docs/ is pruned from
+// the bundle — the in-app Help is a canonical mirror of the current repo docs, never a stale
+// accumulation. Fully dynamic: every *.md under docs/ (recursively) plus every png/webp/svg under
+// docs/assets/ is included, preserving relative paths so a doc's `![](assets/screenshots/x.png)`
+// (top-level) and `![](../assets/x.png)` (from docs/hardening/) both resolve to the same staged
+// asset inside the APK. Honest about absence: if docs/ is missing the task simply stages nothing.
 val stageHelpDocs = tasks.register<Sync>("stageHelpDocs") {
-    description = "Stages the repository docs/**/*.md into the APK assets for the in-app Help screen."
+    description = "Stages the repository docs/**/*.md and referenced image assets into the APK assets for the in-app Help screen."
     group = "echidna"
     into(helpDocsAssetsDir.map { it.dir(helpDocsAssetSubdir) })
     if (helpDocsSourceDir.isDirectory) {
-        from(helpDocsSourceDir) { include("**/*.md") }
+        from(helpDocsSourceDir) {
+            include("**/*.md")
+            // Raster image assets the Help renderer can decode inline (PNG/WebP) plus SVG, which the
+            // renderer degrades to a caption but is still staged so a future/web-only reference resolves.
+            include("assets/**/*.png")
+            include("assets/**/*.webp")
+            include("assets/**/*.svg")
+        }
     }
     // A canonical owned mirror, not a cache — always run so added/removed docs are reflected.
     outputs.upToDateWhen { false }
     doLast {
-        val staged = helpDocsAssetsDir.get().dir(helpDocsAssetSubdir).asFile
-            .walkTopDown().count { it.isFile && it.extension == "md" }
-        logger.lifecycle("stageHelpDocs: bundled $staged Markdown doc(s) -> assets/$helpDocsAssetSubdir/")
+        val root = helpDocsAssetsDir.get().dir(helpDocsAssetSubdir).asFile
+        val docs = root.walkTopDown().count { it.isFile && it.extension == "md" }
+        val images = root.walkTopDown()
+            .count { it.isFile && it.extension.lowercase() in setOf("png", "webp", "svg") }
+        logger.lifecycle("stageHelpDocs: bundled $docs Markdown doc(s) + $images image asset(s) -> assets/$helpDocsAssetSubdir/")
     }
 }
 

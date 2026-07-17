@@ -10,6 +10,25 @@ Host results measure processing cost only. They are not Android callback latency
 acoustic latency, or end-to-end call latency. Those claims still require release builds on target
 devices and the device matrix described in `spec.md`.
 
+![Echidna Diagnostics screen on an unrooted device showing empty telemetry](assets/screenshots/04-diagnostics.png)
+
+*On the device side, the in-app **Diagnostics** screen surfaces runtime telemetry —
+average processing latency and XRun counts from the native watchdog. On an unrooted
+emulator it honestly reports **Engine Not Installed** with empty telemetry; the host
+benchmark on this page is a separate, device-independent measurement of DSP cost.*
+
+![Echidna Diagnostics Pipeline & hooks graph with no signal on an unrooted device](assets/screenshots/25-diagnostics-pipeline.png)
+
+*Diagnostics also draws the audio-pipeline graph (HAL → DSP engine → processed PCM
+→ consumer). On this unrooted device no signal flows because the engine is not
+hooking audio; on a rooted device with Zygisk the winning hook animates.*
+
+!!! note ":material-scale-balance: Two different measurements"
+    The host benchmark here measures *DSP processing cost* on your build machine.
+    The app's Diagnostics telemetry measures *on-device runtime behaviour* once an
+    engine is installed and running. Do not read one as proof of the other — see
+    [Verification](verification.md) for the device-gated boundary.
+
 ## Run the benchmark
 
 Use a release-optimized build. The wrappers configure the standalone `tools/perf/CMakeLists.txt`,

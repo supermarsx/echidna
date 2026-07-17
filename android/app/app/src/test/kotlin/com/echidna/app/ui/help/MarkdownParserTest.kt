@@ -90,6 +90,39 @@ class MarkdownParserTest {
     }
 
     @Test
+    fun `a lone image line becomes a block-level image carrying alt and destination`() {
+        val block = parse("![Echidna Dashboard](assets/screenshots/01-dashboard.png)").single()
+        val image = block as MarkdownBlock.Image
+        assertEquals("Echidna Dashboard", image.alt)
+        assertEquals("assets/screenshots/01-dashboard.png", image.destination)
+    }
+
+    @Test
+    fun `image destination is preserved, not discarded`() {
+        // Regression: the old parser dropped the URL and collapsed images to alt text only.
+        val block = parse("![Diag](../assets/diagrams/pipeline.png)").single() as MarkdownBlock.Image
+        assertEquals("../assets/diagrams/pipeline.png", block.destination)
+    }
+
+    @Test
+    fun `an image mixed with prose stays inline and keeps its destination`() {
+        val para = parse("See the badge ![status](assets/badge.svg) in the corner.")
+            .single() as MarkdownBlock.Paragraph
+        val image = para.inlines.filterIsInstance<MarkdownInline.Image>().single()
+        assertEquals("status", image.alt)
+        assertEquals("assets/badge.svg", image.destination)
+        // Surrounding prose is retained, so this is NOT promoted to a block image.
+        assertTrue(para.inlines.plainText().contains("See the badge"))
+        assertTrue(para.inlines.plainText().contains("in the corner"))
+    }
+
+    @Test
+    fun `image with a title string keeps only the destination`() {
+        val block = parse("![alt](assets/x.png \"a title\")").single() as MarkdownBlock.Image
+        assertEquals("assets/x.png", block.destination)
+    }
+
+    @Test
     fun `pipe table parses headers and rows`() {
         val src = """
             | Route | Status |

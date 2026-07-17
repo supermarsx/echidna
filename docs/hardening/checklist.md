@@ -327,9 +327,17 @@ memory the AAudio contract forbids mutating in place.
   siblings (GATE-3 security review; [threat-model §3.4](threat-model.md#34-installer-release-supply-chain)).
   Verified: `:app:assembleDebug` + app unit tests (incl. `InstallEngineViewModelTest`,
   `ControlServiceClientTest`). The live install action itself stays
-  **Device-gated** (needs a rooted device), and a turnkey **bundled-zip** install
-  is a separate follow-up (**t8-e5**) — today the installer offers a SAF `.zip`
-  picker rather than an APK-bundled module.
+  **Device-gated** (needs a rooted device). The guided flow (detect → stage →
+  unload-first + disable → reboot → confirm) is walked through end-to-end in the
+  [Installer guide](../installer-guide.md); it installs from a **bundled**
+  `echidna-magisk.zip` asset when the build ships one, and otherwise offers a SAF
+  `.zip` picker.
+
+![Guided in-app installer detecting Magisk/Zygisk before offering the engine module](../assets/screenshots/24-install-engine.png)
+
+  *The installer never fabricates an installed state: on a device with no Magisk
+  it reports "Magisk/Zygisk not detected … nothing will be installed on this
+  device." (see [Installer guide](../installer-guide.md)).*
 
 ## 16 — Strengthen CI & automated testing
 

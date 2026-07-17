@@ -81,7 +81,15 @@ python tools/build_hook_probe_report.py out/audio-hal-analysis.json \
 
 The optional diagnostics file is the companion app's diagnostic-internals export.
 It is opt-in gated and intentionally omits raw package names, preset IDs, device
-names, and per-sample timestamps. The report tool combines that runtime evidence
+names, and per-sample timestamps.
+
+<figure markdown>
+  ![Diagnostics overview on the unrooted emulator, showing engine-not-installed telemetry — the source of the sanitized diagnostic-internals export fed into the hook probe report.](assets/screenshots/04-diagnostics.png){ width="320" }
+  <figcaption>The Diagnostics overview (here reporting <em>engine not installed</em>) is where
+  <em>Export diagnostic internals</em> produces the sanitized JSON this tool consumes. The export
+  carries only sanitized hook attempts, successes, callback counts, and action codes — no raw
+  package names, preset IDs, or per-sample timestamps.</figcaption>
+</figure> The report tool combines that runtime evidence
 with static analyzer candidates and emits:
 
 | Field | Meaning |

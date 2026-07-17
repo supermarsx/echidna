@@ -32,6 +32,25 @@ class HelpDocsAssetInstrumentedTest {
     }
 
     @Test
+    fun referencedImageAssetsAreBundledInApkAssets() {
+        // stageHelpDocs mirrors docs/assets/** (png/webp/svg) alongside the Markdown so the in-app
+        // Help renderer can decode `![](assets/screenshots/x.png)` from the APK. Assert the tree is
+        // present and carries at least one decodable raster (filename-agnostic; S1 owns the names).
+        val screenshots = context.assets
+            .list("${HelpRepository.ASSET_ROOT}/assets/screenshots")?.toList().orEmpty()
+        assertTrue(
+            "expected staged screenshots under assets/${HelpRepository.ASSET_ROOT}/assets/screenshots",
+            screenshots.any { it.endsWith(".png", ignoreCase = true) },
+        )
+        // The staged asset is actually openable (a real byte stream the renderer can decode).
+        val png = screenshots.first { it.endsWith(".png", ignoreCase = true) }
+        val bytes = context.assets
+            .open("${HelpRepository.ASSET_ROOT}/assets/screenshots/$png")
+            .use { it.readBytes() }
+        assertTrue("staged image $png is empty", bytes.isNotEmpty())
+    }
+
+    @Test
     fun helpRepositoryLoadsAndSearchesBundledDocs() {
         val docs = HelpRepository.load(context)
         assertTrue("no docs loaded", docs.isNotEmpty())

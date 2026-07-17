@@ -117,9 +117,38 @@ that a real trampoline was installed, that a real app's stream was discovered.
 Those require a device and are covered by `docs/verification.md` /
 `docs/hardening/rt-safety.md` and the t4 on-device logs — **not** by this track.
 
+The same ladder as a diagram — green rungs are witnessable in host CTest, amber
+rungs have host-testable *mechanism* but device-gated *reality*, red rungs need a
+physical device / rooted-Zygisk to observe at all:
+
+```mermaid
+flowchart TD
+    A[installed<br/><small>module artifact on device</small>]:::dev
+    B[loaded<br/><small>libechidna.so mapped in target</small>]:::dev
+    C[policy-connected<br/><small>config/whitelist received</small>]:::dev
+    D[admitted<br/><small>whitelisted + hooks enabled</small>]:::mixed
+    E[hook-installed<br/><small>trampoline in place</small>]:::mixed
+    F[stream-discovered<br/><small>callback intercepted</small>]:::dev
+    G[processing<br/><small>blocks flowing through DSP</small>]:::mixed
+    H[mutating<br/><small>output ≠ input</small>]:::mixed
+    I[verified<br/><small>measured transform = intent</small>]:::dev
+    A --> B --> C --> D --> E --> F --> G --> H --> I
+
+    classDef host fill:#1b5e20,stroke:#2e7d32,color:#fff;
+    classDef mixed fill:#e65100,stroke:#ef6c00,color:#fff;
+    classDef dev fill:#7f1d1d,stroke:#b71c1c,color:#fff;
+```
+
+*Amber (`admitted`, `hook-installed`, `processing`, `mutating`): the counters and
+classification exist and are host-tested; the live event they represent is
+device-gated. Red (`installed`, `loaded`, `policy-connected`,
+`stream-discovered`, `verified`): unobservable without a device.* No rung is
+painted green here because even the host-representable rungs still require a real
+Android process to be *reached* — the honest reading of §6.
+
 ---
 
-## 5. What the wire actually carries (and its caveats)
+## 5. What the wire actually carries
 
 `telemetry_socket_exporter.cpp` collapses a route's delta to one `state` string:
 
@@ -130,12 +159,22 @@ failures  != 0 -> "error"
 otherwise      -> "installed"
 ```
 
-and serializes `{blocks, frames, failures, mutations}` in `EncodeTelemetryV2`.
+Since the **schema-v3** evolution (t8-e2), `EncodeTelemetry` serializes the full
+non-conflation set, not just the four v2 fields:
 
-This is the actual §1-state signal shipped off-device. Its honest caveats — the
-derived-state precedence and the fields (`bypasses` / `installed` /
-`install_events` / `install_failures`) that never reach the wire — are recorded
-as finding **F2** below, which remains open.
+| Wire location | Fields | Since |
+| --- | --- | --- |
+| `deltas` (edges) | `blocks`, `frames`, `failures`, `mutations` | v2 |
+| `deltas` (edges) | `bypasses`, `installEvents`, `installFailures` | **v3** |
+| `root` (level) | `installed` | **v3** |
+
+v3 is a strict **superset** of v2: no v2 key was renamed or dropped, three delta
+edges and the latched install level were *added*, and `schemaVersion` is `3`. The
+`state` precedence above is unchanged. This closes the wire-layer gap that finding
+**F2** (below) reported: *a bypass is not a failure / not an unchanged block* and
+*route-presence ≠ route-use* are now representable **on the wire**, not only in
+the accumulator. The controller's strict validator was **not** weakened to allow
+this — see §7-F2 for how the schema bump kept the exact-key-set check intact.
 
 ---
 
@@ -156,12 +195,24 @@ These cannot be witnessed by any host unit test and must not be claimed as
   requires on-device capture + FFT; see t4 logs and `docs/verification.md`.
 - **Policy propagation under enforcing SELinux** to hooked apps.
 
+The in-app Diagnostics screen makes this honesty visible rather than faking
+activity. On an unrooted device with no native engine, every telemetry-derived
+value rests at its empty state — there is nothing to accumulate:
+
+![Diagnostics reporting Engine Not Installed with empty telemetry on an unrooted emulator](../assets/screenshots/04-diagnostics.png)
+
+*Honest by design: **Engine Not Installed**, XRuns 0, metrics at −120 dBFS, "No
+latency data yet". None of the ⚠️/❌ rungs in §4 have been reached, so the
+counters are legitimately zero — the surface reports absence, not a fabricated
+"processing" state.*
+
 ---
 
 ## 7. Findings
 
 This track (t6-e4) reported both findings below rather than applying wire-visible
-changes itself. F1 was subsequently **landed by t6-e8**; F2 remains **Open**.
+changes itself. F1 was subsequently **landed by t6-e8**; F2 was **landed by
+t8-e2** (schema-v3). Both are now closed.
 
 ### F1 — install failure was folded into the block `failures` counter — LANDED (t6-e8) ✅
 *Original finding:* `TelemetryAccumulator::recordInstall(route, /*success=*/false)`
@@ -180,23 +231,37 @@ is closed. `tests/telemetry_accumulator_test.cpp` Section D was rewritten to loc
 the **separated** semantics (a failed install bumps `install_failures`, leaves
 block `failures` at zero, and does not latch `installed`).
 
-### F2 — exporter drops `bypasses` / `installed` / `install_events` and never consults the `installed` bool — OPEN
-`EncodeTelemetryV2` serializes only `{blocks, frames, failures, mutations}`, and
-`StateFor` returns the literal `"installed"` as a *fallback* without reading the
-`installed` bool. Consequences:
-- downstream cannot separate **bypassed** from **unchanged** (bypasses absent
+### F2 — exporter dropped `bypasses` / `installed` / `install_events` at the wire — LANDED (t8-e2) ✅
+*Original finding:* the v2 `EncodeTelemetryV2` serialized only
+`{blocks, frames, failures, mutations}`, and `StateFor` returned the literal
+`"installed"` as a *fallback* without reading the `installed` bool. Consequences:
+- downstream could not separate **bypassed** from **unchanged** (bypasses absent
   from the wire), weakening *a bypass is not a failure / not an unchanged block*
   at the wire layer;
-- the latched install **level** never reaches the controller, so
-  *route-presence* is invisible off-device except as the fallback string.
-- **Status: Open / deferred.** Widening the serialized field set is currently
-  blocked by the strict key-set validator in the controller's
-  `AuthenticatedTelemetry.kt`, which rejects telemetry frames carrying
-  unexpected keys. That validator is a security boundary and **must not be
-  weakened** to accommodate this; adding fields requires a coordinated,
-  validator-aware schema bump on both sides.
-- **Owner:** `runtime/telemetry_socket_exporter.cpp` + controller
-  `AuthenticatedTelemetry.kt` (both outside this track's locks).
+- the latched install **level** never reached the controller, so
+  *route-presence* was invisible off-device except as the fallback string.
+
+The obstacle was correctly identified as a **security constraint, not a bug to
+paper over**: the controller's `AuthenticatedTelemetry.kt` runs a **strict
+exact-key-set validator** (a §13 hardening control) that rejects *every* frame
+carrying an unexpected key. Appending fields to the v2 frame would have made the
+validator reject all telemetry. Widening the field set therefore required a
+**coordinated, validator-aware schema bump**, not a loosened check.
+
+**Resolution (landed).** t8-e2 landed **schema-v3** as a strict superset of v2
+(see §5): native `EncodeTelemetry` emits v3 (`deltas` gains `bypasses` /
+`installEvents` / `installFailures`; `root` gains `installed`; `schemaVersion` 3).
+`AuthenticatedTelemetry.kt` now accepts **both** v2 and v3, each validated against
+its **own** strict key-set — the `schemaVersion` range widened to `2..3`, and
+unknown/mixed keys are still rejected, with peer-cred, published-identity, and
+seq/gen anti-replay untouched. The fields thread through frame/store/`baseJson`
+and the app-side Diagnostics surface reads them (`TelemetryParser.kt`,
+`AdvancedDiagnosticsSection.kt`). **The strict validator was not weakened.**
+Verified by GATE-3 (`telemetry_socket_exporter_test` asserting the v3 key set,
+`AuthenticatedTelemetryTest` unknown-key / mixed-key / replay / `schemaVersion`
+-bound cases, app `AuthenticatedTelemetryParsingTest`). See
+[checklist §18-F2](checklist.md#18-observability-without-damaging-the-audio-path)
+and [threat-model §3.2](threat-model.md#32-evidence--telemetry-integrity).
 
 ### Note — local CRLF on `state/shared_state.{h,cpp}`
 The working-tree copies carry CRLF from `core.autocrlf=true`; the **committed

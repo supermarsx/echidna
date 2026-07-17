@@ -57,6 +57,14 @@ flowchart TB
     HOOKS -->|"echidna_process_block()"| DSP
 ```
 
+<figure markdown>
+??? info "Rendered diagram (offline / in-app Help fidelity)"
+    The web site renders the interactive Mermaid diagram above. The in-app Help tab
+    decodes this exported raster twin instead, so the same big picture is visible offline.
+
+    ![Echidna component overview: the companion APK hosting the control service and JNI bridge, the flashable Magisk module carrying the Zygisk engine and DSP, the LSPosed shim, and the hook routes inside target app processes, all fed authenticated v2 policy.](assets/diagrams/architecture-overview.png)
+</figure>
+
 ### The six runtime pieces
 
 | Component | Artifact | Runs in | Role |
@@ -131,6 +139,28 @@ telemetry. This matrix is ABI-qualified: on `armeabi-v7a`, AAudio, OpenSL ES, ti
 on-device install/execution device-gated. The LSPosed Java/JNI route and the legacy input
 preprocessor do not use Echidna's inline-symbol backend and remain eligible subject to their normal
 policy and device gates.
+
+The route decision is a **fail-closed funnel**: a capture site only ever reaches the DSP after it
+clears every gate below. Any "no" leaves the block untouched and emits telemetry rather than
+guessing.
+
+```mermaid
+flowchart TD
+    START(["Capture site touched<br/>in a specialized process"]) --> ELIG{"Route eligible?<br/>(operational candidate,<br/>not unsupported boundary)"}
+    ELIG -->|"Audio HAL / AudioFlinger"| BOUND["unsupported_injection_boundary<br/>fail closed + telemetry"]
+    ELIG -->|"native AudioRecord / libc<br/>without ECHIDNA_* env"| DEVC["developer-contract-only<br/>inert; no normal-flow producer"]
+    ELIG -->|"AAudio · OpenSL ES · tinyalsa ·<br/>LSPosed AudioRecord · legacy preproc"| META{"Trustworthy PCM metadata?<br/>(sample rate · channels · format ·<br/>direction · lifecycle)"}
+    META -->|"No / undecodable prologue"| DECLINE["hook declines / relocator<br/>fails closed per function"]
+    META -->|"Yes"| POLICY{"Authenticated v2 policy admits?<br/>global on · outside panic ·<br/>whitelisted true · owner matches"}
+    POLICY -->|"No policy / revoked / wrong owner"| INERT["installed hook stays inert<br/>original bytes preserved"]
+    POLICY -->|"Yes, current generation"| PROC["echidna_process_block()<br/>→ dlopen libech_dsp.so → dsp.process()"]
+    PROC --> WRITE["processed PCM written in place<br/>status flips to kHooked"]
+
+    classDef ok fill:#12492f,stroke:#1f8f5f,color:#eafff4;
+    classDef stop fill:#5b1f1f,stroke:#b5473f,color:#ffecec;
+    class PROC,WRITE ok;
+    class BOUND,DEVC,DECLINE,INERT stop;
+```
 
 ```mermaid
 flowchart TB
@@ -310,6 +340,51 @@ the persisted/current generation through their transport; no target process can 
   view. Late consumers obtain the current persisted/registry generation through their transport.
 
 ## What is verified vs device-gated
+
+Echidna's honesty model is a **ladder of evidence**. A route is not "working" because a library is
+present; each rung is a distinct, separately-provable claim, and the ladder is deliberately drawn so
+you can see exactly where the current build stands versus what still needs a physical device. The
+same model is used verbatim by the [hardening evidence-state page](hardening/evidence-state-model.md)
+and the on-device Diagnostics tab.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Installed
+    Installed --> Loaded: Zygisk/LSPosed places code in process
+    Loaded --> Hooked: capture symbol patched / shim attached
+    Hooked --> Processing: whitelisted PCM reaches echidna_process_block
+    Processing --> Mutating: non-neutral preset changes ≥1 output sample
+
+    note right of Installed
+        PROVEN here: APK install + launch,
+        Magisk zip builds/verifies
+    end note
+    note right of Loaded
+        PROVEN: rooted-emulator app instrumentation.
+        DEVICE-GATED: Magisk flash + arb. app specialize
+    end note
+    note right of Hooked
+        PROVEN: x86_64 host hook harness; native processBlock.
+        DEVICE-GATED: armv7 on-hardware, live capture routes
+    end note
+    note right of Processing
+        PROVEN: rooted-emulator processBlock through the DSP.
+        DEVICE-GATED: AAudio/OpenSL/tinyalsa/LSPosed live capture
+    end note
+    note right of Mutating
+        PROVEN: host DSP + rooted-emulator attenuation assert.
+        DEVICE-GATED: transformed buffer in a real target app
+    end note
+```
+
+!!! quote "How to read the ladder"
+    Each rung is claimed **only** with recorded evidence for that specific rung. The current build
+    reaches **Processing/Mutating on rooted emulators via `processBlock`**, and every *live capture
+    route* (the normal-flow candidates a real app would use) remains **device-gated**. "Installed"
+    or "Zygisk available" is a capability signal, never proof of a higher rung. The historical
+    `AudioRecord.read` probe sat on the *Hooked* rung before the current PCM-contract redesign and is
+    retained as history only.
 
 - **Verified in this environment:** the single-APK topology and AIDL unification
   build and the debug/release APKs assemble; all 12 superbuild targets cross-compile, while release

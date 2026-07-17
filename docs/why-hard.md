@@ -49,6 +49,41 @@ not provide their PCM metadata. Audio HAL and AudioFlinger are explicitly unsupp
 (`unsupported_injection_boundary`) because app-process Zygisk cannot safely own audioserver/vendor
 stream objects. See the [capture-route matrix](limitations.md#4-capture-route-coverage-across-socs-and-vendors).
 
+There is no single choke point to hook. A recording app may enter the capture path through any of
+several APIs, each descending through vendor-specific layers, and Echidna can only safely act at the
+levels that hand it typed PCM inside the app process:
+
+```mermaid
+flowchart TD
+    APP["Recording app<br/>(Discord · Telegram · a stream)"] --> AAUDIO["AAudio"]
+    APP --> OSL["OpenSL ES"]
+    APP --> JAR["Java AudioRecord"]
+    APP --> NAR["native AudioRecord / libc read"]
+    JAR --> NAR
+    AAUDIO --> AF["AudioFlinger<br/>(audioserver boundary)"]
+    OSL --> AF
+    NAR --> AF
+    AF --> HAL["Vendor HAL<br/>(Qualcomm · MediaTek · Exynos · Tensor)"]
+    HAL --> ALSA["tinyalsa / kernel PCM"]
+
+    AAUDIO -.->|"operational candidate"| E["Echidna in-process<br/>reach (app process)"]
+    OSL -.->|"operational candidate"| E
+    JAR -.->|"operational candidate (LSPosed shim)"| E
+    ALSA -.->|"operational candidate"| E
+    NAR -.->|"developer-contract only"| E
+    AF -.->|"unsupported boundary"| X["out of app-process reach<br/>(fail closed)"]
+    HAL -.->|"unsupported boundary"| X
+
+    classDef reach fill:#12492f,stroke:#1f8f5f,color:#eafff4;
+    classDef out fill:#5b1f1f,stroke:#b5473f,color:#ffecec;
+    class E reach;
+    class X out;
+```
+
+The green surfaces are where a normal app hands Echidna trustworthy PCM metadata inside its own
+process; the red boundary (AudioFlinger and the vendor HAL) lives across the audioserver line, where
+app-process Zygisk has no stable, safe transform ABI — so those routes fail closed rather than guess.
+
 ## 3. A hard real-time latency budget — while doing nontrivial DSP
 
 Voice transformation must feel live. The audio callback hands you a small block of samples

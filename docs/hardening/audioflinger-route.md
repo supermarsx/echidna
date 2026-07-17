@@ -35,7 +35,25 @@ place. The DSP machinery for that already exists and is host-tested
 ## 2. Exactly why it is gated off
 
 The route is disabled for **architectural** reasons, not a missing patch. Two
-independent walls each individually block it:
+independent walls each individually block it — either one alone is fatal:
+
+```mermaid
+flowchart TD
+    start([Zygisk module wants to<br/>transform RecordThread PCM])
+    w1{Wall 1:<br/>can we run code<br/>inside audioserver?}
+    w2{Wall 2:<br/>is there a stable<br/>PCM-buffer transform ABI?}
+    start --> w1
+    w1 -->|"No — audioserver is a native init<br/>service, never a zygote child;<br/>Zygisk never specializes it"| block1[No injection vantage]
+    w1 -.->|hypothetically yes| w2
+    w2 -->|"No — threadLoop has no PCM param;<br/>read()/vtables are unstable across<br/>Android versions & vendor forks"| block2[No safe buffer to mutate]
+    block1 --> verdict[install returns false<br/>kUnsupported: unsupported_injection_boundary]
+    block2 --> verdict
+
+    classDef bad fill:#7f1d1d,stroke:#b71c1c,color:#fff;
+    classDef gate fill:#e65100,stroke:#ef6c00,color:#fff;
+    class block1,block2,verdict bad;
+    class w1,w2 gate;
+```
 
 ### 2.1 Zygisk never injects `audioserver`
 

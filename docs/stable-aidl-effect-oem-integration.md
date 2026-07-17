@@ -5,6 +5,13 @@ AudioEffect contracts. This is an OEM build integration, not a runtime Magisk ov
 Magisk registration path must continue to fail closed when the device exposes only a Stable AIDL
 factory until the active OEM product includes and verifies this library.
 
+!!! info "OEM build integration — device-gated by design"
+    This is a **source contract** for an OEM to compile into a product image; it is **not** something
+    a user flashes. Passing the repository source checks proves compatibility with the inspected AOSP
+    contracts only. Real proof — module selected, loaded, VTS passed, FMQ processed, audio mutated
+    under enforcing SELinux — comes exclusively from the product gate and its logs (see [Required
+    device proof](#required-device-proof)).
+
 The implementation follows the native-first capture architecture in `spec.md`. It reuses the same
 `EffectContext`, capability verifier, preset loader, DSP engine, and ECHT v2 HMAC signer as the
 legacy HIDL library. It does not add another `IFactory` service. The OEM's existing factory loads

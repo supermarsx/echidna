@@ -227,9 +227,30 @@ object MarkdownParser {
                 para.append(' ').append(p.trim())
                 i++
             }
-            blocks.add(MarkdownBlock.Paragraph(parseInlines(para.toString(), refs)))
+            val inlines = parseInlines(para.toString(), refs)
+            // A paragraph that is nothing but a single image becomes a block-level image (rendered as
+            // a real picture with a caption); images mixed with prose stay inline (degrade to alt).
+            val loneImage = inlines.loneImageOrNull()
+            if (loneImage != null) {
+                blocks.add(MarkdownBlock.Image(loneImage.alt, loneImage.destination))
+            } else {
+                blocks.add(MarkdownBlock.Paragraph(inlines))
+            }
         }
         return blocks
+    }
+
+    /** The sole [MarkdownInline.Image] in these inlines (ignoring blank text), or null if not lone. */
+    private fun List<MarkdownInline>.loneImageOrNull(): MarkdownInline.Image? {
+        var image: MarkdownInline.Image? = null
+        for (node in this) {
+            when (node) {
+                is MarkdownInline.Image -> if (image == null) image = node else return null
+                is MarkdownInline.Text -> if (node.text.isNotBlank()) return null
+                else -> return null
+            }
+        }
+        return image
     }
 
     /** True when [line] begins a block that must interrupt an in-progress paragraph. */
@@ -306,11 +327,13 @@ object MarkdownParser {
                     } else { buf.append(c); i++ }
                 }
                 c == '!' && i + 1 < text.length && text[i + 1] == '[' -> {
-                    // Image: render its alt text (bundled docs ship no image assets).
-                    val parsed = parseLinkOrImage(text, i + 1, refs)
+                    // Image: emit an Image inline carrying alt + destination (the renderer decodes the
+                    // bundled asset, or degrades to a caption). A lone image line is later promoted to
+                    // a block-level image; here it stays inline for the mixed-with-prose case.
+                    val parsed = parseImage(text, i + 1, refs)
                     if (parsed != null) {
                         flush()
-                        out.addAll(parsed.first) // alt text as plain inlines
+                        out.add(parsed.first)
                         i = parsed.second
                     } else { buf.append(c); i++ }
                 }
@@ -368,15 +391,33 @@ object MarkdownParser {
         return null
     }
 
-    /** Parses an image `![alt](url)`; returns the alt text inlines and the end index. */
-    private fun parseLinkOrImage(text: String, bracketStart: Int, refs: Map<String, String>): Pair<List<MarkdownInline>, Int>? {
+    /**
+     * Parses an image `![alt](url)` (or reference form `![alt][ref]`) whose `[` is at [bracketStart].
+     * Returns the [MarkdownInline.Image] (alt text kept literal, destination preserved) and end index,
+     * or null when there is no destination to attach.
+     */
+    private fun parseImage(text: String, bracketStart: Int, refs: Map<String, String>): Pair<MarkdownInline.Image, Int>? {
         val close = matchingBracket(text, bracketStart) ?: return null
         val alt = text.substring(bracketStart + 1, close)
-        val end = when {
-            close + 1 < text.length && text[close + 1] == '(' -> (matchingParen(text, close + 1) ?: return null) + 1
-            else -> close + 1
+        // Inline: ![alt](dest "optional title")
+        if (close + 1 < text.length && text[close + 1] == '(') {
+            val paren = matchingParen(text, close + 1) ?: return null
+            var dest = text.substring(close + 2, paren).trim()
+            dest = dest.substringBefore(' ').removePrefix("<").removeSuffix(">")
+            return MarkdownInline.Image(alt, dest) to (paren + 1)
         }
-        return parseInlines(alt, refs) to end
+        // Reference: ![alt][ref] or shortcut ![ref].
+        if (close + 1 < text.length && text[close + 1] == '[') {
+            val refClose = text.indexOf(']', close + 2)
+            if (refClose >= 0) {
+                val refId = text.substring(close + 2, refClose).trim().ifEmpty { alt }.lowercase()
+                val dest = refs[refId] ?: return null
+                return MarkdownInline.Image(alt, dest) to (refClose + 1)
+            }
+        }
+        val shortcut = refs[alt.trim().lowercase()]
+        if (shortcut != null) return MarkdownInline.Image(alt, shortcut) to (close + 1)
+        return null
     }
 
     private fun matchingBracket(text: String, open: Int): Int? {

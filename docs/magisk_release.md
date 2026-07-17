@@ -54,6 +54,16 @@ For a step-by-step recovery ladder once a device is already bootlooping — safe
 boot, the disable markers above, a `fastboot flash` of a stock `boot.img` (removes Magisk), and a
 clean Magisk reinstall — see [Recovering from a bootloop](recovery.md).
 
+!!! tip "You don't have to flash by hand — there's a guided in-app installer"
+    Manual flashing (below) is the authoritative path, but the companion app now ships a **guided
+    installer** that detects Magisk/Zygisk, installs the module (from a bundled `echidna-magisk.zip`
+    when the build ships one, otherwise a picked `.zip`), does the **unload-first** disable, and
+    prompts the reboot needed to load a live Zygisk module. The last mile — the actual Magisk flash
+    — is still **device-gated** (it needs real root; `magisk --install-module` returned *Incomplete
+    Magisk install* on the emulator). Walkthrough: [Installer guide](installer-guide.md).
+
+    ![Guided in-app installer: detect Magisk/Zygisk, then install the engine module](assets/screenshots/24-install-engine.png)
+
 The install path should be loud about compatibility before reboot. Hard requirements should abort
 the install where they are known locally, while device-compatibility signals should alert without
 pretending to prove success. The checks to surface include:
@@ -304,6 +314,12 @@ Automatic push behavior:
 
 - Every accepted push to `main` becomes a release candidate and publishes only after the normal CI
   gates plus the native, Magisk, and Android release jobs complete.
+- **Unconfigured signing is skipped, not failed.** When *every* release signing secret is absent
+  (the common fork/mainline case), automatic publishing is **skipped** so normal mainline CI stays
+  green. Strict failures are preserved for **partial, invalid, manual, and tag-triggered** releases:
+  a half-configured keystore, a mismatched certificate pin, or any explicit tag/`workflow_dispatch`
+  release still fails loudly rather than silently publishing a debug-signed or unsigned artifact
+  (`tools/check_release_signing.py`; commit `fix(release): skip unconfigured automatic publishing`).
 - The auto tag is created from the latest existing tag in the current UTC year. For example, if
   `26.3` is the latest 2026 release tag, the next `main` push publishes `26.4`.
 - Auto-tagging is serialized by workflow concurrency so consecutive pushes compute tags in order.

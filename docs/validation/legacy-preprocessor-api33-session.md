@@ -3,6 +3,13 @@
 Date: 2026-07-16
 Device: `emulator-5554`, Android API 33, x86_64, SELinux enforcing
 
+!!! warning "Not feature-complete evidence"
+    The module-independent gates below **pass** (companion identity/policy, one-way PID-0 rejection,
+    synchronous v7 registration/drain, deterministic injected-audio baseline). The enabled
+    DSP/HMAC/replay proof is **BLOCKED**: this emulator still carries an incomplete old Magisk
+    install (mislabeled trust key, live AVC denials), and the final verified ZIP was never
+    boot-completed here. No claim of functional legacy input DSP follows from this run.
+
 ## Result
 
 | Gate | Result | Evidence |
