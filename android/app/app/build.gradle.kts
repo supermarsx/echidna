@@ -76,6 +76,21 @@ val labDspNativeBuildRoot: java.io.File = rootProject.file("../../build")
 val labDspAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val labDspJniLibsDir = layout.buildDirectory.dir("generated/echidna/labJniLibs")
 
+// --- In-app Help: bundle the repository docs at build time ---------------------
+// The Help screen renders the repository's own Markdown documentation offline. Rather
+// than hardcode a file list (which would silently rot as docs are added/removed), the
+// stageHelpDocs Sync task below mirrors every `docs/**/*.md` (top-level plus subtrees
+// like docs/hardening/** and docs/validation/**) into a build-generated assets dir at
+// `assets/help/docs/<same relative path>`. The Help repository lists that asset subtree
+// at runtime, so the in-app Help always matches whatever docs exist at build/merge time
+// (e.g. a docs/recovery.md added on another branch is picked up automatically — no code
+// change). The generated dir lives under the Gradle build output (gitignored), so no
+// documentation copies are ever committed as assets.
+val helpDocsSourceDir: java.io.File = rootProject.file("../../docs")
+val helpDocsAssetsDir = layout.buildDirectory.dir("generated/echidna/helpAssets")
+// Relative asset path (under assets/) the docs are mirrored into; the app reads the same constant.
+val helpDocsAssetSubdir = "help/docs"
+
 android {
     namespace = "com.echidna.app"
     compileSdk = 34
@@ -187,6 +202,9 @@ android {
         // Stage the DSP engine .so (libech_dsp.so) into the APK's jniLibs so the Lab
         // bridge can dlopen it in-process. Empty on a lite build (Lab reports unavailable).
         getByName("main").jniLibs.srcDir(labDspJniLibsDir)
+        // Stage the repository Markdown docs into the APK assets so the in-app Help renders
+        // them offline. Directory lives under the (gitignored) build output — see stageHelpDocs.
+        getByName("main").assets.srcDir(helpDocsAssetsDir)
     }
 
     testOptions {
@@ -333,6 +351,33 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }
     dependsOn(stageLabDspJniLibs)
 }
 tasks.named("preBuild").configure { dependsOn(stageLabDspJniLibs) }
+
+// Mirror the repository Markdown docs into the generated Help assets dir at build time.
+// Sync (not Copy) so a doc removed from docs/ is pruned from the bundle — the in-app Help
+// is a canonical mirror of the current repo docs, never a stale accumulation. Fully dynamic:
+// every *.md under docs/ (recursively) is included, so new docs appear in Help with no code
+// change. Honest about absence: if docs/ is missing entirely the task simply stages nothing.
+val stageHelpDocs = tasks.register<Sync>("stageHelpDocs") {
+    description = "Stages the repository docs/**/*.md into the APK assets for the in-app Help screen."
+    group = "echidna"
+    into(helpDocsAssetsDir.map { it.dir(helpDocsAssetSubdir) })
+    if (helpDocsSourceDir.isDirectory) {
+        from(helpDocsSourceDir) { include("**/*.md") }
+    }
+    // A canonical owned mirror, not a cache — always run so added/removed docs are reflected.
+    outputs.upToDateWhen { false }
+    doLast {
+        val staged = helpDocsAssetsDir.get().dir(helpDocsAssetSubdir).asFile
+            .walkTopDown().count { it.isFile && it.extension == "md" }
+        logger.lifecycle("stageHelpDocs: bundled $staged Markdown doc(s) -> assets/$helpDocsAssetSubdir/")
+    }
+}
+
+// Asset merges (incl. the unit-test and androidTest variants) must see the staged docs.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(stageHelpDocs)
+}
+tasks.named("preBuild").configure { dependsOn(stageHelpDocs) }
 
 tasks.register("verifyDebugNativePackaging") {
     dependsOn("assembleDebug")

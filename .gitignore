@@ -8,6 +8,12 @@
 # Android app module build output + Gradle caches
 /android/app/app/build
 /android/app/.gradle
+# Build-time generated assets (staged copies — never committed):
+#   generated/echidna/assets      — flashable Magisk module zip (stageEngineModuleAsset)
+#   generated/echidna/labJniLibs  — in-process DSP engine .so (stageLabDspJniLibs)
+#   generated/echidna/helpAssets  — repository docs mirrored for the in-app Help (stageHelpDocs)
+# All live under the already-ignored build/ tree; listed explicitly for clarity.
+/android/app/app/build/generated/echidna/
 
 # Control-service module build output + native (.cxx) intermediates
 /android/control-service/service/build
