@@ -90,6 +90,7 @@ nav:
       - Why It's Hard: why-hard.md
   - Using Echidna:
       - Build & Install: build-install.md
+      - Recovering from a Bootloop: recovery.md
       - DSP & Effects: dsp-effects.md
       - Performance Testing: performance-testing.md
       - Screenshots: screenshots.md
