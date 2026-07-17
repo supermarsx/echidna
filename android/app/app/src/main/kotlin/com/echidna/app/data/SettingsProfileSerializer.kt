@@ -1,9 +1,11 @@
 package com.echidna.app.data
 
+import com.echidna.app.model.AccentColor
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
+import com.echidna.app.model.ThemeMode
 import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
@@ -125,6 +127,14 @@ object SettingsProfileSerializer {
                 put("alertXrunThreshold", settings.alertXrunThreshold)
                 put("remindCompatibilityProbe", settings.remindCompatibilityProbe)
             })
+            put("appearance", JSONObject().apply {
+                put("themeMode", settings.themeMode.id)
+                put("dynamicColor", settings.dynamicColor)
+                put("accentColor", settings.accentColor.id)
+                put("statusPollIntervalSeconds", settings.statusPollIntervalSeconds)
+                put("highPriorityNotification", settings.highPriorityNotification)
+                put("keepScreenOn", settings.keepScreenOn)
+            })
         }
 
     private fun settingsFromJsonObject(root: JSONObject): SettingsState {
@@ -134,6 +144,7 @@ object SettingsProfileSerializer {
         val safety = root.optJSONObject("safety")
         val control = root.optJSONObject("control")
         val alerts = root.optJSONObject("alerts")
+        val appearance = root.optJSONObject("appearance")
         return SettingsState(
             startWithSystem = startup.optBooleanCompat("startWithSystem", false),
             autoStartEngine = startup.optBooleanCompat("autoStartEngine", false),
@@ -164,7 +175,14 @@ object SettingsProfileSerializer {
             remindCompatibilityProbe = alerts.optBooleanCompat("remindCompatibilityProbe", true),
             masterEnabled = engine.optBooleanCompat("masterEnabled", true),
             bypass = engine.optBooleanCompat("bypass", false),
-            defaultPresetId = engine?.optString("defaultPresetId")?.ifBlank { null }
+            defaultPresetId = engine?.optString("defaultPresetId")?.ifBlank { null },
+            themeMode = ThemeMode.fromId(appearance?.optString("themeMode")),
+            dynamicColor = appearance.optBooleanCompat("dynamicColor", true),
+            accentColor = AccentColor.fromId(appearance?.optString("accentColor")),
+            statusPollIntervalSeconds = appearance.optIntCompat("statusPollIntervalSeconds", 2)
+                .coerceIn(1, 10),
+            highPriorityNotification = appearance.optBooleanCompat("highPriorityNotification", false),
+            keepScreenOn = appearance.optBooleanCompat("keepScreenOn", false)
         )
     }
 

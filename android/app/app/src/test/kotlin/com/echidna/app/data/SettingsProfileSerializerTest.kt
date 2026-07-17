@@ -1,9 +1,11 @@
 package com.echidna.app.data
 
+import com.echidna.app.model.AccentColor
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
+import com.echidna.app.model.ThemeMode
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -45,7 +47,13 @@ class SettingsProfileSerializerTest {
             remindCompatibilityProbe = false,
             masterEnabled = false,
             bypass = true,
-            defaultPresetId = "preset-a"
+            defaultPresetId = "preset-a",
+            themeMode = ThemeMode.DARK,
+            dynamicColor = false,
+            accentColor = AccentColor.TEAL,
+            statusPollIntervalSeconds = 7,
+            highPriorityNotification = true,
+            keepScreenOn = true
         )
 
     @Test
@@ -67,6 +75,7 @@ class SettingsProfileSerializerTest {
         assertTrue(root.getJSONObject("settings").has("safety"))
         assertTrue(root.getJSONObject("settings").has("control"))
         assertTrue(root.getJSONObject("settings").has("alerts"))
+        assertTrue(root.getJSONObject("settings").has("appearance"))
 
         val restored = SettingsProfileSerializer.profileFromJson(json)
         assertNotNull(restored)
@@ -103,6 +112,38 @@ class SettingsProfileSerializerTest {
         assertEquals(60, settings.panicHoldMinutes)
         assertEquals(250, settings.alertLatencyThresholdMs)
         assertEquals(1, settings.alertXrunThreshold)
+    }
+
+    @Test
+    fun `appearance settings round trip and clamp`() {
+        val restored = SettingsProfileSerializer.settingsFromJson(
+            SettingsProfileSerializer.settingsToJson(fullSettings())
+        )
+        assertNotNull(restored)
+        assertEquals(ThemeMode.DARK, restored!!.themeMode)
+        assertEquals(AccentColor.TEAL, restored.accentColor)
+        assertEquals(false, restored.dynamicColor)
+        assertEquals(7, restored.statusPollIntervalSeconds)
+        assertEquals(true, restored.highPriorityNotification)
+        assertEquals(true, restored.keepScreenOn)
+
+        val clamped = SettingsProfileSerializer.settingsFromJson(
+            """{"appearance": {"statusPollIntervalSeconds": 99}}"""
+        )
+        assertNotNull(clamped)
+        assertEquals(10, clamped!!.statusPollIntervalSeconds)
+    }
+
+    @Test
+    fun `unknown appearance ids fall back to defaults`() {
+        val restored = SettingsProfileSerializer.settingsFromJson(
+            """{"appearance": {"themeMode": "bogus", "accentColor": "chartreuse"}}"""
+        )
+        assertNotNull(restored)
+        assertEquals(ThemeMode.SYSTEM, restored!!.themeMode)
+        assertEquals(AccentColor.VIOLET, restored.accentColor)
+        assertTrue(restored.dynamicColor)
+        assertEquals(2, restored.statusPollIntervalSeconds)
     }
 
     @Test

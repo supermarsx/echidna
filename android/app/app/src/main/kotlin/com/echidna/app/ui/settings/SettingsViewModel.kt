@@ -2,9 +2,11 @@ package com.echidna.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import com.echidna.app.data.ControlStateRepository
+import com.echidna.app.model.AccentColor
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.LegacyPreprocessorControlState
+import com.echidna.app.model.ThemeMode
 import kotlinx.coroutines.flow.StateFlow
 
 class SettingsViewModel(
@@ -84,6 +86,20 @@ class SettingsViewModel(
 
     fun setRemindCompatibilityProbe(enabled: Boolean) =
         repo.setRemindCompatibilityProbe(enabled)
+
+    fun setThemeMode(mode: ThemeMode) = repo.setThemeMode(mode)
+
+    fun setDynamicColor(enabled: Boolean) = repo.setDynamicColor(enabled)
+
+    fun setAccentColor(accent: AccentColor) = repo.setAccentColor(accent)
+
+    fun setStatusPollIntervalSeconds(seconds: Int) =
+        repo.setStatusPollIntervalSeconds(seconds)
+
+    fun setHighPriorityNotification(enabled: Boolean) =
+        repo.setHighPriorityNotification(enabled)
+
+    fun setKeepScreenOn(enabled: Boolean) = repo.setKeepScreenOn(enabled)
 
     fun createSettingsProfile(name: String): String? = repo.createSettingsProfile(name)
 

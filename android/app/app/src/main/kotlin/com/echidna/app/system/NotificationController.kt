@@ -20,19 +20,35 @@ object NotificationController {
     private const val CHANNEL_ID = "echidna_controls"
     private const val NOTIFICATION_ID = 0xEC1
 
-    fun ensureChannel(context: Context) {
+    fun ensureChannel(context: Context, highPriority: Boolean = false) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 context.getString(R.string.notification_channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                channelImportance(highPriority)
             ).apply {
                 description = context.getString(R.string.notification_channel_description)
             }
             manager?.createNotificationChannel(channel)
         }
     }
+
+    /**
+     * Applies the user's chosen importance to the controls channel. Android O+ ignores the
+     * importance on a re-create of an existing channel id, so the channel is deleted and rebuilt.
+     * (The system may still floor a user's manual customization; this is the honest best effort.)
+     */
+    fun applyImportance(context: Context, highPriority: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            manager.deleteNotificationChannel(CHANNEL_ID)
+        }
+        ensureChannel(context, highPriority)
+    }
+
+    private fun channelImportance(highPriority: Boolean): Int =
+        if (highPriority) NotificationManager.IMPORTANCE_DEFAULT else NotificationManager.IMPORTANCE_LOW
 
     fun updateNotification(context: Context) {
         if (!canPostNotifications(context)) return
@@ -79,7 +95,13 @@ object NotificationController {
             .addAction(R.drawable.ic_echidna_mono, context.getString(R.string.notification_toggle), toggleIntent)
             .addAction(R.drawable.ic_echidna_mono, context.getString(R.string.notification_cycle), cycleIntent)
             .addAction(R.drawable.ic_echidna_mono, context.getString(R.string.notification_open), openIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(
+                if (ControlStateRepository.highPriorityNotification.value) {
+                    NotificationCompat.PRIORITY_DEFAULT
+                } else {
+                    NotificationCompat.PRIORITY_LOW
+                }
+            )
             .build()
     }
 

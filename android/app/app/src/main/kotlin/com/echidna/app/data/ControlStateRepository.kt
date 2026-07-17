@@ -3,6 +3,7 @@ package com.echidna.app.data
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.echidna.app.model.AccentColor
 import com.echidna.app.model.AudioStackProbe
 import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.ControlState
@@ -25,6 +26,7 @@ import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
 import com.echidna.app.model.TelemetrySample
 import com.echidna.app.model.TelemetrySnapshot
+import com.echidna.app.model.ThemeMode
 import com.echidna.app.model.TunerState
 import com.echidna.app.model.WhitelistBindings
 import com.echidna.app.system.ControlServiceClient
@@ -203,6 +205,24 @@ object ControlStateRepository {
     private val _remindCompatibilityProbe = MutableStateFlow(true)
     val remindCompatibilityProbe: StateFlow<Boolean> = _remindCompatibilityProbe.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    private val _dynamicColor = MutableStateFlow(true)
+    val dynamicColor: StateFlow<Boolean> = _dynamicColor.asStateFlow()
+
+    private val _accentColor = MutableStateFlow(AccentColor.VIOLET)
+    val accentColor: StateFlow<AccentColor> = _accentColor.asStateFlow()
+
+    private val _statusPollIntervalSeconds = MutableStateFlow(2)
+    val statusPollIntervalSeconds: StateFlow<Int> = _statusPollIntervalSeconds.asStateFlow()
+
+    private val _highPriorityNotification = MutableStateFlow(false)
+    val highPriorityNotification: StateFlow<Boolean> = _highPriorityNotification.asStateFlow()
+
+    private val _keepScreenOn = MutableStateFlow(false)
+    val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
+
     private val _settingsProfiles = MutableStateFlow<List<SettingsProfile>>(emptyList())
     val settingsProfiles: StateFlow<List<SettingsProfile>> = _settingsProfiles.asStateFlow()
 
@@ -235,6 +255,9 @@ object ControlStateRepository {
             persistPresets()
             loadPersistedSettings()
             NotificationController.ensureChannel(context)
+            if (_highPriorityNotification.value) {
+                NotificationController.applyImportance(context, true)
+            }
             if (_notificationEnabled.value) {
                 NotificationController.updateNotification(context)
             } else {
@@ -263,7 +286,9 @@ object ControlStateRepository {
             scope.launch {
                 var tick = 0L
                 while (true) {
-                    delay(2000)
+                    // User-configurable telemetry/status poll cadence (Appearance/Diagnostics
+                    // settings); read every iteration so a change takes effect on the next cycle.
+                    delay(_statusPollIntervalSeconds.value.coerceIn(1, 10) * 1000L)
                     serviceClient.fetchSnapshot()?.let { snapshot ->
                         TelemetryParser.parse(snapshot)?.let { applyTelemetry(it) }
                     }
@@ -576,6 +601,44 @@ object ControlStateRepository {
 
     fun setRemindCompatibilityProbe(enabled: Boolean) {
         _remindCompatibilityProbe.value = enabled
+        commitSettingsChange()
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        commitSettingsChange()
+    }
+
+    fun setDynamicColor(enabled: Boolean) {
+        _dynamicColor.value = enabled
+        commitSettingsChange()
+    }
+
+    fun setAccentColor(accent: AccentColor) {
+        _accentColor.value = accent
+        commitSettingsChange()
+    }
+
+    fun setStatusPollIntervalSeconds(seconds: Int) {
+        _statusPollIntervalSeconds.value = seconds.coerceIn(1, 10)
+        commitSettingsChange()
+    }
+
+    fun setHighPriorityNotification(enabled: Boolean) {
+        _highPriorityNotification.value = enabled
+        commitSettingsChange()
+        if (::context.isInitialized) {
+            // Channel importance can only be changed by recreating the channel (Android O+ ignores
+            // importance on a re-create of an existing id), so drop and rebuild it, then re-post.
+            NotificationController.applyImportance(context, enabled)
+            if (_notificationEnabled.value) {
+                NotificationController.updateNotification(context)
+            }
+        }
+    }
+
+    fun setKeepScreenOn(enabled: Boolean) {
+        _keepScreenOn.value = enabled
         commitSettingsChange()
     }
 
@@ -922,7 +985,13 @@ object ControlStateRepository {
             remindCompatibilityProbe = _remindCompatibilityProbe.value,
             masterEnabled = _masterEnabled.value,
             bypass = _bypass.value,
-            defaultPresetId = _defaultPresetId.value
+            defaultPresetId = _defaultPresetId.value,
+            themeMode = _themeMode.value,
+            dynamicColor = _dynamicColor.value,
+            accentColor = _accentColor.value,
+            statusPollIntervalSeconds = _statusPollIntervalSeconds.value,
+            highPriorityNotification = _highPriorityNotification.value,
+            keepScreenOn = _keepScreenOn.value
         )
 
     private fun applySettingsState(settings: SettingsState, pushSideEffects: Boolean) {
@@ -951,6 +1020,12 @@ object ControlStateRepository {
         _remindCompatibilityProbe.value = settings.remindCompatibilityProbe
         _masterEnabled.value = settings.masterEnabled
         _bypass.value = settings.bypass
+        _themeMode.value = settings.themeMode
+        _dynamicColor.value = settings.dynamicColor
+        _accentColor.value = settings.accentColor
+        _statusPollIntervalSeconds.value = settings.statusPollIntervalSeconds.coerceIn(1, 10)
+        _highPriorityNotification.value = settings.highPriorityNotification
+        _keepScreenOn.value = settings.keepScreenOn
         settings.defaultPresetId
             ?.takeIf { id -> _presets.value.any { it.id == id } }
             ?.let { _defaultPresetId.value = it }
@@ -962,6 +1037,7 @@ object ControlStateRepository {
         refreshSettingsState()
         if (!pushSideEffects) return
         if (::context.isInitialized) {
+            NotificationController.applyImportance(context, _highPriorityNotification.value)
             if (_notificationEnabled.value) {
                 NotificationController.updateNotification(context)
             } else {

@@ -11,8 +11,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -49,6 +55,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -56,11 +64,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.echidna.app.model.AccentColor
 import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.LatencyMode
 import com.echidna.app.model.LegacyPreprocessorControlState
 import com.echidna.app.model.SettingsProfile
 import com.echidna.app.model.SettingsState
+import com.echidna.app.model.ThemeMode
+import com.echidna.app.ui.theme.dynamicColorSupported
+import com.echidna.app.ui.theme.echidnaColorScheme
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -113,6 +125,16 @@ fun SettingsScreen(
         SettingsTabs(selectedTab = selectedTab, onSelect = { selectedTab = it })
 
         when (selectedTab) {
+            SettingsTab.APPEARANCE -> {
+                AppearanceSection(
+                    settings = settings,
+                    onThemeMode = viewModel::setThemeMode,
+                    onDynamicColor = viewModel::setDynamicColor,
+                    onAccentColor = viewModel::setAccentColor,
+                    onKeepScreenOn = viewModel::setKeepScreenOn
+                )
+            }
+
             SettingsTab.ALERTS -> {
                 AlertsLinkSection(onOpenAlerts = onOpenAlerts)
                 AlertPreferencesSection(
@@ -140,7 +162,8 @@ fun SettingsScreen(
                     settings = settings,
                     onPersistentNotification = viewModel::setPersistentNotification,
                     onQuickControls = viewModel::setQuickControlsEnabled,
-                    onWidgetControls = viewModel::setWidgetControlsEnabled
+                    onWidgetControls = viewModel::setWidgetControlsEnabled,
+                    onHighPriorityNotification = viewModel::setHighPriorityNotification
                 )
             }
 
@@ -176,7 +199,8 @@ fun SettingsScreen(
                 settings = settings,
                 onDebugMode = viewModel::setDebugMode,
                 onTelemetryOptIn = viewModel::setTelemetryOptIn,
-                onVerboseLogging = viewModel::setVerboseLogging
+                onVerboseLogging = viewModel::setVerboseLogging,
+                onStatusPollInterval = viewModel::setStatusPollIntervalSeconds
             )
 
             SettingsTab.PROFILES -> ProfileSection(
@@ -247,6 +271,7 @@ fun SettingsScreen(
 }
 
 private enum class SettingsTab(val title: String) {
+    APPEARANCE("Appearance"),
     ALERTS("Alerts"),
     STARTUP("Startup"),
     ENGINE("Engine"),
@@ -561,7 +586,8 @@ private fun DiagnosticsSection(
     settings: SettingsState,
     onDebugMode: (Boolean) -> Unit,
     onTelemetryOptIn: (Boolean) -> Unit,
-    onVerboseLogging: (Boolean) -> Unit
+    onVerboseLogging: (Boolean) -> Unit,
+    onStatusPollInterval: (Int) -> Unit
 ) {
     SettingsSection(title = "Diagnostics and Developer") {
         ToggleRow(
@@ -581,6 +607,22 @@ private fun DiagnosticsSection(
             description = "Keep additional app-side diagnostics for troubleshooting.",
             checked = settings.verboseLogging,
             onCheckedChange = onVerboseLogging
+        )
+        Text(
+            text = "Status poll interval ${settings.statusPollIntervalSeconds} s",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            text = "How often the app polls the control service for telemetry, module, and " +
+                "SELinux/HAL status. Lower is more responsive; higher saves battery.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Slider(
+            value = settings.statusPollIntervalSeconds.toFloat(),
+            onValueChange = { onStatusPollInterval(it.roundToInt()) },
+            valueRange = 1f..10f,
+            steps = 8
         )
     }
 }
@@ -645,12 +687,134 @@ private fun SafetySection(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AppearanceSection(
+    settings: SettingsState,
+    onThemeMode: (ThemeMode) -> Unit,
+    onDynamicColor: (Boolean) -> Unit,
+    onAccentColor: (AccentColor) -> Unit,
+    onKeepScreenOn: (Boolean) -> Unit
+) {
+    val dynamicSupported = dynamicColorSupported()
+    val dynamicActive = dynamicSupported && settings.dynamicColor
+    SettingsSection(title = "Theme") {
+        Text(text = "Theme mode", style = MaterialTheme.typography.titleSmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            enumValues<ThemeMode>().forEach { mode ->
+                ChoiceButton(
+                    label = mode.label,
+                    selected = settings.themeMode == mode,
+                    onClick = { onThemeMode(mode) }
+                )
+            }
+        }
+        Text(
+            text = "System follows your device's light/dark setting. Light and Dark force the app " +
+                "regardless of the system.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        ToggleRow(
+            title = "Dynamic color (Material You)",
+            description = if (dynamicSupported) {
+                "Tint the app from your wallpaper palette. Turn off to pick a fixed accent below."
+            } else {
+                "Requires Android 12 or newer. This device uses the fixed accent below instead."
+            },
+            checked = dynamicActive,
+            enabled = dynamicSupported,
+            onCheckedChange = onDynamicColor
+        )
+
+        Text(text = "Accent color", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = if (dynamicActive) {
+                "Dynamic color is on, so the wallpaper palette is used instead of a fixed accent."
+            } else {
+                "Used for the app's Light and Dark schemes."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        val previewDark = settings.themeMode.let { mode ->
+            when (mode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            enumValues<AccentColor>().forEach { accent ->
+                AccentSwatch(
+                    label = accent.label,
+                    color = echidnaColorScheme(accent, previewDark).primary,
+                    selected = !dynamicActive && settings.accentColor == accent,
+                    enabled = !dynamicActive,
+                    onClick = { onAccentColor(accent) }
+                )
+            }
+        }
+
+        ToggleRow(
+            title = "Keep screen on",
+            description = "Prevent the display from sleeping while Echidna is in the foreground.",
+            checked = settings.keepScreenOn,
+            onCheckedChange = onKeepScreenOn
+        )
+    }
+}
+
+@Composable
+private fun AccentSwatch(
+    label: String,
+    color: Color,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .semantics {
+                contentDescription = label
+                stateDescription = if (selected) "Selected" else "Not selected"
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .clickable(enabled = enabled, onClick = onClick)
+                .background(if (enabled) color else color.copy(alpha = 0.4f))
+                .border(if (selected) 3.dp else 1.dp, borderColor, CircleShape)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+    }
+}
+
 @Composable
 private fun NotificationSection(
     settings: SettingsState,
     onPersistentNotification: (Boolean) -> Unit,
     onQuickControls: (Boolean) -> Unit,
-    onWidgetControls: (Boolean) -> Unit
+    onWidgetControls: (Boolean) -> Unit,
+    onHighPriorityNotification: (Boolean) -> Unit
 ) {
     SettingsSection(title = "Notification and Control") {
         ToggleRow(
@@ -658,6 +822,14 @@ private fun NotificationSection(
             description = "Keep quick toggles available in the status bar.",
             checked = settings.persistentNotification,
             onCheckedChange = onPersistentNotification
+        )
+        ToggleRow(
+            title = "High-priority notification",
+            description = "Raise the controls channel from silent to default importance. Android " +
+                "rebuilds the channel on change and may keep a manual customization you set later.",
+            checked = settings.highPriorityNotification,
+            enabled = settings.persistentNotification,
+            onCheckedChange = onHighPriorityNotification
         )
         ToggleRow(
             title = "Quick Settings tile",

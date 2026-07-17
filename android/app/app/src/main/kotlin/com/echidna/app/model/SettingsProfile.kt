@@ -53,7 +53,16 @@ data class SettingsState(
     val remindCompatibilityProbe: Boolean = true,
     val masterEnabled: Boolean = true,
     val bypass: Boolean = false,
-    val defaultPresetId: String? = null
+    val defaultPresetId: String? = null,
+    // Appearance (t9-e4): theme mode, Material-You dynamic color, and the fallback accent used
+    // when dynamic color is off or unavailable (< Android 12).
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val dynamicColor: Boolean = true,
+    val accentColor: AccentColor = AccentColor.VIOLET,
+    // Additional honest configurability (t9-e4).
+    val statusPollIntervalSeconds: Int = 2,
+    val highPriorityNotification: Boolean = false,
+    val keepScreenOn: Boolean = false
 )
 
 data class SettingsProfile(
