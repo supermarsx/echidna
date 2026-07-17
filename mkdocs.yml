@@ -12,6 +12,11 @@ edit_uri: edit/main/docs/
 
 copyright: Copyright &copy; Echidna contributors — MIT-derived non-commercial license
 
+# The screenshot MANIFEST is an internal author-facing path->caption contract, not a
+# published doc page — keep it out of the built site (and thus out of the nav orphan list).
+exclude_docs: |
+  assets/screenshots/MANIFEST.md
+
 theme:
   name: material
   language: en
@@ -89,9 +94,16 @@ nav:
       - Design Rationale: design-rationale.md
       - Why It's Hard: why-hard.md
   - Using Echidna:
+      - Getting Started: getting-started.md
       - Build & Install: build-install.md
+      - Guided Installer: installer-guide.md
       - Recovering from a Bootloop: recovery.md
       - DSP & Effects: dsp-effects.md
+      - The Lab — Local DSP Test: usage-lab.md
+      - Theming & Material You: usage-theming.md
+      - Widgets & Quick Settings: usage-widgets-quicksettings.md
+      - Alerts: usage-alerts.md
+      - In-App Help & Search: usage-help.md
       - Performance Testing: performance-testing.md
       - Screenshots: screenshots.md
   - Reference:
@@ -99,6 +111,8 @@ nav:
       - Limitations: limitations.md
       - Verification: verification.md
       - Legacy Effect Loader Validation: legacy-effect-emulator-loader-validation.md
+      - Stable AIDL Effect OEM Integration: stable-aidl-effect-oem-integration.md
+      - API 33 Legacy Preprocessor Session: validation/legacy-preprocessor-api33-session.md
       - Vendor HAL Analysis: vendor-hal-analysis.md
   - Hardening:
       - Checklist (24-section status): hardening/checklist.md
@@ -108,5 +122,6 @@ nav:
       - AudioFlinger Route: hardening/audioflinger-route.md
   - Developer:
       - Developer Guide: developer_readme.md
+      - Troubleshooting & FAQ: troubleshooting-faq.md
       - Signing: signing.md
       - Magisk Release: magisk_release.md
