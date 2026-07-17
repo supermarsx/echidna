@@ -371,6 +371,11 @@ val stageHelpDocs = tasks.register<Sync>("stageHelpDocs") {
             include("assets/**/*.png")
             include("assets/**/*.webp")
             include("assets/**/*.svg")
+            // Internal author-facing docs are NOT user-facing Help pages: the screenshot caption
+            // manifest and any other `.md` living under assets/ are build-time contracts, not Help
+            // content, and would otherwise pollute the in-app Help list and full-text search.
+            exclude("**/MANIFEST.md")
+            exclude("assets/**/*.md")
         }
     }
     // A canonical owned mirror, not a cache — always run so added/removed docs are reflected.
