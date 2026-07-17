@@ -261,7 +261,7 @@ Verified by GATE-3 (`telemetry_socket_exporter_test` asserting the v3 key set,
 `AuthenticatedTelemetryTest` unknown-key / mixed-key / replay / `schemaVersion`
 -bound cases, app `AuthenticatedTelemetryParsingTest`). See
 [checklist §18-F2](checklist.md#18-observability-without-damaging-the-audio-path)
-and [threat-model §3.2](threat-model.md#32-evidence--telemetry-integrity).
+and [threat-model §3.2](threat-model.md#32-evidence-telemetry-integrity).
 
 ### Note — local CRLF on `state/shared_state.{h,cpp}`
 The working-tree copies carry CRLF from `core.autocrlf=true`; the **committed
