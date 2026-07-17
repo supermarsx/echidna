@@ -59,6 +59,23 @@ val engineModuleZip: java.io.File = rootProject.file("../../out/echidna-magisk.z
 val engineModuleAssetsDir = layout.buildDirectory.dir("generated/echidna/assets")
 val engineModuleAssetName = "echidna-magisk.zip"
 
+// --- Lab in-process DSP engine (libech_dsp.so) -------------------------------
+// The "Lab" tab runs the app's OWN mic/test-tone audio through the REAL DSP
+// engine in-process (no Zygisk, no root) via the echidna_lab_jni bridge built by
+// externalNativeBuild below. That bridge dlopens libech_dsp.so, so the DSP engine
+// must be packaged into this APK's jniLibs. The per-ABI .so are produced OUTSIDE
+// the APK build by tools/build_native_ndk.sh into <repo>/build/<abi>/lib/libech_dsp.so
+// (a multi-MB binary, gitignored — never committed). The stageLabDspJniLibs task
+// mirrors them into a build-generated jniLibs dir wired onto the main source set.
+//
+// Honest about absence: when the engine .so has NOT been built (a "lite" APK from
+// a fresh checkout / CI without the native step) nothing is staged and the Lab
+// reports "DSP engine unavailable" instead of the build failing — exactly as the
+// EchidnaLabDsp bridge already handles a failed dlopen.
+val labDspNativeBuildRoot: java.io.File = rootProject.file("../../build")
+val labDspAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val labDspJniLibsDir = layout.buildDirectory.dir("generated/echidna/labJniLibs")
+
 android {
     namespace = "com.echidna.app"
     compileSdk = 34
@@ -74,6 +91,13 @@ android {
 
         // Instrumentation runner for the androidTest sources added by t2-e18.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Constrain to the three ABIs the DSP engine (libech_dsp.so) ships for, so the
+        // Lab bridge (echidna_lab_jni), the control JNI, and the DSP engine are packaged
+        // for the same set of ABIs. Modern emulators are x86_64; legacy x86 is dropped.
+        ndk {
+            abiFilters += labDspAbis
+        }
     }
 
     signingConfigs {
@@ -115,6 +139,13 @@ android {
         }
     }
 
+    // Build the Lab in-process DSP bridge (libechidna_lab_jni.so) for each ABI.
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
     buildFeatures {
         compose = true
         // AIDL is now owned solely by the :service library (single source of
@@ -153,6 +184,9 @@ android {
     // (gitignored) so no ~15 MB binary is ever tracked.
     sourceSets {
         getByName("main").assets.srcDir(engineModuleAssetsDir)
+        // Stage the DSP engine .so (libech_dsp.so) into the APK's jniLibs so the Lab
+        // bridge can dlopen it in-process. Empty on a lite build (Lab reports unavailable).
+        getByName("main").jniLibs.srcDir(labDspJniLibsDir)
     }
 
     testOptions {
@@ -197,6 +231,8 @@ dependencies {
     // round-trip. Robolectric supports tests that touch Android framework classes.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.11.1")
+    // Deterministic dispatcher control for LabViewModel's coroutine-driven processing test.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("androidx.test.ext:junit:1.1.5")
     // Compose UI test under Robolectric (JVM) for the DismissibleAlert component tests added by
     // t8-e4: dismiss hides + persists, action button invokes onAction, dismiss-only renders.
@@ -257,34 +293,86 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
 // preBuild dependency covers any variant/tooling path that reads assets before an explicit merge.
 tasks.named("preBuild").configure { dependsOn(stageEngineModuleAsset) }
 
+// Stage the DSP engine .so (libech_dsp.so) into a generated jniLibs dir so it is packaged
+// alongside the Lab bridge and dlopen-able in-process. Sync so stale/partial ABIs are pruned.
+// Never fails the build when the engine has not been built (lite APK): it simply stages nothing
+// and the Lab reports "DSP engine unavailable", matching EchidnaLabDsp's honest dlopen fallback.
+val stageLabDspJniLibs = tasks.register<Sync>("stageLabDspJniLibs") {
+    description = "Stages the per-ABI libech_dsp.so into the APK jniLibs for the in-process Lab DSP test."
+    group = "echidna"
+    into(labDspJniLibsDir)
+    // A canonical owned mirror, not a cache — always run so a removed engine .so is pruned.
+    outputs.upToDateWhen { false }
+    labDspAbis.forEach { abi ->
+        from(File(labDspNativeBuildRoot, "$abi/lib")) {
+            include("libech_dsp.so")
+            into(abi)
+        }
+    }
+    doLast {
+        val staged = labDspAbis.count { abi ->
+            File(labDspNativeBuildRoot, "$abi/lib/libech_dsp.so").isFile
+        }
+        if (staged == 0) {
+            logger.lifecycle(
+                "stageLabDspJniLibs: no libech_dsp.so under ${labDspNativeBuildRoot.path}/<abi>/lib — " +
+                    "building a lite APK (Lab tab reports the DSP engine as unavailable). " +
+                    "Run tools/build_native_ndk.sh to bundle the in-process engine."
+            )
+        } else {
+            logger.lifecycle("stageLabDspJniLibs: staged libech_dsp.so for $staged/${labDspAbis.size} ABIs")
+        }
+    }
+}
+
+// The jniLibs merge must see the staged engine .so, so make every jniLibs merge depend on staging.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach {
+    dependsOn(stageLabDspJniLibs)
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }.configureEach {
+    dependsOn(stageLabDspJniLibs)
+}
+tasks.named("preBuild").configure { dependsOn(stageLabDspJniLibs) }
+
 tasks.register("verifyDebugNativePackaging") {
     dependsOn("assembleDebug")
     doLast {
         val apk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
         check(apk.isFile) { "Missing companion debug APK: $apk" }
 
-        val expected = setOf(
-            "lib/arm64-v8a/libechidna_control_jni.so",
-            "lib/armeabi-v7a/libechidna_control_jni.so",
-            "lib/x86/libechidna_control_jni.so",
-            "lib/x86_64/libechidna_control_jni.so",
-        )
+        val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        // The control JNI and the in-process Lab DSP bridge must always be packaged for
+        // every ABI. The DSP engine (libech_dsp.so) is required too when the native engine
+        // has been built (full APK); a lite APK omits it and the Lab reports it unavailable.
+        val requiredBridges = abis.flatMap { abi ->
+            listOf(
+                "lib/$abi/libechidna_control_jni.so",
+                "lib/$abi/libechidna_lab_jni.so",
+            )
+        }.toSet()
         val packaged = ZipFile(apk).use { zip ->
             zip.entries().asSequence()
                 .filter { !it.isDirectory && it.name.startsWith("lib/") }
                 .map { it.name }
                 .toSet()
         }
-        check(packaged == expected) {
-            "Companion native package mismatch. Expected $expected but found $packaged"
+        check(packaged.containsAll(requiredBridges)) {
+            "Companion native package missing bridge libraries. Expected all of $requiredBridges but found $packaged"
         }
+        // The DSP engine, when present, must be packaged consistently for all ABIs so the
+        // Lab works on whichever ABI the device runs.
+        val dspAbis = abis.filter { abi -> packaged.contains("lib/$abi/libech_dsp.so") }
+        check(dspAbis.isEmpty() || dspAbis.size == abis.size) {
+            "libech_dsp.so packaged for an inconsistent ABI subset ($dspAbis); expected none or all of $abis"
+        }
+        // The Zygisk module and the LSPosed shim JNI must NEVER leak into the app APK. The DSP
+        // engine (libech_dsp.so) is intentionally allowed here — it is the in-process Lab engine.
         val forbidden = setOf(
             "libechidna.so",
             "libechidna_shim_jni.so",
-            "libech_dsp.so",
         )
         check(packaged.none { entry -> forbidden.any(entry::endsWith) }) {
-            "A Zygisk/shim/DSP library leaked into the companion APK: $packaged"
+            "A Zygisk/shim library leaked into the companion APK: $packaged"
         }
     }
 }

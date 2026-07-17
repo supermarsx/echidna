@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- The Lab tab records the device's OWN microphone to test the mic and run the
+         local DSP engine on the user's own voice. It captures only in-app while the
+         user is on the Lab screen; it does NOT intercept any other app's audio. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Control service now ships inside this APK; the old cross-package
          signature permission is self-referential and has been removed. -->
 
