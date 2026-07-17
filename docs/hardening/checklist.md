@@ -28,6 +28,7 @@ against: **overstating proof.**
 | --- | --- |
 | **Landed-t6** | §3, §9, §10, §18, §19 — the landable subset of that task (5 sections materially advanced). |
 | **Landed-t8** | §13 (consolidated threat-model doc, t8-e3); §18-F2 wire schema v3 (t8-e2); in-app installer under §15/§20 (t8-e1). |
+| **Landed-t9** | §8 (armv7 ARM32/Thumb-2 prologue relocator, host-proven; on-device execution device-gated); §9 (libc `read` RT residual fixed via per-fd verdict cache); AudioFlinger decision note ([audioflinger-route.md](audioflinger-route.md); route stays device-gated / not viable from Zygisk). **Nothing new is on-device-proven.** |
 | **Pre-existing** | §1, §2 (host half), §4, §5, §6, §8, §11, §12, §13 (controls), §14 (config half), §15, §16, §20, §21, §22 |
 | **Device-gated** | §2 (E2E half), §7, §17 (operation), §23 (M3/M5), plus the live-proof half of §4/§5/§6/§14 |
 | **Open** | named next-steps inside §7, §16, §23 |
@@ -166,24 +167,31 @@ memory the AAudio contract forbids mutating in place.
 
 ## 8 — Audit the inline-hooking backend
 
-**Status: Pre-existing.**
+**Status: Pre-existing + Landed-t9 (armv7 relocator, host-proven).**
 
 - Multi-ABI inline hook: aarch64 primary; x86_64 relocating trampoline (14-byte
   abs `jmp[rip]`, allow-listed length decoder, fails closed on anything
-  unrecognized) with a host decoder harness (23/23) + end-to-end hook harness;
-  armeabi-v7a intentionally **disabled** (`hook_unsupported_abi`) until a proven
-  Thumb-2/IT-block relocator exists. **Pre-existing** (t2-e11 log;
-  `native/zygisk/src/hooks/inline_hook.cpp`).
+  unrecognized) with a host decoder harness (23/23) + end-to-end hook harness.
+  **Pre-existing** (t2-e11 log; `native/zygisk/src/runtime/inline_hook.cpp`).
+- armeabi-v7a now has a real ARM32/Thumb-2 prologue relocator
+  (`native/zygisk/src/runtime/armv7_instruction.h`, host-proven by
+  `armv7_instruction_test.cpp`): direct routes attempt install and the relocator
+  fails closed per function on any prologue it cannot provably relocate, never a
+  half-written patch. **Landed-t9** — relocator host-proven; on-hardware
+  install/execution is device-gated
+  (`armv7_inline_relocation_host_proven_on_device_gated`), not claimed at parity
+  with arm64.
 - Zygisk load-blocking backend bugs were found and fixed on-device by t4:
   `extern "C"` on `REGISTER_ZYGISK_MODULE` (commit `0817ef2`) and the Zygisk API
   v3 downgrade so Magisk accepts the module (commit `f47be79`). **Pre-existing
   (t4).**
-- **x86_64 under real injection + a safe armv7 relocator — Device-gated / Open**
-  (armv7 is an explicit non-goal unless 32-bit becomes a release target).
+- **x86_64 under real injection — Device-gated. armv7 relocator host-proven;
+  on-hardware install/execution — Device-gated** (no armv7 on-device execution is
+  claimed).
 
 ## 9 — Enforce real-time safety in the data plane
 
-**Status: Landed-t6 (audit + host locks) with one honest Device-gated residual.**
+**Status: Landed-t6 (audit + host locks) + Landed-t9 (libc `read` RT residual fixed on host).**
 
 - Every owned non-AAudio route (OpenSL, tinyalsa, AudioFlinger [disabled],
   AudioRecord native, capture_buffer_router) audited **RT-clean**: lock-free
@@ -193,10 +201,19 @@ memory the AAudio contract forbids mutating in place.
   close-quiesce. AAudio RT-safety is covered by the §3 fix.
   **Landed-t6 (t6-e1 for AAudio, t6-e3 for the rest):** full route table in
   [`rt-safety.md`](rt-safety.md#route-by-route-table).
-- **Residual (honest): libc `read` route runs `fstat()` + `readlink()` per read**
-  — a real RT violation. **Device-gated fix** (per-fd verdict cache needs
-  fd-lifecycle correctness, provable only on-device with descriptor reuse); route
-  is opt-in (`ECHIDNA_LIBC_*`). [`rt-safety.md` FINDING-1](rt-safety.md#finding-1-libc-read-route-runs-fstat-readlink-on-the-hot-path-reported-device-gated-fix).
+- **libc `read` RT residual — Landed-t9 (host-resolved):** the per-read `fstat()` +
+  `readlink()` classification (a real RT violation at base `42e4300`) now runs behind a
+  **per-fd verdict cache** (`fd_verdict_cache.h`, host-tested by `fd_verdict_cache_test.cpp`),
+  so the hot read path is a single lock-free atomic lookup and the classifying syscalls run
+  once per fd off the hot path, with `close`/`dup`/`dup2`/`dup3` invalidation for fd-reuse
+  correctness. On-device descriptor-reuse timing stays **device-gated**; route is opt-in
+  (`ECHIDNA_LIBC_*`). [`rt-safety.md` FINDING-1](rt-safety.md#finding-1-libc-read-route-ran-fstat-readlink-on-the-hot-path-resolved-per-fd-verdict-cache-t9).
+- **AudioFlinger route** stays disabled and **not viable from the Zygisk vantage** on a stock
+  device (Zygisk never injects `audioserver`; `RecordThread` exposes no stable PCM-buffer
+  transform ABI). t9 added the design/decision note
+  [`audioflinger-route.md`](audioflinger-route.md) plus a host-tested, hard-OFF admission guard;
+  the live transform remains **device-gated** behind a separately-proven `audioserver`-injection
+  boundary.
 - **On-device xrun / callback-timing measurement — Device-gated.**
 
 ## 10 — Harden DSP correctness & audio quality
