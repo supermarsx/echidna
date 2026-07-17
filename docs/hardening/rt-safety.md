@@ -36,7 +36,7 @@ audited by `t6-e2`).
 | **tinyalsa** | `ForwardReadBytes` / `ForwardReadFrames` → `TinyAlsaStreamRegistry::process` | `ReadDepthGuard` (thread-local, no alloc); lock-free `framesForBytes` + admission+slot; `ProcessingAllowed()` = single atomic load; in-place DSP; lock-free telemetry | **Yes** | `tinyalsa_stream_registry_test` — byte-path + frame-path zero-alloc, fail-open on revoke (buffer byte-exact, never enters DSP), close-race pointer-reuse. Symbol gating: `tinyalsa_contract_test`. Live `pcm_read` interception is **device-gated**. |
 | **AudioFlinger** | `install()` returns `false` | route intentionally **disabled** — no hook, no hot path | Yes (by construction) | `capture_route_reachability_test`. No PCM transform ABI is claimed on the audioserver boundary (documented in `audioflinger_hook_manager.cpp`). Any future support is a separate device-proven boundary. |
 | **AudioRecord::read (native)** | `ForwardRead` → `RouteCaptureBufferInPlace` | atomic-refcount `acquireAudioProcessing()` permit; lock-free `ScratchLease` (fixed pool); `ProcessPcmBufferInPlace` (caller scratch, no alloc, fail-open); lock-free telemetry | **Yes** | `capture_buffer_router_test` — zero-alloc RT path, scratch-exhaustion fails closed with buffer untouched, non-finite/partial-failure never commits. Live exact-ABI hook install is **device-gated**. |
-| **libc `read`** | `ForwardRead` → `IsRawAudioDevice` → `RouteCaptureBufferInPlace` | **`fstat()` + `readlink("/proc/self/fd/N")` per read** (see FINDING-1); then lock-free router path | **No — residual violation (FINDING-1)** | Router core proven by `capture_buffer_router_test`; the per-read `fstat`/`readlink` classification is a **reported** RT violation (device-gated fix). Route is an opt-in developer contract (`ECHIDNA_LIBC_*`). |
+| **libc `read`** | `ForwardRead` → per-fd verdict cache → `RouteCaptureBufferInPlace` | lock-free per-fd verdict lookup (single atomic load); the `fstat()` + `readlink("/proc/self/fd/N")` classification runs **once per fd off the hot path** on a cache miss (see FINDING-1); then lock-free router path | **Yes (per-fd verdict cache)** | Router core proven by `capture_buffer_router_test`; the per-fd verdict cache (`fd_verdict_cache.h`, `fd_verdict_cache_test.cpp`) keeps the classifying syscalls off the hot read path — hot reads are a single wait-free atomic load, with `close`/`dup`/`dup2`/`dup3` invalidation keeping verdicts correct across fd reuse. Live on-device descriptor-reuse timing remains device-gated. Route is an opt-in developer contract (`ECHIDNA_LIBC_*`). |
 | **capture_buffer_router** (shared) | `RouteCaptureBufferInPlace` → `ProcessPcmBufferInPlace` | lock-free `ScratchLease` over a fixed 4-slot pool; decode→process→finite-check→encode against caller memory; no alloc, no lock, no syscall, no log | **Yes** | `capture_buffer_router_test` — zero-alloc assertion, exhaustion fail-closed, guard-page boundary, sentinel bounds, non-finite rejection. Backs both AudioRecord and libc routes. |
 | **LSPosed / legacy-preprocessor (Java)** | `AudioRecordHook.*ReadHook.afterHookedMethod` → `AudioReadTransaction.execute` → `NativeBridge.process*` | XposedBridge reflection trampoline; `ReadNestingGuard` thread-local; `RegionBackup` thread-local scratch (array reads amortize to zero alloc; **heap-`ByteBuffer` branch allocates `new byte[length]` per call** — FINDING-2); JNI into native DSP; managed-runtime GC always possible | **No (not hard-RT, by design)** | Audited by inspection only (Java, device-gated). Fail-open is structurally sound: the original `read()` result is always preserved and the exact region is restored on native failure/exception/policy-revocation (`AudioReadTransactionTest`, `ByteBufferProcessorTest`). |
 
@@ -44,31 +44,34 @@ audited by `t6-e2`).
 
 ## Findings
 
-### FINDING-1 — libc `read` route runs `fstat` + `readlink` on the hot path (REPORTED, device-gated fix)
+### FINDING-1 — libc `read` route ran `fstat` + `readlink` on the hot path (RESOLVED — per-fd verdict cache, t9)
 
-`libc_read_hook_manager.cpp::ForwardRead` calls `IsRawAudioDevice(fd)` on every
-intercepted `read()` that returns bytes. `IsRawAudioDevice` issues **two
-blocking syscalls per call** — `fstat(fd, …)` and
+**Original violation (base `42e4300`).** `libc_read_hook_manager.cpp::ForwardRead`
+called `IsRawAudioDevice(fd)` on every intercepted `read()` that returned bytes.
+`IsRawAudioDevice` issues **two blocking syscalls per call** — `fstat(fd, …)` and
 `readlink("/proc/self/fd/<fd>", …)` (a `/proc` filesystem traversal) — plus an
 `snprintf`, to decide whether the descriptor is `/dev/snd/*` or `/dev/audio`.
 Because the libc `read` hook intercepts *all* reads in the process, this
-classification runs inside the audio capture read path.
+classification ran inside the audio capture read path.
 
-- **Why it is a violation:** `readlink` on `/proc/self/fd` is not a bounded,
+- **Why it was a violation:** `readlink` on `/proc/self/fd` is not a bounded,
   wait-free operation; under memory pressure or a slow `/proc` it can block. On
   a hard-RT audio thread this risks an xrun.
-- **Why it is not fixed here:** (a) `libc_read_hook_manager.cpp` is outside this
-  task's writable set; (b) the correct fix is to cache the audio-device verdict
-  per descriptor, which requires tracking fd lifecycle (open/close/`dup`) to
-  stay correct across fd reuse — a change whose correctness can only be proven
-  on-device with real descriptor churn. Applying it here without device proof
-  would overstate the evidence.
-- **Mitigation already present:** the route is opt-in (guarded by the
-  `ECHIDNA_LIBC_SR` / `_CH` / `_FORMAT` developer contract) and is not part of
-  the default capture path.
-- **Recommended follow-up:** cache `(fd → is-audio-device)` populated off the RT
-  path (e.g. at first classification or via an fd-open hook), invalidated on
-  close; prove with an on-device descriptor-reuse test.
+- **Resolution (t9):** the classification is now behind a **per-fd verdict cache**
+  (`fd_verdict_cache.h` / `.cpp`, host-tested by `fd_verdict_cache_test.cpp`). The
+  hot read path does a single lock-free, allocation-free, syscall-free atomic
+  lookup; the `fstat` + `readlink` classification runs **once per fd**, off the hot
+  path, only on a cache miss (first sighting). The classification *logic* is
+  unchanged — only *when* it runs moved. fd-reuse correctness is handled by
+  observing fd lifecycle: `invalidate` on `close`, and `alias`/`invalidate` on
+  `dup`/`dup2`/`dup3`; if a lifecycle event cannot be observed the cache degrades
+  to "miss → reclassify" rather than trusting a stale verdict.
+- **Mitigation still present:** the route remains opt-in (guarded by the
+  `ECHIDNA_LIBC_SR` / `_CH` / `_FORMAT` developer contract) and is not part of the
+  default capture path.
+- **Device-gated residual:** live on-device descriptor-reuse timing (real churn on
+  a physical audio thread) is still device-gated; the host tests prove the cache's
+  logic, lock-freedom, and lifecycle invalidation, not on-device timing.
 
 ### FINDING-2 — LSPosed Java path is not hard-RT; heap-`ByteBuffer` branch allocates per call (REPORTED, by design / device-gated)
 
@@ -141,7 +144,7 @@ guard-page boundary, non-finite/partial-failure rejection.
 
 | Route | Residual | Severity | Disposition |
 | --- | --- | --- | --- |
-| libc `read` | `fstat` + `readlink` per read (FINDING-1) | Real RT violation | Reported; device-gated fix (fd-verdict cache). Opt-in developer route. |
+| libc `read` | classifying `fstat` + `readlink` now off the hot path (FINDING-1) | Resolved on host | Fixed in t9 via a per-fd verdict cache (`fd_verdict_cache.h`); hot path is a lock-free atomic lookup. On-device descriptor-reuse timing device-gated. Opt-in developer route. |
 | LSPosed (Java) | not hard-RT; heap-`ByteBuffer` per-call alloc (FINDING-2) | Non-hard-RT by design | Reported; inherent to managed-runtime hook. Fail-open verified by inspection + JVM unit tests. |
 | All routes | live inline-patch install, real audio-thread timing, xrun measurement | n/a | **Device-gated** — host tests prove logic/allocation/fail-open, not on-device timing. |
 
