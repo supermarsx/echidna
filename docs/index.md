@@ -2,8 +2,8 @@
 
 Echidna is a native-first, root-level real-time voice changer for Android. It
 combines a companion app, an in-process control service, a Zygisk/LSPosed hook
-layer, and a C++ DSP engine to transform microphone audio inside selected target
-apps.
+layer, and a C++ DSP engine designed to transform microphone audio inside selected
+target apps.
 
 !!! warning "Current verification status"
     The repository builds the companion APK, per-ABI native libraries, and a

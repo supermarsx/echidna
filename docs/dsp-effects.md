@@ -1,7 +1,8 @@
 # DSP Pipeline & Effects Reference
 
 Echidna's audio processing lives in `libech_dsp.so` (the DSP engine) and is invoked from
-`libechidna.so` inside each hooked audio process. Captured audio blocks are processed
+`libechidna.so` inside each hooked audio process (on a device where the hook is active —
+device-gated; see [Verification](verification.md)). Captured audio blocks are processed
 **synchronously inside the hooked read callback** to minimise copies and latency; a **hybrid**
 mode can offload heavier work to a worker thread when a preset asks for quality over latency.
 
