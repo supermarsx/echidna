@@ -306,6 +306,13 @@ memory the AAudio contract forbids mutating in place.
   with a verified exact-file layout; signed release with fail-closed signing
   preflight and a debug fallback for local builds. **Pre-existing** (t2-e13/e14;
   `docs/magisk_release.md`, [Verification §1](../verification.md#1-verified-on-this-build-host-emulator-real-reproducible)).
+- **Bootloop-recovery documentation — Covered.** A dedicated least-invasive-first
+  recovery ladder (all-modules-off boot → the real disable markers → `fastboot
+  flash` of a stock `boot.img` → clean Magisk reinstall) is documented in
+  [`docs/recovery.md`](../recovery.md), grounded in the module boot scripts and
+  attributing the fastboot method to
+  [issue #17](https://github.com/supermarsx/echidna/issues/17). Cross-referenced
+  from the README, `limitations.md`, `build-install.md`, and `magisk_release.md`.
 - **Magisk-Manager flash + reboot + watchdog/recovery-marker behavior on a real
   device — Device-gated** (`magisk --install-module` returned *Incomplete Magisk
   install* on the rooted emulator; [Verification §2](../verification.md#2-still-not-verified-device-gated)).
