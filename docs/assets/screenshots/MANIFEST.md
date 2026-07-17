@@ -57,3 +57,12 @@ Magisk-flash or LSPosed-injection success.
 > caption above passes the honesty rules: unrooted states say Not
 > Installed/Unavailable; the Lab is local DSP proof, never interception; nothing
 > claims a Magisk-flash/LSPosed-inject success.
+
+## Exported diagrams (PNG twins of mermaid, for in-app Help fidelity)
+
+S1 owns the PNG files under `docs/assets/diagrams/`; the authoring `.md`
+references them and the mermaid source lives beside them in the doc.
+
+| Path | Rendered from | What it shows |
+|---|---|---|
+| `assets/diagrams/architecture-overview.png` | A3's `architecture.md` component-overview mermaid fence (rendered via mermaid-cli, indigo theme, 1568x1544, ~47 KB) | The big-picture: Companion APK (Compose UI -> repo -> ControlService -> control JNI + policy registry/provider) + the flashable Magisk module (Zygisk `libechidna.so` -> `libech_dsp.so`) + target-process hook routes (normal-flow / developer-contract / unsupported boundaries) + the LSPosed shim, wired by device-gated dlopen and UID-scoped policy v2. Renders in the web docs (native mermaid) and in-app Help (this PNG twin). |
