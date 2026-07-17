@@ -48,11 +48,22 @@ def dynamic_info(_data: bytes, entry: str) -> object:
     return verifier.DynamicInfo(name, needed, exports)
 
 
-def write_companion(path: Path, *, omit_abi: str | None = None) -> None:
+def write_companion(
+    path: Path,
+    *,
+    omit_abi: str | None = None,
+    omit_library: str | None = None,
+    include_dsp: bool = False,
+) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         for abi in verifier.COMPANION_ABIS:
-            if abi != omit_abi:
-                archive.writestr(f"lib/{abi}/libechidna_control_jni.so", elf_for(abi))
+            if abi == omit_abi:
+                continue
+            for library in ("libechidna_control_jni.so", "libechidna_lab_jni.so"):
+                if library != omit_library:
+                    archive.writestr(f"lib/{abi}/{library}", elf_for(abi))
+            if include_dsp:
+                archive.writestr(f"lib/{abi}/libech_dsp.so", elf_for(abi))
 
 
 def write_shim(
@@ -71,11 +82,39 @@ def write_shim(
 
 
 class AndroidArtifactVerifierTest(unittest.TestCase):
-    def test_companion_requires_control_jni_for_every_abi(self) -> None:
+    def test_companion_requires_bridges_for_every_abi(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             apk = Path(tmp) / "companion.apk"
-            write_companion(apk, omit_abi="x86")
-            with self.assertRaisesRegex(verifier.VerificationError, "lib/x86/"):
+            write_companion(apk, omit_abi="armeabi-v7a")
+            with self.assertRaisesRegex(verifier.VerificationError, "armeabi-v7a"):
+                verifier.verify_companion_apk(apk, dynamic_info)
+
+    def test_companion_requires_the_lab_dsp_bridge_for_every_abi(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            apk = Path(tmp) / "companion.apk"
+            write_companion(apk, omit_library="libechidna_lab_jni.so")
+            with self.assertRaisesRegex(verifier.VerificationError, "libechidna_lab_jni.so"):
+                verifier.verify_companion_apk(apk, dynamic_info)
+
+    def test_companion_lite_build_without_dsp_engine_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            apk = Path(tmp) / "companion.apk"
+            write_companion(apk)
+            verifier.verify_companion_apk(apk, dynamic_info)
+
+    def test_companion_full_build_packages_lab_engine_for_all_abis(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            apk = Path(tmp) / "companion.apk"
+            write_companion(apk, include_dsp=True)
+            verifier.verify_companion_apk(apk, dynamic_info)
+
+    def test_companion_rejects_partial_lab_engine_abi_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            apk = Path(tmp) / "companion.apk"
+            write_companion(apk)
+            with zipfile.ZipFile(apk, "a") as archive:
+                archive.writestr("lib/arm64-v8a/libech_dsp.so", elf_for("arm64-v8a"))
+            with self.assertRaisesRegex(verifier.VerificationError, "inconsistent ABI subset"):
                 verifier.verify_companion_apk(apk, dynamic_info)
 
     def test_shim_requires_dedicated_jni_and_dsp_for_every_supported_abi(self) -> None:

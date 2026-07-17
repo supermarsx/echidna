@@ -20,7 +20,9 @@ from check_release_signing import normalize_certificate_digest
 
 
 SHIM_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
-COMPANION_ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+# The companion app is constrained (build.gradle.kts ndk.abiFilters) to exactly
+# the three ABIs the DSP engine ships for; legacy x86 is intentionally dropped.
+COMPANION_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 ELF_IDENTITIES = {
     "arm64-v8a": (2, 183),
     "armeabi-v7a": (1, 40),
@@ -185,23 +187,42 @@ def verify_companion_apk(
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         names = set(archive.namelist())
+        # The Zygisk module and the LSPosed shim JNI must NEVER leak into the app APK.
+        # libech_dsp.so is intentionally allowed: it is the in-process Lab DSP engine
+        # the app dlopens for its own mic/test-tone testbench (never the Zygisk path).
         forbidden = sorted(
             name
             for name in names
             if name.startswith("lib/")
-            and Path(name).name in {"libechidna.so", "libech_dsp.so", "libechidna_shim_jni.so"}
+            and Path(name).name in {"libechidna.so", "libechidna_shim_jni.so"}
         )
         if forbidden:
             raise VerificationError(
                 "companion APK must not embed the Zygisk/shim engine payload: "
                 + ", ".join(forbidden)
             )
-        expected_native_entries = {
-            f"lib/{abi}/libechidna_control_jni.so" for abi in COMPANION_ABIS
+        # Bridges packaged for every companion ABI: the control-service JNI and the
+        # in-process Lab DSP JNI bridge (libechidna_lab_jni.so).
+        required_native_entries = {
+            f"lib/{abi}/{library}"
+            for abi in COMPANION_ABIS
+            for library in ("libechidna_control_jni.so", "libechidna_lab_jni.so")
         }
+        # The DSP engine is packaged by a full build and omitted by a lite build; when
+        # present it must be present for every ABI (matches verifyDebugNativePackaging).
+        expected_dsp_entries = {f"lib/{abi}/libech_dsp.so" for abi in COMPANION_ABIS}
         native_entries = {
             name for name in names if name.startswith("lib/") and name.endswith(".so")
         }
+        dsp_entries = {name for name in native_entries if Path(name).name == "libech_dsp.so"}
+        if dsp_entries and dsp_entries != expected_dsp_entries:
+            raise VerificationError(
+                "companion APK packages libech_dsp.so for an inconsistent ABI subset; "
+                f"present={sorted(dsp_entries)}, expected none or {sorted(expected_dsp_entries)}"
+            )
+        expected_native_entries = required_native_entries | (
+            expected_dsp_entries if dsp_entries else set()
+        )
         if native_entries != expected_native_entries:
             missing = sorted(expected_native_entries - native_entries)
             unexpected = sorted(native_entries - expected_native_entries)
@@ -210,16 +231,28 @@ def verify_companion_apk(
                 f"missing={missing}, unexpected={unexpected}"
             )
         for abi in COMPANION_ABIS:
-            verify_native_entry(
-                archive,
-                f"lib/{abi}/libechidna_control_jni.so",
-                abi,
-                "libechidna_control_jni.so",
-                frozenset(),
-                frozenset(),
-                frozenset(),
-                dynamic_reader,
-            )
+            for library in ("libechidna_control_jni.so", "libechidna_lab_jni.so"):
+                verify_native_entry(
+                    archive,
+                    f"lib/{abi}/{library}",
+                    abi,
+                    library,
+                    frozenset(),
+                    frozenset(),
+                    frozenset(),
+                    dynamic_reader,
+                )
+            if dsp_entries:
+                verify_native_entry(
+                    archive,
+                    f"lib/{abi}/libech_dsp.so",
+                    abi,
+                    "libech_dsp.so",
+                    frozenset(),
+                    frozenset({"ech_dsp_api_get_version"}),
+                    frozenset(),
+                    dynamic_reader,
+                )
 
 
 def verify_shim_apk(
