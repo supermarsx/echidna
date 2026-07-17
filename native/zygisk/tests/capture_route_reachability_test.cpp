@@ -50,20 +50,32 @@ namespace
               "operational route must not carry an unsupported reason");
     }
 
-    void CheckArmv7DirectRouteUnsupported(const CaptureRouteDescriptor &route)
+    // armv7 direct inline-symbol routes are now backed by a real, host-proven
+    // ARM32/Thumb-2 relocator (runtime/armv7_instruction.h). They must be
+    // ABI-eligible (the orchestrator attempts install; the relocator fails closed
+    // per-function) and reported as device-gated — never claiming operational
+    // parity with arm64, and never *less* gated than the route's own native tier.
+    void CheckArmv7DirectRouteDeviceGated(const CaptureRouteDescriptor &route)
     {
         const CaptureRouteAvailability availability =
             CaptureRouteAvailabilityForAbi(route, CaptureHookAbi::kArmv7);
         Check(IsDirectInlineSymbolRoute(route),
-              "armv7 downgrade fixture must be a direct inline-symbol route");
-        Check(!IsCaptureRouteAbiEligible(route, CaptureHookAbi::kArmv7),
-              "armv7 direct inline-symbol route must be rejected before installation");
-        Check(availability.support == CaptureRouteSupport::kUnsupported,
-              "armv7 direct inline-symbol route must be unreachable");
+              "armv7 device-gated fixture must be a direct inline-symbol route");
+        Check(IsCaptureRouteAbiEligible(route, CaptureHookAbi::kArmv7),
+              "armv7 direct inline-symbol route must now be eligible for install");
+        Check(availability.support != CaptureRouteSupport::kUnsupported &&
+                  availability.support != CaptureRouteSupport::kOperational,
+              "armv7 direct route must be gated (not unsupported, not operational)");
+        Check(CaptureRouteSupportRank(availability.support) >=
+                  CaptureRouteSupportRank(CaptureRouteSupport::kDeviceTargetGated),
+              "armv7 view must never be less gated than device-gated");
+        Check(CaptureRouteSupportRank(availability.support) >=
+                  CaptureRouteSupportRank(route.support),
+              "armv7 view must never be less gated than the route's native tier");
         Check(availability.unavailable_reason &&
                   std::strcmp(availability.unavailable_reason,
-                              kArmv7DirectHookUnavailableReason) == 0,
-              "armv7 direct inline-symbol route must report the PLT late-load blocker");
+                              kArmv7DirectHookDeviceGatedReason) == 0,
+              "armv7 direct route must report the host-proven/device-gated reason");
     }
 } // namespace
 
@@ -107,11 +119,28 @@ int main()
           "tinyalsa must report its device and target-process gate honestly");
     CheckOperational(kLsposedJavaAudioRecordRoute);
 
-    CheckArmv7DirectRouteUnsupported(kAAudioRoute);
-    CheckArmv7DirectRouteUnsupported(kOpenSlRoute);
-    CheckArmv7DirectRouteUnsupported(kTinyAlsaRoute);
-    CheckArmv7DirectRouteUnsupported(kNativeAudioRecordRoute);
-    CheckArmv7DirectRouteUnsupported(kLibcReadRoute);
+    CheckArmv7DirectRouteDeviceGated(kAAudioRoute);
+    CheckArmv7DirectRouteDeviceGated(kOpenSlRoute);
+    CheckArmv7DirectRouteDeviceGated(kTinyAlsaRoute);
+    CheckArmv7DirectRouteDeviceGated(kNativeAudioRecordRoute);
+    CheckArmv7DirectRouteDeviceGated(kLibcReadRoute);
+
+    // Operational routes (aaudio/opensl) downgrade to device-gated on armv7 (the
+    // relocation backend is host-proven but on-hardware install is unvalidated),
+    // and must not remain operational there.
+    Check(CaptureRouteAvailabilityForAbi(kAAudioRoute, CaptureHookAbi::kArmv7)
+                      .support == CaptureRouteSupport::kDeviceTargetGated &&
+              CaptureRouteAvailabilityForAbi(kOpenSlRoute, CaptureHookAbi::kArmv7)
+                      .support == CaptureRouteSupport::kDeviceTargetGated,
+          "armv7 must downgrade operational direct routes to device-gated");
+    // Developer-contract routes stay at their more-restrictive native tier on
+    // armv7 (never reported as less gated than developer-contract-only).
+    Check(CaptureRouteAvailabilityForAbi(kNativeAudioRecordRoute,
+                                         CaptureHookAbi::kArmv7)
+                      .support == CaptureRouteSupport::kDeveloperContractOnly &&
+              CaptureRouteAvailabilityForAbi(kLibcReadRoute, CaptureHookAbi::kArmv7)
+                      .support == CaptureRouteSupport::kDeveloperContractOnly,
+          "armv7 must not weaken developer-contract routes below their native tier");
 
     const CaptureRouteAvailability armv7_lsposed =
         CaptureRouteAvailabilityForAbi(kLsposedJavaAudioRecordRoute,

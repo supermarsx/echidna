@@ -55,6 +55,13 @@ target_include_directories(aarch64_instruction_test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(aarch64_instruction_test PRIVATE cxx_std_20)
 
+# t9-e2: ARM (A32) / Thumb-2 inline-hook decoder + relocation harness. Pure
+# logic over instruction bytes (no ARM execution), so it runs on any host.
+add_executable(armv7_instruction_test armv7_instruction_test.cpp)
+target_include_directories(armv7_instruction_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(armv7_instruction_test PRIVATE cxx_std_20)
+
 add_executable(audiohal_contract_test audiohal_contract_test.cpp)
 target_include_directories(audiohal_contract_test
     PRIVATE
@@ -264,6 +271,7 @@ set(ECHIDNA_ZYGISK_TEST_TARGETS
     zygisk_dsp_smoke_test
     capture_buffer_router_test
     aarch64_instruction_test
+    armv7_instruction_test
     audiohal_contract_test
     aaudio_callback_registry_test
     aaudio_stream_registry_test
@@ -298,6 +306,7 @@ enable_testing()
 add_test(NAME zygisk_dsp_smoke_test COMMAND zygisk_dsp_smoke_test)
 add_test(NAME capture_buffer_router_test COMMAND capture_buffer_router_test)
 add_test(NAME aarch64_instruction_test COMMAND aarch64_instruction_test)
+add_test(NAME armv7_instruction_test COMMAND armv7_instruction_test)
 add_test(NAME audiohal_contract_test COMMAND audiohal_contract_test)
 add_test(NAME aaudio_callback_registry_test COMMAND aaudio_callback_registry_test)
 add_test(NAME aaudio_stream_registry_test COMMAND aaudio_stream_registry_test)

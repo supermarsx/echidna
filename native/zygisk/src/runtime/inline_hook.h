@@ -33,10 +33,13 @@ namespace echidna
              * that allows invoking the original implementation.
              *
              * ABI coverage: a relocating trampoline is implemented for @c aarch64
-             * (primary) and @c x86_64. The x86_64 relocator is conservative and
-             * fails closed (returns false, patches nothing) on any prologue it
-             * cannot safely relocate. Other ABIs (e.g. armeabi-v7a) are not
-             * implemented: install() returns false after emitting an explicit
+             * (primary), @c x86_64, and @c armeabi-v7a (ARM/Thumb-2). Each
+             * relocator is conservative and fails closed (returns false, patches
+             * nothing) on any prologue it cannot safely relocate — see
+             * @c armv7_instruction.h for the ARM32/Thumb-2 decode+relocation
+             * logic and its host test. On-hardware install/execution of the
+             * armv7 path is device-gated (highest crash-risk). Any other ABI is
+             * unimplemented: install() returns false after emitting an explicit
              * "hook_unsupported_abi" log/telemetry signal rather than failing
              * silently.
              */

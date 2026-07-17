@@ -1,5 +1,6 @@
 #include "runtime/inline_hook.h"
 #include "runtime/aarch64_instruction.h"
+#include "runtime/armv7_instruction.h"
 
 /**
  * @file inline_hook.cpp
@@ -1196,10 +1197,87 @@ namespace echidna
             *original = trampoline_;
             installed_ = true;
             return true;
+#elif defined(__arm__)
+            // ARM (A32) / Thumb-2 relocating inline hook. bit0 of the target
+            // pointer selects Thumb vs ARM state (the interworking convention);
+            // the real patch address has that bit stripped.
+            {
+                const uint32_t raw = reinterpret_cast<uint32_t>(target);
+                const bool thumb = (raw & 1u) != 0;
+                const uint32_t addr = raw & ~1u;
+                target_ = reinterpret_cast<void *>(static_cast<uintptr_t>(addr));
+
+                patch_size_ = armv7::Armv7PatchSize(addr, thumb);
+                if (patch_size_ > sizeof(original_bytes_))
+                {
+                    return false;
+                }
+
+                // Read the prologue and build a position-independent trampoline.
+                // The builder decodes only as far as it relocates (the patch
+                // window rounded up to whole instructions / a contained IT
+                // block); the 32-byte bound is a safe cap for any real prologue.
+                const uint8_t *src = reinterpret_cast<const uint8_t *>(
+                    static_cast<uintptr_t>(addr));
+                constexpr size_t kArmv7ScanBytes = sizeof(original_bytes_);
+                armv7::RelocationResult reloc =
+                    armv7::BuildTrampoline(src, kArmv7ScanBytes, addr, thumb);
+                if (!reloc.ok)
+                {
+                    // A prologue instruction could not be provably relocated:
+                    // decline the hook. Nothing has been patched. This is a
+                    // per-function decline (the ABI itself is supported), so it
+                    // is a quiet false like the x86_64 relocator, not the
+                    // ABI-level hook_unsupported_abi signal.
+                    return false;
+                }
+
+                trampoline_size_ = reloc.code.size();
+                void *trampoline =
+                    mmap(nullptr, trampoline_size_, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+                if (trampoline == MAP_FAILED)
+                {
+                    trampoline_ = nullptr;
+                    return false;
+                }
+                trampoline_ = trampoline;
+
+                unsigned char *trampoline_bytes =
+                    static_cast<unsigned char *>(trampoline_);
+                std::memcpy(trampoline_bytes, reloc.code.data(), reloc.code.size());
+                __builtin___clear_cache(
+                    reinterpret_cast<char *>(trampoline_),
+                    reinterpret_cast<char *>(trampoline_) + trampoline_size_);
+
+                std::memcpy(original_bytes_, src, patch_size_);
+                if (!protect(target_, patch_size_, PROT_READ | PROT_WRITE | PROT_EXEC))
+                {
+                    munmap(trampoline_, trampoline_size_);
+                    trampoline_ = nullptr;
+                    return false;
+                }
+
+                std::vector<uint8_t> patch;
+                armv7::EmitArmv7Patch(patch, addr, thumb,
+                                      reinterpret_cast<uint32_t>(replacement));
+                std::memcpy(target_, patch.data(), patch.size());
+                __builtin___clear_cache(
+                    reinterpret_cast<char *>(target_),
+                    reinterpret_cast<char *>(target_) + patch_size_);
+                protect(target_, patch_size_, PROT_READ | PROT_EXEC);
+
+                // Hand back an interworking-correct trampoline entry: bit0 set so
+                // callers BX/BLX into the relocated Thumb prologue in Thumb state.
+                *original = reinterpret_cast<void *>(
+                    reinterpret_cast<uintptr_t>(trampoline_) | (thumb ? 1u : 0u));
+                installed_ = true;
+                return true;
+            }
 #else
-            // No trampoline implementation for this ABI (e.g. armeabi-v7a). Degrade
-            // gracefully: touch nothing, and emit the explicit hook_unsupported_abi
-            // signal instead of a silent failure.
+            // No trampoline implementation for this ABI. Degrade gracefully: touch
+            // nothing, and emit the explicit hook_unsupported_abi signal instead
+            // of a silent failure.
             (void)patch_size_;
             (void)trampoline_size_;
             (void)target_;
