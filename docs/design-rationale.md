@@ -84,7 +84,7 @@ flowchart LR
     The chain is a single synchronous call so it drops into any capture callback unchanged. The
     watchdog exit on the right is the real-time contract: a voice-interception tool must *never*
     glitch a foreign app's audio, so overrun resolves to clean pass-through, and a process that
-    repeatedly overruns has its hook auto-bypassed. See [Why It's Hard §3](why-hard.md#3-a-hard-real-time-latency-budget--while-doing-nontrivial-dsp).
+    repeatedly overruns has its hook auto-bypassed. See [Why It's Hard §3](why-hard.md#3-a-hard-real-time-latency-budget-while-doing-nontrivial-dsp).
 
 ## Why the in-app service topology (single APK)
 
