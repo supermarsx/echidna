@@ -248,7 +248,7 @@ jobs:
             RANGE="HEAD"
           fi
           echo "" >> changelog.md
-          git log --no-merges --pretty=format:'- %s (%h)' ${RANGE} >> changelog.md || true
+          git log --no-merges --pretty=format:'- %s (%h)' "${RANGE}" >> changelog.md || true
           echo "" >> changelog.md
           {
             echo "body<<CHANGELOG_EOF"
@@ -581,7 +581,7 @@ jobs:
             "echidna-magisk-${VERSION}.zip" \
             "echidna-native-libs-${VERSION}.zip" \
             "RELEASE_ARTIFACTS.md"
-          sha256sum * > SHA256SUMS.txt
+          sha256sum -- * > SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
