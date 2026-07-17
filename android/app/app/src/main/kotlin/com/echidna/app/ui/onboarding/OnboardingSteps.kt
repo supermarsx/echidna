@@ -745,8 +745,8 @@ private fun DoneStep(viewModel: OnboardingViewModel) {
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val active by viewModel.activePreset.collectAsStateWithLifecycle()
 
-    Text("You're set up.", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-    OnboardingGap()
+    // The wizard header already renders this step's title ("You're set up"); start straight with the
+    // summary so the finish screen is not double-titled (t18).
     OnboardingCard(title = "Summary") {
         SummaryLine("Theme", settings.themeMode.label)
         SummaryLine("Active preset", active.name)
