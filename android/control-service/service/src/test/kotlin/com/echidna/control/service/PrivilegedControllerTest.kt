@@ -1,5 +1,6 @@
 package com.echidna.control.service
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -61,6 +62,21 @@ class PrivilegedControllerTest {
     }
 
     @Test
+    fun `refreshStatus through the cached gate probes su once and degrades when root is denied`() {
+        // Regression (t17): the whole privileged detection burst must cost a single root probe. When
+        // root is denied the gate short-circuits every command, so nothing else spawns su and the
+        // status degrades honestly to "not installed".
+        val counting = SuCountingRunner(rootGranted = false)
+        val runner = CachedRootCommandRunner(counting)
+        val status = PrivilegedController(runner, SelinuxCompatChecker(runner)).refreshStatus()
+
+        assertEquals(1, counting.idProbes)
+        assertEquals(0, counting.otherCommands)
+        assertFalse(status.magiskModuleInstalled)
+        assertFalse(status.zygiskEnabled)
+    }
+
+    @Test
     fun `reports zygisk enabled from standalone Zygisk Next module`() {
         val runner = FakeCommandRunner(
             magiskSqlite = CommandResult(true, "value=0", ""),
@@ -70,6 +86,23 @@ class PrivilegedControllerTest {
 
         assertTrue(status.magiskModuleInstalled)
         assertTrue(status.zygiskEnabled)
+    }
+}
+
+private class SuCountingRunner(private val rootGranted: Boolean) : PrivilegedCommandRunner {
+    @Volatile var idProbes = 0
+    @Volatile var otherCommands = 0
+
+    override fun runCommand(command: String): CommandResult = runCommand(command.split(" "))
+
+    override fun runCommand(arguments: List<String>): CommandResult {
+        return if (arguments == listOf("id")) {
+            idProbes += 1
+            CommandResult(rootGranted, if (rootGranted) "uid=0(root)" else "", "", if (rootGranted) 0 else 1)
+        } else {
+            otherCommands += 1
+            CommandResult(false, "", "", 1)
+        }
     }
 }
 

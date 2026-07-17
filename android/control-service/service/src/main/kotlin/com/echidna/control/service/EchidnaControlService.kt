@@ -90,18 +90,22 @@ class EchidnaControlService : Service() {
             syncBridge,
             identityResolver = AndroidPublishedAppIdentityResolver(applicationContext),
         )
-        val rootExecutor = RootCommandExecutor()
+        // One-time root gate (t17): the first privileged command prompts for root at most once and
+        // caches grant/denial, so a burst of probes never stacks Magisk prompts and a denied device
+        // is not re-asked on every detection pass.
+        val rootExecutor = CachedRootCommandRunner(RootCommandExecutor())
         val selinuxChecker = SelinuxCompatChecker(rootExecutor)
         privilegedController = PrivilegedController(rootExecutor, selinuxChecker)
         telemetryExporter = TelemetryExporter(filesDir, authenticatedTelemetryStore)
         audioStackProbe = AudioStackProbe(this)
         cpuArchProbe = CpuArchProbe()
         legacyPreprocessorFlagStore = LegacyPreprocessorFlagStore(applicationContext)
-        executor.execute {
-            // Runtime policy belongs to the Magisk module's reviewed sepolicy.rule. The app must
-            // never widen zygote policy live merely because a policy tool happens to be present.
-            privilegedController.refreshStatus()
-        }
+        // No eager privileged probe here (t17): running refreshStatus() on bind fired `su` on the
+        // very first frame — including the first-run Welcome page — before the user had any reason
+        // to grant root. The app now requests the initial probe itself, and only once onboarding is
+        // complete (ControlStateRepository.maybeStartPrivilegedStatusProbe). Until then the service
+        // serves its safe "status not yet queried / not installed" default, which reads as an honest
+        // "not detected" without touching root.
     }
 
     override fun onDestroy() {
