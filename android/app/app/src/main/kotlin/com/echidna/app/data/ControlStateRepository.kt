@@ -223,6 +223,11 @@ object ControlStateRepository {
     private val _keepScreenOn = MutableStateFlow(false)
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
 
+    // First-run onboarding wizard flag (t14). Persisted via SettingsState; false until the user
+    // completes or skips the wizard. `setOnboardingComplete(false)` re-arms it for a re-run.
+    private val _onboardingComplete = MutableStateFlow(false)
+    val onboardingComplete: StateFlow<Boolean> = _onboardingComplete.asStateFlow()
+
     private val _settingsProfiles = MutableStateFlow<List<SettingsProfile>>(emptyList())
     val settingsProfiles: StateFlow<List<SettingsProfile>> = _settingsProfiles.asStateFlow()
 
@@ -642,6 +647,17 @@ object ControlStateRepository {
         commitSettingsChange()
     }
 
+    /**
+     * Marks the first-run onboarding wizard complete (or re-arms it when [complete] is false, for
+     * the Settings "Run setup again" entry). Persisted through the same settings path as every other
+     * toggle. Does not clear the active settings profile — completing/re-running setup is orthogonal
+     * to a user's saved profile selection.
+     */
+    fun setOnboardingComplete(complete: Boolean) {
+        _onboardingComplete.value = complete
+        commitSettingsChange(clearActiveProfile = false)
+    }
+
     fun setLegacyPreprocessorEnabled(enabled: Boolean) {
         if (!::serviceClient.isInitialized) return
         val current = _legacyPreprocessorState.value
@@ -794,7 +810,10 @@ object ControlStateRepository {
 
     fun applySettingsProfile(profileId: String): Boolean {
         val profile = _settingsProfiles.value.firstOrNull { it.id == profileId } ?: return false
-        applySettingsState(profile.settings, pushSideEffects = true)
+        // Onboarding-complete is a device-scoped first-run flag, not a user preference: applying a
+        // saved profile (which may predate the flag and thus carry the false default) must not
+        // re-arm the wizard. Preserve the live value across a profile switch.
+        applySettingsState(profile.settings, pushSideEffects = true, restoreOnboarding = false)
         _activeSettingsProfileId.value = profile.id
         persistSettings()
         return true
@@ -991,10 +1010,15 @@ object ControlStateRepository {
             accentColor = _accentColor.value,
             statusPollIntervalSeconds = _statusPollIntervalSeconds.value,
             highPriorityNotification = _highPriorityNotification.value,
-            keepScreenOn = _keepScreenOn.value
+            keepScreenOn = _keepScreenOn.value,
+            onboardingComplete = _onboardingComplete.value
         )
 
-    private fun applySettingsState(settings: SettingsState, pushSideEffects: Boolean) {
+    private fun applySettingsState(
+        settings: SettingsState,
+        pushSideEffects: Boolean,
+        restoreOnboarding: Boolean = true,
+    ) {
         _startWithSystem.value = settings.startWithSystem
         _autoStartEngine.value = settings.autoStartEngine
         _restoreLastProfile.value = settings.restoreLastProfile
@@ -1026,6 +1050,9 @@ object ControlStateRepository {
         _statusPollIntervalSeconds.value = settings.statusPollIntervalSeconds.coerceIn(1, 10)
         _highPriorityNotification.value = settings.highPriorityNotification
         _keepScreenOn.value = settings.keepScreenOn
+        if (restoreOnboarding) {
+            _onboardingComplete.value = settings.onboardingComplete
+        }
         settings.defaultPresetId
             ?.takeIf { id -> _presets.value.any { it.id == id } }
             ?.let { _defaultPresetId.value = it }

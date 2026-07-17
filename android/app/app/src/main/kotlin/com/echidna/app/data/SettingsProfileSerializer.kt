@@ -135,6 +135,9 @@ object SettingsProfileSerializer {
                 put("highPriorityNotification", settings.highPriorityNotification)
                 put("keepScreenOn", settings.keepScreenOn)
             })
+            put("onboarding", JSONObject().apply {
+                put("complete", settings.onboardingComplete)
+            })
         }
 
     private fun settingsFromJsonObject(root: JSONObject): SettingsState {
@@ -145,6 +148,7 @@ object SettingsProfileSerializer {
         val control = root.optJSONObject("control")
         val alerts = root.optJSONObject("alerts")
         val appearance = root.optJSONObject("appearance")
+        val onboarding = root.optJSONObject("onboarding")
         return SettingsState(
             startWithSystem = startup.optBooleanCompat("startWithSystem", false),
             autoStartEngine = startup.optBooleanCompat("autoStartEngine", false),
@@ -182,7 +186,8 @@ object SettingsProfileSerializer {
             statusPollIntervalSeconds = appearance.optIntCompat("statusPollIntervalSeconds", 2)
                 .coerceIn(1, 10),
             highPriorityNotification = appearance.optBooleanCompat("highPriorityNotification", false),
-            keepScreenOn = appearance.optBooleanCompat("keepScreenOn", false)
+            keepScreenOn = appearance.optBooleanCompat("keepScreenOn", false),
+            onboardingComplete = onboarding.optBooleanCompat("complete", false)
         )
     }
 

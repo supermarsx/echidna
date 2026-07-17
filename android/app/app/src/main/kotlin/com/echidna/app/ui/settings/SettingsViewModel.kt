@@ -28,6 +28,7 @@ class SettingsViewModel(
     val telemetry = repo.telemetry
     val whitelistBindings = repo.whitelistBindings
     val persistentNotification: StateFlow<Boolean> = repo.notificationEnabled
+    val onboardingComplete: StateFlow<Boolean> = repo.onboardingComplete
 
     fun setStartWithSystem(enabled: Boolean) = repo.setStartWithSystem(enabled)
 
@@ -100,6 +101,9 @@ class SettingsViewModel(
         repo.setHighPriorityNotification(enabled)
 
     fun setKeepScreenOn(enabled: Boolean) = repo.setKeepScreenOn(enabled)
+
+    /** Re-arms the first-run onboarding wizard so the Settings "Run setup again" entry re-shows it. */
+    fun rerunOnboarding() = repo.setOnboardingComplete(false)
 
     fun createSettingsProfile(name: String): String? = repo.createSettingsProfile(name)
 

@@ -62,7 +62,10 @@ data class SettingsState(
     // Additional honest configurability (t9-e4).
     val statusPollIntervalSeconds: Int = 2,
     val highPriorityNotification: Boolean = false,
-    val keepScreenOn: Boolean = false
+    val keepScreenOn: Boolean = false,
+    // First-run onboarding wizard (t14): false until the user completes or skips the setup wizard.
+    // Gates whether the wizard is shown at launch; a Settings "Run setup again" entry resets it.
+    val onboardingComplete: Boolean = false
 )
 
 data class SettingsProfile(
