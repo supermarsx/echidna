@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
@@ -82,7 +83,10 @@ fun SettingsScreen(
     onLaunchCompatibility: () -> Unit,
     onLaunchWhitelist: () -> Unit,
     onLaunchInstaller: () -> Unit,
-    onOpenAlerts: () -> Unit
+    onOpenAlerts: () -> Unit,
+    onRunSetupAgain: () -> Unit = {},
+    // Opens the in-app Help & Docs screen. Defaulted so this is a purely additive entry point.
+    onOpenHelp: () -> Unit = {}
 ) {
     val engineStatus by viewModel.engineStatus.collectAsStateWithLifecycle()
     val presets by viewModel.presets.collectAsStateWithLifecycle()
@@ -124,6 +128,8 @@ fun SettingsScreen(
 
         SettingsTabs(selectedTab = selectedTab, onSelect = { selectedTab = it })
 
+        HelpDocsLinkSection(onOpenHelp = onOpenHelp)
+
         when (selectedTab) {
             SettingsTab.APPEARANCE -> {
                 AppearanceSection(
@@ -156,7 +162,8 @@ fun SettingsScreen(
                     onAutoStartEngine = viewModel::setAutoStartEngine,
                     onRestoreLastProfile = viewModel::setRestoreLastProfile,
                     onLaunchCompatibility = onLaunchCompatibility,
-                    onLaunchWhitelist = onLaunchWhitelist
+                    onLaunchWhitelist = onLaunchWhitelist,
+                    onRunSetupAgain = onRunSetupAgain
                 )
                 NotificationSection(
                     settings = settings,
@@ -335,6 +342,22 @@ private fun AlertsLinkSection(onOpenAlerts: () -> Unit) {
 }
 
 @Composable
+private fun HelpDocsLinkSection(onOpenHelp: () -> Unit) {
+    // Second, always-visible entry point to the in-app Help (the first is the top-app-bar action).
+    SettingsSection(title = "Help & Docs") {
+        Text(
+            text = "Browse the bundled project documentation offline, with full-text search across " +
+                "every doc — architecture, verification, limitations, and the hardening notes.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(onClick = onOpenHelp, modifier = Modifier.fillMaxWidth()) {
+            Text("Open Help & Docs")
+        }
+    }
+}
+
+@Composable
 private fun AlertPreferencesSection(
     settings: SettingsState,
     onShowInstallAlerts: (Boolean) -> Unit,
@@ -405,7 +428,8 @@ private fun StartupSection(
     onAutoStartEngine: (Boolean) -> Unit,
     onRestoreLastProfile: (Boolean) -> Unit,
     onLaunchCompatibility: () -> Unit,
-    onLaunchWhitelist: () -> Unit
+    onLaunchWhitelist: () -> Unit,
+    onRunSetupAgain: () -> Unit
 ) {
     SettingsSection(title = "Startup and System Integration") {
         ToggleRow(
@@ -433,6 +457,12 @@ private fun StartupSection(
             OutlinedButton(onClick = onLaunchWhitelist, modifier = Modifier.weight(1f)) {
                 Text("Per-App Whitelist", maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+        OutlinedButton(
+            onClick = onRunSetupAgain,
+            modifier = Modifier.fillMaxWidth().testTag("settings_run_setup_again"),
+        ) {
+            Text("Run setup again")
         }
     }
 }

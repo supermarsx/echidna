@@ -18,10 +18,14 @@ import com.echidna.app.ui.diagnostics.DiagnosticsScreen
 import com.echidna.app.ui.diagnostics.DiagnosticsViewModel
 import com.echidna.app.ui.effects.EffectsEditorScreen
 import com.echidna.app.ui.effects.EffectsEditorViewModel
+import com.echidna.app.ui.help.HelpScreen
+import com.echidna.app.ui.help.HelpViewModel
 import com.echidna.app.ui.install.InstallEngineScreen
 import com.echidna.app.ui.install.InstallEngineViewModel
 import com.echidna.app.ui.lab.LabScreen
 import com.echidna.app.ui.lab.LabViewModel
+import com.echidna.app.ui.onboarding.OnboardingViewModel
+import com.echidna.app.ui.onboarding.OnboardingWizardHost
 import com.echidna.app.ui.preset.PresetManagerScreen
 import com.echidna.app.ui.preset.PresetManagerViewModel
 import com.echidna.app.ui.settings.SettingsScreen
@@ -106,8 +110,22 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
                     popUpTo(AppDestination.Dashboard.route)
                     launchSingleTop = true
                 }
+            },
+            onRunSetupAgain = {
+                // Re-arm the persisted first-run flag, then re-enter the wizard (t14).
+                viewModel.rerunOnboarding()
+                navController.navigate(AppDestination.Onboarding.route) {
+                    launchSingleTop = true
+                }
+            },
+            onOpenHelp = {
+                navController.navigate(AppDestination.Help.route) { launchSingleTop = true }
             }
         )
+    }
+    composable(AppDestination.Help.route) {
+        val viewModel: HelpViewModel = viewModel()
+        HelpScreen(viewModel = viewModel)
     }
     composable(AppDestination.CompatibilityWizard.route) {
         val viewModel: CompatibilityWizardViewModel = viewModel()
@@ -118,6 +136,36 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
     composable(AppDestination.WhitelistEditor.route) {
         val viewModel: WhitelistEditorViewModel = viewModel()
         WhitelistEditorScreen(viewModel = viewModel)
+    }
+    // t14: first-run onboarding wizard (rendered full-screen; see MainActivity chrome gating).
+    composable(AppDestination.Onboarding.route) {
+        val viewModel: OnboardingViewModel = viewModel()
+        OnboardingWizardHost(
+            viewModel = viewModel,
+            onFinished = {
+                navController.navigate(AppDestination.Dashboard.route) {
+                    popUpTo(AppDestination.Onboarding.route) { inclusive = true }
+                    launchSingleTop = true
+                }
+            },
+            onOpenInstaller = {
+                // Land Dashboard under the installer so its Close returns into the app, not out of it.
+                navController.navigate(AppDestination.Dashboard.route) {
+                    popUpTo(AppDestination.Onboarding.route) { inclusive = true }
+                    launchSingleTop = true
+                }
+                navController.navigate(AppDestination.InstallEngine.route)
+            },
+            onOpenLab = {
+                navController.navigate(AppDestination.Dashboard.route) {
+                    popUpTo(AppDestination.Onboarding.route) { inclusive = true }
+                    launchSingleTop = true
+                }
+                navController.navigate(AppDestination.Lab.route) {
+                    launchSingleTop = true
+                }
+            },
+        )
     }
 }
 
