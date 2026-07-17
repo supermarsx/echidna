@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.RestartAlt
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -32,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,9 +45,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.echidna.app.system.MagiskLauncher
+import com.echidna.app.ui.components.AlertSeverity
+import com.echidna.app.ui.components.PersistentDismissibleAlert
+import com.echidna.app.ui.components.rememberDismissedAlertsStore
 
 private val GreenAccent = Color(0xFF4CAF50)
 private val AmberAccent = Color(0xFFFFB300)
+
+/** Stable namespace prefix for the install-screen root-module risk dismissals. */
+private const val INSTALL_RISK_KEY_PREFIX = "install.risk:"
 
 /**
  * Guided install / uninstall of the Echidna Magisk/Zygisk engine from inside the companion.
@@ -80,7 +86,7 @@ fun InstallEngineScreen(
             fontWeight = FontWeight.SemiBold
         )
 
-        RiskCard()
+        RiskCard(moduleInstalled = state.moduleInstalled)
 
         DetectionCard(state = state)
 
@@ -119,40 +125,31 @@ fun InstallEngineScreen(
     }
 }
 
+/**
+ * The install screen's root-module risk warning, now a dismissible alert. It is safety/recovery-
+ * relevant, so the permanent "Don't remind" is honored but scoped to the current install state: a
+ * MATERIAL change (module installed <-> not installed) surfaces the warning once more, matching the
+ * Dashboard's install-risk card. The plain "Dismiss" is reconciled against the same state key so it
+ * likewise returns when the install state changes.
+ */
 @Composable
-private fun RiskCard() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Warning,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(22.dp)
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "Flashing a root module is risky",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-                Text(
-                    text = "This installs a Magisk/Zygisk module that hooks the audio capture path. " +
-                        "It requires root with Magisk and Zygisk enabled, will not work on many " +
-                        "phones, and can cause boot issues. Only continue if you can recover the device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
+internal fun RiskCard(moduleInstalled: Boolean) {
+    val store = rememberDismissedAlertsStore()
+    val stateKey = if (moduleInstalled) "installed" else "not_installed"
+    val key = "$INSTALL_RISK_KEY_PREFIX$stateKey"
+    LaunchedEffect(key) {
+        store.reconcileActive(setOf(key), INSTALL_RISK_KEY_PREFIX)
     }
+    PersistentDismissibleAlert(
+        alertKey = key,
+        permanentAlertKey = key,
+        store = store,
+        title = "Flashing a root module is risky",
+        message = "This installs a Magisk/Zygisk module that hooks the audio capture path. " +
+            "It requires root with Magisk and Zygisk enabled, will not work on many " +
+            "phones, and can cause boot issues. Only continue if you can recover the device.",
+        severity = AlertSeverity.ERROR,
+    )
 }
 
 @Composable
