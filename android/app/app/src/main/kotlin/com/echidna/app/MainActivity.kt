@@ -102,7 +102,12 @@ private fun EchidnaApp() {
             // tab because the bar already holds seven destinations.
             if (showAppChrome) {
                 TopAppBar(
-                    title = { Text(AppDestination.titleForRoute(currentDestination?.route)) },
+                    title = {
+                        // Show a title only on routes that don't draw their own in-content header
+                        // (Dashboard, Help). Screens that render their own header suppress the bar
+                        // title so they are not double-titled (t18).
+                        AppDestination.topBarTitle(currentDestination?.route)?.let { Text(it) }
+                    },
                     actions = {
                         IconButton(
                             onClick = {

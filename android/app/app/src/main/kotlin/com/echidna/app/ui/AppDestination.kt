@@ -1,17 +1,27 @@
 package com.echidna.app.ui
 
-data class AppDestination(val route: String, val label: String) {
+/**
+ * @param rendersOwnTitle true when the screen already draws its own in-content title/header. The
+ *   app-wide top bar then suppresses its title on that route so the screen is not double-titled
+ *   (t18). Dashboard and Help have no in-content header, so the top bar supplies their title.
+ */
+data class AppDestination(
+    val route: String,
+    val label: String,
+    val rendersOwnTitle: Boolean = false,
+) {
     companion object {
+        // Dashboard has no in-content header: the top bar supplies its title.
         val Dashboard = AppDestination("dashboard", "Dashboard")
-        val PresetManager = AppDestination("presets", "Presets")
-        val EffectsEditor = AppDestination("effects", "Effects")
-        val Alerts = AppDestination("alerts", "Alerts")
-        val Diagnostics = AppDestination("diagnostics", "Diagnostics")
-        val Settings = AppDestination("settings", "Settings")
-        val CompatibilityWizard = AppDestination("compatibility", "Compatibility")
-        val WhitelistEditor = AppDestination("whitelist", "Whitelist")
-        val InstallEngine = AppDestination("install", "Install engine")
-        val Lab = AppDestination("lab", "Lab")
+        val PresetManager = AppDestination("presets", "Presets", rendersOwnTitle = true)
+        val EffectsEditor = AppDestination("effects", "Effects", rendersOwnTitle = true)
+        val Alerts = AppDestination("alerts", "Alerts", rendersOwnTitle = true)
+        val Diagnostics = AppDestination("diagnostics", "Diagnostics", rendersOwnTitle = true)
+        val Settings = AppDestination("settings", "Settings", rendersOwnTitle = true)
+        val CompatibilityWizard = AppDestination("compatibility", "Compatibility", rendersOwnTitle = true)
+        val WhitelistEditor = AppDestination("whitelist", "Whitelist", rendersOwnTitle = true)
+        val InstallEngine = AppDestination("install", "Install engine", rendersOwnTitle = true)
+        val Lab = AppDestination("lab", "Lab", rendersOwnTitle = true)
 
         // First-run onboarding wizard (t14). Not a bottom-bar destination; shown at first launch and
         // re-runnable from Settings. Rendered full-screen (no top/bottom app chrome) — see MainActivity.
@@ -30,8 +40,14 @@ data class AppDestination(val route: String, val label: String) {
             CompatibilityWizard, WhitelistEditor, InstallEngine, Lab, Onboarding, Help,
         )
 
-        /** Human-readable title for [route], defaulting to the app name when unknown. */
-        fun titleForRoute(route: String?): String =
-            allDestinations.firstOrNull { it.route == route }?.label ?: "Echidna"
+        /**
+         * Title for the app-wide top bar on [route], or null when the screen renders its own
+         * in-content header (the bar then shows no title, so the screen is not double-titled — t18).
+         * Unknown routes fall back to the app name so the bar is never blank unexpectedly.
+         */
+        fun topBarTitle(route: String?): String? {
+            val destination = allDestinations.firstOrNull { it.route == route } ?: return "Echidna"
+            return if (destination.rendersOwnTitle) null else destination.label
+        }
     }
 }
