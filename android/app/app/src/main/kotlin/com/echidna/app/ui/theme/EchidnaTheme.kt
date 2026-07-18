@@ -1,6 +1,7 @@
 package com.echidna.app.ui.theme
 
 import android.os.Build
+import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -10,7 +11,14 @@ import androidx.compose.ui.platform.LocalContext
 import com.echidna.app.model.AccentColor
 import com.echidna.app.model.ThemeMode
 
-/** True on devices where Material-You dynamic color (wallpaper palette) is available. */
+/**
+ * True on devices where Material-You dynamic color (wallpaper palette) is available.
+ *
+ * Annotated with [ChecksSdkIntAtLeast] so lint recognises this as an SDK_INT >= S guard: the
+ * dynamic*ColorScheme calls it gates are API 31+, and without the annotation lint cannot see
+ * through the helper and reports a NewApi error (min SDK is 26).
+ */
+@ChecksSdkIntAtLeast(api = Build.VERSION_CODES.S)
 fun dynamicColorSupported(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
     sdkInt >= Build.VERSION_CODES.S
 
