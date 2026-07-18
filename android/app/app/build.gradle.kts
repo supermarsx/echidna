@@ -214,6 +214,22 @@ android {
     }
 }
 
+// Only the DEBUG variant runs unit tests. The Compose-UI Robolectric tests
+// (createComposeRule) launch androidx.activity.ComponentActivity, which is declared
+// solely by androidx.compose.ui:ui-test-manifest — wired as debugImplementation, so
+// that activity is merged into the DEBUG manifest only. Under the release variant the
+// same tests fail with "Unable to resolve activity ... androidx.activity.ComponentActivity".
+// Unit tests are variant-agnostic for this app (the release build is unshrunk —
+// isMinifyEnabled = false — so it shares the debug variant's behaviour), and the blocking
+// `android-unit-tests` CI job already runs :app:testDebugUnitTest. Disabling the redundant
+// release unit-test variant keeps `gradle check` green without shipping the Compose test
+// manifest (ComponentActivity) into the distributable release APK.
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { variantBuilder ->
+        variantBuilder.enableUnitTest = false
+    }
+}
+
 dependencies {
     // Host the control service in-process: bundles EchidnaControlService, the
     // canonical AIDL, and the echidna_control_jni native lib into this APK.
