@@ -8,7 +8,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
+import com.echidna.app.data.ControlStateRepository
 import com.echidna.app.ui.help.HelpTestTags
+import org.junit.AfterClass
+import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,5 +57,26 @@ class HelpFlowInstrumentedTest {
 
     private companion object {
         const val TIMEOUT_MS = 10_000L
+
+        // The app-wide top bar (which hosts the Help action) is hidden while the first-run onboarding
+        // wizard is showing — and a freshly installed app under CI starts with onboarding incomplete,
+        // so MainActivity would boot into the wizard and the Help action would never exist. Mark
+        // onboarding complete BEFORE the compose rule launches MainActivity (a @BeforeClass runs ahead
+        // of the instance @Rule), so the activity composes straight onto the Dashboard with the top
+        // bar present. Restore the prior value afterward to keep the shared repository singleton clean.
+        private var savedOnboarding = false
+
+        @JvmStatic
+        @BeforeClass
+        fun completeOnboarding() {
+            savedOnboarding = ControlStateRepository.onboardingComplete.value
+            ControlStateRepository.setOnboardingComplete(true)
+        }
+
+        @JvmStatic
+        @AfterClass
+        fun restoreOnboarding() {
+            ControlStateRepository.setOnboardingComplete(savedOnboarding)
+        }
     }
 }
