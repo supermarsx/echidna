@@ -6,6 +6,7 @@ import android.view.WindowManager
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -138,11 +139,20 @@ class SettingsConfigInstrumentedTest {
             }
         }
 
+        // Switch to the Appearance tab, which hosts the Keep-screen-on toggle. Wait for the tab to be
+        // laid out before clicking, then let the ScrollableTabRow indicator animation settle, so the
+        // gesture lands on a stable row instead of one still measuring/scrolling — the CI-only flake
+        // that surfaced as a Compose timeout on a loaded emulator.
+        composeRule.waitUntil(TIMEOUT_MS) {
+            composeRule.onAllNodesWithText("Appearance").fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText("Appearance").performClick()
         composeRule.waitUntil(TIMEOUT_MS) {
             composeRule.onAllNodesWithContentDescription("Keep screen on")
                 .fetchSemanticsNodes().isNotEmpty()
         }
+        composeRule.waitForIdle()
+
         composeRule.onNodeWithContentDescription("Keep screen on").performClick()
 
         composeRule.waitUntil(TIMEOUT_MS) { repo.settingsState.value.keepScreenOn }
@@ -170,6 +180,8 @@ class SettingsConfigInstrumentedTest {
     private companion object {
         // Mirrors NotificationController.CHANNEL_ID (private there).
         const val CONTROLS_CHANNEL_ID = "echidna_controls"
-        const val TIMEOUT_MS = 5_000L
+        // Headroom for the Compose UI interaction under a loaded CI emulator (the flake this test
+        // previously hit was a timeout waiting on the Appearance tab / toggle to settle).
+        const val TIMEOUT_MS = 10_000L
     }
 }
