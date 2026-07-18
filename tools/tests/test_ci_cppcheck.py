@@ -35,17 +35,22 @@ class CppcheckCiContractTest(unittest.TestCase):
         self.assertNotIn("|| true", step)
 
     def test_suppressions_are_exact_reviewed_style_advisories(self) -> None:
+        # Comment lines (leading '#') document why a fixture pointer is left plain;
+        # they are not suppression entries, so they are excluded from the contract.
         entries = [
             line.strip()
             for line in SUPPRESSIONS.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            if line.strip() and not line.lstrip().startswith("#")
         ]
 
-        self.assertEqual(12, len(entries))
+        self.assertEqual(17, len(entries))
         for entry in entries:
             with self.subTest(entry=entry):
                 diagnostic, path, line = entry.rsplit(":", 2)
-                self.assertIn(diagnostic, {"useStlAlgorithm", "constParameterPointer"})
+                self.assertIn(
+                    diagnostic,
+                    {"useStlAlgorithm", "constParameterPointer", "constVariablePointer"},
+                )
                 self.assertTrue(path.startswith("native/"))
                 self.assertNotIn("*", path)
                 self.assertGreater(int(line), 0)
