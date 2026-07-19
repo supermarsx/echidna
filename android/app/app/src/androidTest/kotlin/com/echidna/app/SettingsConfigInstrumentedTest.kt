@@ -4,12 +4,14 @@ import android.app.NotificationManager
 import android.content.Context
 import android.view.WindowManager
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -153,7 +155,14 @@ class SettingsConfigInstrumentedTest {
         }
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithContentDescription("Keep screen on").performClick()
+        // The toggle is the last row of a long Appearance section inside the screen's
+        // verticalScroll column: it is composed (so the wait above sees it) but sits below the
+        // viewport, where performClick would land outside the visible bounds and never reach the
+        // switch. Scroll it into view first, then click.
+        composeRule.onNodeWithContentDescription("Keep screen on")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
 
         composeRule.waitUntil(TIMEOUT_MS) { repo.settingsState.value.keepScreenOn }
         assertTrue(repo.settingsState.value.keepScreenOn)
