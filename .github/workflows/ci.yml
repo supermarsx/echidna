@@ -362,10 +362,6 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ""
-      # Automatic main-push cuts are marked prerelease while the newly configured release
-      # signing key is being exercised end to end: a prerelease can be inspected and deleted
-      # cleanly without ever having been the repository's "latest" release. Flip to false once
-      # a cut has been verified to publish the expected signed APKs and Magisk module.
-      prerelease: true
+      prerelease: false
       allow_unsigned_skip: true
     secrets: inherit
