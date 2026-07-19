@@ -64,6 +64,12 @@ EXPECTED_SEPOLICY_LINES = (
     "allow hal_audio_server echidna_telemetry_key_file file { getattr open read }",
     "allow audioserver echidna_controller_spki_file file { getattr open read }",
     "allow hal_audio_server echidna_controller_spki_file file { getattr open read }",
+    # Read-only zygote access to the package registry (/data/system/packages.list) so the
+    # module can resolve the trusted publisher's kernel UID during preAppSpecialize, while it
+    # still runs in the forking zygote. Stock policy denies this read, which leaves the
+    # publisher UID unresolved and profile sync disabled. Reviewed with magisk/sepolicy.rule
+    # and post-fs-data.sh apply_sepolicy(); the registry is never written.
+    "allow zygote packages_list_file file { getattr open read }",
 )
 FIXED_ENTRIES = frozenset(
     {
