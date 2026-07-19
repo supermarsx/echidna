@@ -5,6 +5,10 @@ import com.echidna.app.model.AudioStackInfo
 import com.echidna.app.model.CpuArchInfo
 import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.ModuleStatus
+import com.echidna.app.system.ReleaseArtifactException
+import com.echidna.app.system.ReleaseArtifactSource
+import com.echidna.app.system.ReleaseAsset
+import com.echidna.app.system.ResolvedRelease
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -223,12 +227,106 @@ class InstallEngineViewModelTest {
         assertEquals(0, controller.installCalls.get())
     }
 
+    @Test
+    fun `checking for a release resolves a tag and asset name but downloads nothing`() {
+        val controller = FakeController().apply { refreshResult = status(installed = false, zygisk = true) }
+        val releases = FakeReleases()
+        val vm = viewModel(controller, releases = releases)
+        assertTrue(await { vm.state.value.canInstall })
+
+        vm.checkForLatestRelease()
+
+        assertTrue(await { vm.state.value.release.phase == ReleasePhase.RESOLVED })
+        assertEquals("v1.4.0", vm.state.value.release.tag)
+        assertEquals("echidna-magisk-v1.4.0.zip", vm.state.value.release.assetName)
+        // Nothing was fetched, and nothing was handed to the privileged installer.
+        assertEquals(0, releases.stageCalls.get())
+        assertEquals(0, controller.installCalls.get())
+    }
+
+    @Test
+    fun `a download is refused until the resolved release has been shown`() {
+        val controller = FakeController().apply { refreshResult = status(installed = false, zygisk = true) }
+        val releases = FakeReleases()
+        val vm = viewModel(controller, releases = releases)
+        assertTrue(await { vm.state.value.canInstall })
+
+        vm.downloadResolvedModule()
+
+        assertEquals(0, releases.stageCalls.get())
+        assertEquals(ReleasePhase.IDLE, vm.state.value.release.phase)
+    }
+
+    @Test
+    fun `a verified download is staged but never installed without a separate action`() {
+        val controller = FakeController().apply { refreshResult = status(installed = false, zygisk = true) }
+        val releases = FakeReleases(stagedPath = "/cache/release-downloads/echidna-magisk-v1.4.0.zip")
+        val vm = viewModel(controller, releases = releases)
+        assertTrue(await { vm.state.value.canInstall })
+
+        vm.checkForLatestRelease()
+        assertTrue(await { vm.state.value.release.canDownload })
+        vm.downloadResolvedModule()
+
+        assertTrue(await { vm.state.value.release.phase == ReleasePhase.STAGED })
+        assertEquals(0, controller.installCalls.get())
+
+        controller.onInstall = { controller.refreshResult = status(installed = true, zygisk = true) }
+        vm.installDownloadedModule()
+
+        assertTrue(await { vm.state.value.phase == InstallPhase.INSTALL_REBOOT })
+        assertEquals("/cache/release-downloads/echidna-magisk-v1.4.0.zip", controller.lastInstallPath)
+    }
+
+    @Test
+    fun `a failed verification surfaces the reason and never falls back to the bundled archive`() {
+        val controller = FakeController().apply { refreshResult = status(installed = false, zygisk = true) }
+        val releases = FakeReleases(
+            stageFailure = ReleaseArtifactException(
+                "Origin check failed: echidna-magisk-v1.4.0.zip is pinned to a different release certificate."
+            )
+        )
+        val vm = viewModel(controller, releases = releases)
+        assertTrue(await { vm.state.value.canInstall })
+
+        vm.checkForLatestRelease()
+        assertTrue(await { vm.state.value.release.canDownload })
+        vm.downloadResolvedModule()
+
+        assertTrue(await { vm.state.value.release.phase == ReleasePhase.FAILED })
+        assertTrue(vm.state.value.release.message!!.contains("Origin check failed"))
+        // Fail closed: nothing installable is offered, and the bundled asset was NOT substituted.
+        assertFalse(vm.state.value.release.canInstallStaged)
+        vm.installDownloadedModule()
+        assertEquals(0, controller.installCalls.get())
+    }
+
+    @Test
+    fun `a release lookup failure leaves the offline install path untouched`() {
+        val controller = FakeController().apply { refreshResult = status(installed = false, zygisk = true) }
+        val releases = FakeReleases(resolveFailure = java.io.IOException("no route to host"))
+        val archive = FakeArchive(bundled = "/cache/echidna-magisk.zip")
+        val vm = viewModel(controller, archive, releases)
+        assertTrue(await { vm.state.value.canInstall })
+
+        vm.checkForLatestRelease()
+        assertTrue(await { vm.state.value.release.phase == ReleasePhase.FAILED })
+
+        // The bundled/offline install is completely unaffected by the network failure.
+        controller.onInstall = { controller.refreshResult = status(installed = true, zygisk = true) }
+        vm.install()
+
+        assertTrue(await { vm.state.value.phase == InstallPhase.INSTALL_REBOOT })
+        assertEquals("/cache/echidna-magisk.zip", controller.lastInstallPath)
+    }
+
     private fun viewModel(
         controller: FakeController,
         archive: FakeArchive = FakeArchive(),
+        releases: FakeReleases = FakeReleases(),
     ): InstallEngineViewModel {
         val scope = CoroutineScope(Dispatchers.Unconfined).also(scopes::add)
-        return InstallEngineViewModel(controller, archive, overrideScope = scope)
+        return InstallEngineViewModel(controller, archive, releases, overrideScope = scope)
     }
 
     private fun await(timeoutMs: Long = 3_000L, condition: () -> Boolean): Boolean {
@@ -346,5 +444,31 @@ class InstallEngineViewModelTest {
     ) : EngineArchiveSource {
         override fun bundledArchivePath(): String? = bundled
         override fun stageArchive(uri: Uri): String? = staged
+    }
+
+    /** Stands in for the GitHub release path; the real verification rules are covered separately. */
+    private class FakeReleases(
+        private val stagedPath: String = "/cache/release-downloads/echidna-magisk-v1.4.0.zip",
+        private val resolveFailure: Throwable? = null,
+        private val stageFailure: Throwable? = null,
+    ) : ReleaseArtifactSource {
+        val stageCalls = AtomicInteger(0)
+
+        override suspend fun resolveLatest(): ResolvedRelease {
+            resolveFailure?.let { throw it }
+            return ResolvedRelease(
+                tag = "v1.4.0",
+                assets = listOf(
+                    ReleaseAsset("echidna-magisk-v1.4.0.zip", "https://github.com/x/echidna-magisk-v1.4.0.zip", 4096),
+                    ReleaseAsset("SHA256SUMS.txt", "https://github.com/x/SHA256SUMS.txt", 128),
+                ),
+            )
+        }
+
+        override suspend fun stageForInstall(release: ResolvedRelease, asset: ReleaseAsset): String {
+            stageCalls.incrementAndGet()
+            stageFailure?.let { throw it }
+            return stagedPath
+        }
     }
 }

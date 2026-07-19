@@ -209,3 +209,24 @@ provided by Magisk's own flashing flow, and third-party DSP plugins are gated by
 signature** over the plugin `.so` (see the DSP plugin schema in
 [developer_readme.md](developer_readme.md#dsp-plugin-schema)). The trusted plugin public key is a
 build-provisioned compile definition with a fail-closed all-zero placeholder.
+
+## In-app release downloads
+
+The companion's install screen can **optionally** fetch release artifacts from GitHub Releases. It is
+strictly additive: the bundled module asset and the `.zip` picker remain the offline install path,
+nothing is downloaded or installed without an explicit user action, and the resolved tag and asset
+name are shown before any bytes are fetched. The latest release is resolved from
+`releases/latest` at run time — no tag or asset filename is hardcoded in the app.
+
+Every downloaded artifact passes two independent checks before it can be staged for install, and any
+failure deletes the file and reports which check rejected it rather than falling back to the bundled
+package:
+
+* **Integrity** — SHA-256 against `SHA256SUMS.txt` published in the same release.
+* **Origin** — an APK must be signed by the same certificate as the running companion (read via
+  `PackageManager` / `SigningInfo`); the Magisk zip, which is not APK-signed, must carry a
+  `common/release-cert-sha256` pin equal to that certificate. The known Android debug certificate is
+  rejected on both paths, and a debug-signed companion cannot download at all because it has no
+  forgery-resistant certificate to bind to.
+
+Transport is HTTPS-only, including every redirect hop, and confined to GitHub-owned hosts.

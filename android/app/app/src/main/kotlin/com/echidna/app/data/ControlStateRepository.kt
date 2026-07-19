@@ -32,7 +32,9 @@ import com.echidna.app.model.WhitelistBindings
 import com.echidna.app.system.ControlServiceClient
 import com.echidna.app.system.ControlServiceSyncSnapshot
 import com.echidna.app.system.EngineModuleArchive
+import com.echidna.app.system.GithubReleaseRepository
 import com.echidna.app.system.LegacyPreprocessorServiceResult
+import com.echidna.app.system.ReleaseArtifactSource
 import com.echidna.app.system.EchidnaWidgetProvider
 import com.echidna.app.system.NotificationController
 import com.echidna.app.ui.diagnostics.NoteUtils
@@ -806,6 +808,14 @@ object ControlStateRepository {
     /** Stages a user-selected archive [uri] into a root-readable path, or null on failure. */
     fun stageEngineArchive(uri: Uri): String? =
         if (::context.isInitialized) EngineModuleArchive(context).stageArchive(uri) else null
+
+    /**
+     * Optional GitHub-release downloader for the installer, or null before initialization. Strictly
+     * additive: the bundled asset and the .zip picker above remain the offline install path and do
+     * not depend on this ever being available.
+     */
+    fun releaseArtifactSource(): ReleaseArtifactSource? =
+        if (::context.isInitialized) GithubReleaseRepository(context) else null
 
     fun importPreset(json: String): String? {
         val imported = PresetSerializer.fromJson(json) ?: return null

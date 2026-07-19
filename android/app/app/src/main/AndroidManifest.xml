@@ -8,6 +8,12 @@
          local DSP engine on the user's own voice. It captures only in-app while the
          user is on the Lab screen; it does NOT intercept any other app's audio. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- The installer can OPTIONALLY fetch Echidna release artifacts from GitHub Releases.
+         It is never automatic and never a precondition: the bundled module asset and the
+         .zip picker keep working with no network. Downloads are HTTPS-only, verified against
+         the release's SHA256SUMS.txt, and bound to this app's own signing certificate before
+         anything is staged for install. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Control service now ships inside this APK; the old cross-package
          signature permission is self-referential and has been removed. -->
 

@@ -98,6 +98,14 @@ fun InstallEngineScreen(
             MessageCard(phase = state.phase, message = message)
         }
 
+        ReleaseCard(
+            release = state.release,
+            installBusy = state.busy,
+            onCheck = viewModel::checkForLatestRelease,
+            onDownload = viewModel::downloadResolvedModule,
+            onInstall = viewModel::installDownloadedModule,
+        )
+
         OpenMagiskButton()
 
         when (state.phase) {
@@ -150,6 +158,103 @@ internal fun RiskCard(moduleInstalled: Boolean) {
             "phones, and can cause boot issues. Only continue if you can recover the device.",
         severity = AlertSeverity.ERROR,
     )
+}
+
+/**
+ * The optional "download from GitHub Releases" card. Deliberately three explicit steps — resolve,
+ * download+verify, install — so the user always sees the resolved tag and asset name before any
+ * bytes are fetched, and a verified artifact is still never installed without a separate tap.
+ *
+ * A verification failure is rendered in the error container with the exact reason from the
+ * verifier; the card never degrades to "use the bundled package instead" on its own.
+ */
+@Composable
+internal fun ReleaseCard(
+    release: ReleaseUiState,
+    installBusy: Boolean,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Download from GitHub",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Optional. Fetches the latest published release over HTTPS, checks its " +
+                    "SHA-256 against the release's SHA256SUMS.txt, and requires its release " +
+                    "certificate to match the one that signed this app. Installing offline from " +
+                    "the bundled package or a .zip you already have never needs this.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (release.tag != null && release.assetName != null) {
+                Text(
+                    text = "Release ${release.tag} · ${release.assetName}" +
+                        if (release.assetSizeBytes > 0) " · ${release.assetSizeBytes / 1024} KB" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            release.message?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (release.phase == ReleasePhase.FAILED) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
+            if (release.busy) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            OutlinedButton(
+                onClick = onCheck,
+                enabled = !release.busy && !installBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(imageVector = Icons.Filled.Download, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (release.tag == null) "Check for the latest release" else "Re-check latest release")
+            }
+
+            if (release.canDownload) {
+                Button(
+                    onClick = onDownload,
+                    enabled = !installBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(imageVector = Icons.Filled.Download, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Download and verify ${release.assetName}")
+                }
+            }
+
+            if (release.canInstallStaged) {
+                Button(
+                    onClick = onInstall,
+                    enabled = !installBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(imageVector = Icons.Filled.FolderZip, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Install the verified download", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
 }
 
 @Composable

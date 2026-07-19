@@ -6,6 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.echidna.app.data.ControlStateRepository
 import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.ModuleStatus
+import com.echidna.app.system.ReleaseArtifactException
+import com.echidna.app.system.ReleaseArtifactSource
+import com.echidna.app.system.ReleaseAsset
+import com.echidna.app.system.ResolvedRelease
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -71,6 +75,20 @@ private class RepositoryEngineArchiveSource : EngineArchiveSource {
     override fun stageArchive(uri: Uri): String? = repo.stageEngineArchive(uri)
 }
 
+/**
+ * Production wiring for the optional download path. The repository owns the app context, so this
+ * fails with an honest message rather than a crash when it is asked for before initialization.
+ */
+private class RepositoryReleaseArtifactSource : ReleaseArtifactSource {
+    private fun delegate(): ReleaseArtifactSource = ControlStateRepository.releaseArtifactSource()
+        ?: throw ReleaseArtifactException("The app is still starting up. Try again in a moment.")
+
+    override suspend fun resolveLatest(): ResolvedRelease = delegate().resolveLatest()
+
+    override suspend fun stageForInstall(release: ResolvedRelease, asset: ReleaseAsset): String =
+        delegate().stageForInstall(release, asset)
+}
+
 /** The phases of the guided install/uninstall flow. */
 enum class InstallPhase {
     /** First privileged probe is in flight; the screen shows a spinner. */
@@ -106,6 +124,55 @@ enum class InstallPhase {
 }
 
 /**
+ * Phases of the OPTIONAL download-from-GitHub path. It is deliberately a separate axis from
+ * [InstallPhase]: the offline install (bundled asset or picked .zip) must keep working exactly as
+ * before with no network at all, so nothing in the install state machine depends on these values.
+ */
+enum class ReleasePhase {
+    /** Nothing requested. The download card only offers "Check for the latest release". */
+    IDLE,
+
+    /** Asking the GitHub API which release is latest. */
+    RESOLVING,
+
+    /** A tag and asset name are known and shown; the user has not yet asked to download. */
+    RESOLVED,
+
+    /** Downloading and verifying (checksum + origin). */
+    DOWNLOADING,
+
+    /** Verified and staged on disk. Installing it is still a separate, explicit action. */
+    STAGED,
+
+    /** A lookup, download, or verification check failed; [ReleaseUiState.message] says which. */
+    FAILED,
+}
+
+/**
+ * Snapshot of the download path. [tag] and [assetName] come from the resolved API response and are
+ * shown to the user BEFORE any download is offered — requirement of the flow is that nothing is
+ * fetched or installed without the user seeing what it is first.
+ */
+data class ReleaseUiState(
+    val phase: ReleasePhase = ReleasePhase.IDLE,
+    val tag: String? = null,
+    val assetName: String? = null,
+    val assetSizeBytes: Long = 0L,
+    val message: String? = null,
+) {
+    val busy: Boolean
+        get() = phase == ReleasePhase.RESOLVING || phase == ReleasePhase.DOWNLOADING
+
+    /** Download is offered only once the user has seen the resolved tag and asset name. */
+    val canDownload: Boolean
+        get() = phase == ReleasePhase.RESOLVED && assetName != null
+
+    /** Install of a downloaded artifact is offered only after every check passed. */
+    val canInstallStaged: Boolean
+        get() = phase == ReleasePhase.STAGED
+}
+
+/**
  * Immutable snapshot rendered by the install screen. Detection fields are always populated from the
  * real [ModuleStatus]; nothing here fabricates an "installed" or "active" state.
  */
@@ -118,6 +185,7 @@ data class InstallUiState(
     val engineSummary: String = "Unknown",
     val selinuxMode: String = "Unknown",
     val message: String? = null,
+    val release: ReleaseUiState = ReleaseUiState(),
 ) {
     val busy: Boolean
         get() = phase == InstallPhase.DETECTING ||
@@ -143,12 +211,18 @@ data class InstallUiState(
 class InstallEngineViewModel(
     private val controller: EngineInstallController = RepositoryEngineInstallController(),
     private val archive: EngineArchiveSource = RepositoryEngineArchiveSource(),
+    private val releases: ReleaseArtifactSource = RepositoryReleaseArtifactSource(),
     // Injectable so the state machine can be exercised on a test dispatcher; production uses the
     // ViewModel's own scope.
     overrideScope: CoroutineScope? = null,
 ) : ViewModel() {
 
     private val workScope: CoroutineScope = overrideScope ?: viewModelScope
+
+    /** The release currently shown in the download card, and the artifact verified out of it. */
+    private var resolvedRelease: ResolvedRelease? = null
+    private var resolvedAsset: ReleaseAsset? = null
+    private var stagedDownloadPath: String? = null
 
     private val _state = MutableStateFlow(InstallUiState())
     val state: StateFlow<InstallUiState> = _state.asStateFlow()
@@ -267,6 +341,100 @@ class InstallEngineViewModel(
         }
     }
 
+    /**
+     * Asks GitHub which release is latest right now. Explicitly user-initiated: nothing polls, and
+     * nothing is downloaded by this call — it only resolves the tag and the module asset name so
+     * the user can see exactly what a download would fetch before deciding.
+     */
+    fun checkForLatestRelease() {
+        if (_state.value.release.busy) return
+        stagedDownloadPath = null
+        resolvedRelease = null
+        resolvedAsset = null
+        updateRelease {
+            ReleaseUiState(
+                phase = ReleasePhase.RESOLVING,
+                message = "Asking GitHub for the latest release…",
+            )
+        }
+        workScope.launch {
+            try {
+                val release = releases.resolveLatest()
+                val asset = release.moduleAsset ?: throw ReleaseArtifactException(
+                    "Release ${release.tag} publishes no Echidna module .zip, so there is nothing " +
+                        "to install from it."
+                )
+                resolvedRelease = release
+                resolvedAsset = asset
+                updateRelease {
+                    ReleaseUiState(
+                        phase = ReleasePhase.RESOLVED,
+                        tag = release.tag,
+                        assetName = asset.name,
+                        assetSizeBytes = asset.sizeBytes,
+                        message = "Latest release is ${release.tag}. Download ${asset.name} to " +
+                            "verify it against this release's SHA256SUMS.txt and this app's own " +
+                            "signing certificate.",
+                    )
+                }
+            } catch (error: Throwable) {
+                failRelease(error)
+            }
+        }
+    }
+
+    /**
+     * Downloads the resolved module archive and verifies it. Only reachable after
+     * [checkForLatestRelease] has shown the tag and asset name. Every check is fail-closed: a
+     * checksum or origin mismatch leaves the release card in FAILED with the specific reason and
+     * stages nothing — it never quietly falls back to the bundled asset.
+     */
+    fun downloadResolvedModule() {
+        val release = resolvedRelease
+        val asset = resolvedAsset
+        if (!_state.value.release.canDownload || release == null || asset == null) return
+        stagedDownloadPath = null
+        updateRelease {
+            it.copy(
+                phase = ReleasePhase.DOWNLOADING,
+                message = "Downloading and verifying ${asset.name}…",
+            )
+        }
+        workScope.launch {
+            try {
+                val path = releases.stageForInstall(release, asset)
+                stagedDownloadPath = path
+                updateRelease {
+                    it.copy(
+                        phase = ReleasePhase.STAGED,
+                        message = "${asset.name} verified: its SHA-256 matches this release's " +
+                            "SHA256SUMS.txt, and its embedded release certificate pin matches the " +
+                            "certificate that signed this app. Nothing has been installed yet.",
+                    )
+                }
+            } catch (error: Throwable) {
+                failRelease(error)
+            }
+        }
+    }
+
+    /**
+     * Installs the verified download through the same guided flow as every other source. Separate
+     * from [downloadResolvedModule] on purpose: verifying an artifact never implies consent to
+     * flash it.
+     */
+    fun installDownloadedModule() {
+        val path = stagedDownloadPath
+        if (_state.value.busy || path == null || !_state.value.release.canInstallStaged) return
+        workScope.launch {
+            if (!controller.isServiceConnected()) {
+                fail(DISCONNECTED_MESSAGE)
+                return@launch
+            }
+            runInstall(path)
+        }
+    }
+
     /** Best-effort privileged reboot, offered from the reboot-required screen. */
     fun reboot() {
         workScope.launch {
@@ -331,6 +499,30 @@ class InstallEngineViewModel(
         _state.update { it.copy(phase = InstallPhase.FAILED, message = message) }
     }
 
+    private fun updateRelease(transform: (ReleaseUiState) -> ReleaseUiState) {
+        _state.update { it.copy(release = transform(it.release)) }
+    }
+
+    /**
+     * Surfaces a download/verification failure verbatim. [ReleaseArtifactException] messages already
+     * name which check failed; anything else is reported as the transport failure it is rather than
+     * being dressed up as a passing verification.
+     */
+    private fun failRelease(error: Throwable) {
+        val message = when {
+            error is ReleaseArtifactException -> error.message
+            else -> "Couldn't reach the GitHub release API (${error.javaClass.simpleName}). " +
+                "Nothing was downloaded. The bundled package and the .zip picker still work offline."
+        }
+        stagedDownloadPath = null
+        updateRelease {
+            it.copy(
+                phase = ReleasePhase.FAILED,
+                message = message ?: RELEASE_UNKNOWN_FAILURE,
+            )
+        }
+    }
+
     /**
      * Folds a fresh [ModuleStatus] into the detection display. Only changes [InstallPhase] when
      * either leaving the initial DETECTING phase or [forceIdle] is requested by [refresh]; an
@@ -393,6 +585,9 @@ class InstallEngineViewModel(
             "Couldn't disable the engine module — the privileged disable step failed. Nothing else " +
                 "was changed: the module was left as-is rather than half-removed. Check Magisk root " +
                 "access and try again."
+        const val RELEASE_UNKNOWN_FAILURE =
+            "The download was refused by a verification check that reported no detail. Nothing " +
+                "was installed."
         const val REBOOT_MANUAL_MESSAGE =
             "Couldn't trigger a reboot automatically. Reboot the device manually to finish " +
                 "loading/unloading the engine."
