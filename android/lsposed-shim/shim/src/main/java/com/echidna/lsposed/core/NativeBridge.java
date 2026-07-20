@@ -6,8 +6,6 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
-import de.robv.android.xposed.XposedBridge;
-
 /**
  * Java facade for JNI bindings that forward captured audio blocks into the native engine.
  */
@@ -164,7 +162,7 @@ public final class NativeBridge {
         } catch (Throwable throwable) {
             NATIVE_AVAILABLE.set(false);
             if (FAILURE_LOGGED.compareAndSet(false, true)) {
-                XposedBridge.log(
+                ShimLog.log(
                         TAG + ": failed to load native bridge: " + Log.getStackTraceString(throwable));
             }
             LIBRARY_LOADED.set(false);
@@ -214,7 +212,7 @@ public final class NativeBridge {
             INITIALISED.set(false);
         }
         if (FAILURE_LOGGED.compareAndSet(false, true)) {
-            XposedBridge.log(
+            ShimLog.log(
                     TAG + ": native " + operation + " failed; disabling bridge: "
                             + Log.getStackTraceString(throwable));
         }

@@ -5,6 +5,14 @@ import java.util.zip.ZipFile
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // Coverage MEASUREMENT only — see the JaCoCo block at the bottom of this file.
+    // Deliberately the stock Gradle `jacoco` plugin rather than AGP's
+    // `enableUnitTestCoverage`: AGP's flag rewrites the variant's bytecode at
+    // build time (offline instrumentation), which changes what the unit tests
+    // actually execute. The Gradle plugin attaches a JVM agent to the existing
+    // test task instead, so `testDebugUnitTest` runs exactly the same classes
+    // with or without coverage — a measurement must not perturb what it measures.
+    jacoco
 }
 
 // --- Release signing inputs (never committed) ---------------------------------
@@ -452,4 +460,121 @@ tasks.register("verifyDebugNativePackaging") {
             "A Zygisk/shim library leaked into the companion APK: $packaged"
         }
     }
+}
+
+// --- Coverage measurement (JaCoCo) -------------------------------------------
+// Baseline instrumentation for "how much of this module do the JVM unit tests
+// actually execute?". This is MEASUREMENT ONLY: no `violationRules`, no
+// `jacocoTestCoverageVerification` wiring, nothing that can fail a build. A
+// threshold is an enforcement decision that deserves its own change once the
+// real numbers are known; bolting one on here would introduce a new CI failure
+// mode in the same commit that first makes coverage visible.
+//
+// 0.8.11 is the floor that matters: it is the first JaCoCo line that fully
+// understands the Java 17 class files this module compiles to (see
+// compileOptions above). Older versions silently skip classes they cannot parse,
+// which reads as "0% covered" rather than an error — the worst possible failure
+// mode for a metric.
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+// Classes/patterns that would make the coverage number lie if counted.
+//
+// The rule applied here: exclude only code NOBODY WROTE. Generated AIDL stubs,
+// BuildConfig/R, Compose's `ComposableSingletons$*` lambda holders, Kotlin's
+// `WhenMappings` enum-switch tables and kotlinx.serialization's `$$serializer`
+// classes are all emitted by a tool; a test can neither meaningfully cover them
+// nor be blamed for missing them, and they are numerous enough to swamp the
+// ratio. Real production code is NEVER excluded to flatter the number — if a
+// hand-written class is uncovered, that is exactly the signal this task exists
+// to surface.
+//
+// Dagger/Hilt patterns (`*_Factory`, `*_MembersInjector`, `Dagger*Component`,
+// `Hilt_*`) are listed even though the app currently uses neither, so the list
+// stays correct if DI is introduced later rather than quietly under-excluding.
+val jacocoGeneratedCodeExclusions = listOf(
+    // Android build-generated resource/config classes.
+    "**/R.class",
+    "**/R$*.class",
+    "**/BuildConfig.*",
+    "**/Manifest*.*",
+    // AIDL-generated Binder stubs/proxies (owned by :service, compiled into the
+    // consumer). Every class in this family is machine-emitted from a .aidl.
+    "**/IEchidna*.class",
+    "**/IEchidna*$*.class",
+    // Compose compiler artefacts: hoisted `@Composable` lambda singletons and
+    // the `*$*ComposableLambda` wrappers around them.
+    "**/*ComposableSingletons*.*",
+    "**/*ComposableLambda*.*",
+    "**/ComposableSingletons*.*",
+    // Kotlin compiler artefacts: enum `when` dispatch tables and inlined-lambda
+    // synthetic classes.
+    "**/*WhenMappings*.*",
+    "**/*\$\$serializer.*",
+    "**/*\$\$inlined*",
+    // Dagger/Hilt code generation (not used today — see comment above).
+    "**/*_Factory*.*",
+    "**/*_MembersInjector*.*",
+    "**/Dagger*Component*.*",
+    "**/*_HiltModules*.*",
+    "**/Hilt_*.*",
+    "**/hilt_aggregated_deps/**",
+)
+
+// The coverage agent is attached to the EXISTING test tasks rather than a cloned
+// task, so `coverageReport` reports on precisely the run that CI already gates on.
+//
+// includeNoLocationClasses: Robolectric (used heavily by this module's unit
+// tests) loads instrumented classes through its own classloader with no code
+// source location. Without this flag JaCoCo drops those executions on the floor
+// and every Robolectric-tested class reports 0%.
+// excludes jdk.internal.*: those classes are loaded before the agent can
+// instrument them and produce a "class already instrumented" warning storm.
+tasks.withType<Test>().configureEach {
+    extensions.configure(JacocoTaskExtension::class) {
+        isIncludeNoLocationClasses = true
+        excludes = listOf("jdk.internal.*")
+    }
+}
+
+// One command, one report: `gradlew :app:coverageReport`.
+// Named `coverageReport` (not `jacocoTestReport`) because the Gradle JaCoCo
+// plugin only auto-creates `jacocoTestReport` for `java` projects — on an AGP
+// module the name is free, and an explicit, tool-neutral name keeps the CI step
+// readable if the tool is ever swapped.
+//
+// Debug variant only, matching the `androidComponents.beforeVariants` block
+// above that disables the release unit tests outright.
+tasks.register<JacocoReport>("coverageReport") {
+    group = "verification"
+    description = "Runs the debug JVM unit tests and writes XML + HTML coverage reports for :app."
+    dependsOn("testDebugUnitTest")
+
+    reports {
+        // XML for machines (CI artifact, diffing, any future gate), HTML for a
+        // human to click through to the actual uncovered lines. CSV adds a third
+        // copy of the same data nobody reads.
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(false)
+    }
+
+    // Kotlin's output directory has been `build/tmp/kotlin-classes/<variant>` for
+    // the whole 1.x line; the Java side is read off the compile task itself so it
+    // survives AGP relocating `intermediates/javac/...` (it has, twice). The app
+    // has no .java sources today — the tree is simply empty then, not an error.
+    val kotlinClasses = fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+        exclude(jacocoGeneratedCodeExclusions)
+    }
+    val javaClasses = tasks.named<JavaCompile>("compileDebugJavaWithJavac").map { compile ->
+        fileTree(compile.destinationDirectory).matching { exclude(jacocoGeneratedCodeExclusions) }
+    }
+    classDirectories.setFrom(files(kotlinClasses, javaClasses))
+
+    // Source roots so the HTML report can show annotated source, not just class names.
+    sourceDirectories.setFrom(files("src/main/kotlin", "src/main/java"))
+
+    // The .exec the agent wrote for the run this task depends on.
+    executionData.setFrom(layout.buildDirectory.file("jacoco/testDebugUnitTest.exec"))
 }

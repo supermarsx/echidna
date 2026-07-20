@@ -1,6 +1,11 @@
 plugins {
     id 'com.android.library'
     id 'org.jetbrains.kotlin.android'
+    // Coverage MEASUREMENT only — see the JaCoCo block at the bottom of this file.
+    // The stock Gradle plugin (JVM agent on the existing test task) rather than
+    // AGP's enableUnitTestCoverage (build-time bytecode rewriting), so the tests
+    // execute the same classes with or without coverage enabled.
+    id 'jacoco'
 }
 
 android {
@@ -54,4 +59,106 @@ dependencies {
     androidTestImplementation 'androidx.test:core:1.5.0'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test:runner:1.5.2'
+}
+
+// --- Coverage measurement (JaCoCo) -------------------------------------------
+// Baseline instrumentation for "how much of this module do the JVM unit tests
+// actually execute?". MEASUREMENT ONLY: no violationRules, no verification task,
+// nothing that can fail a build. A threshold is an enforcement decision that
+// belongs in its own change once the real numbers are known.
+//
+// Note this module is built from TWO Gradle roots: its own (android/control-service)
+// and android/app, whose settings.gradle.kts includes it as :service via a
+// projectDir redirect. Configuring coverage here — rather than in either root —
+// means `:service:coverageReport` resolves identically from both, which is what
+// lets CI produce the app and service reports in a single invocation.
+//
+// 0.8.11 is the floor that matters: the first JaCoCo line that fully understands
+// the Java 17 class files this module compiles to (see compileOptions above).
+// Older versions skip class files they cannot parse, which reports as 0% covered
+// rather than as an error — the worst failure mode for a metric.
+jacoco {
+    toolVersion = '0.8.11'
+}
+
+// Classes/patterns that would make the coverage number lie if counted.
+//
+// The rule applied here: exclude only code NOBODY WROTE. The AIDL-generated
+// Binder stubs are the dominant case in this module — five .aidl files expand
+// into Stub/Proxy/Default classes with hundreds of machine-emitted transact
+// branches that no unit test can meaningfully exercise, and which would
+// otherwise dwarf the hand-written service logic in the ratio. Real production
+// code is NEVER excluded to flatter the number.
+//
+// Dagger/Hilt and kotlinx.serialization patterns are listed even though neither
+// is a dependency today, so the list stays correct if one is introduced later
+// instead of quietly under-excluding.
+def jacocoGeneratedCodeExclusions = [
+        // Android build-generated resource/config classes.
+        '**/R.class',
+        '**/R$*.class',
+        '**/BuildConfig.*',
+        '**/Manifest*.*',
+        // AIDL-generated Binder stubs/proxies for the five IEchidna* interfaces.
+        '**/IEchidna*.class',
+        '**/IEchidna*$*.class',
+        // Kotlin compiler artefacts: enum `when` dispatch tables, kotlinx.serialization
+        // companions, inlined-lambda synthetics.
+        '**/*WhenMappings*.*',
+        '**/*$$serializer.*',
+        '**/*$$inlined*',
+        // Dagger/Hilt code generation (not used today — see comment above).
+        '**/*_Factory*.*',
+        '**/*_MembersInjector*.*',
+        '**/Dagger*Component*.*',
+        '**/*_HiltModules*.*',
+        '**/Hilt_*.*',
+        '**/hilt_aggregated_deps/**',
+]
+
+// Attach the agent to the EXISTING test tasks so the report describes exactly the
+// run CI already gates on. includeNoLocationClasses covers classes loaded without
+// a code source (Robolectric-style classloaders); excluding jdk.internal.* avoids
+// the "already instrumented" warning storm from classes loaded before the agent.
+tasks.withType(Test).configureEach {
+    jacoco {
+        includeNoLocationClasses = true
+        excludes = ['jdk.internal.*']
+    }
+}
+
+// One command, one report: `gradlew :service:coverageReport` (from either root).
+// Named `coverageReport` rather than `jacocoTestReport` because the Gradle JaCoCo
+// plugin only auto-creates the latter for `java` projects — on an AGP module the
+// name is free, and a tool-neutral name keeps the CI step readable.
+tasks.register('coverageReport', JacocoReport) {
+    group = 'verification'
+    description = 'Runs the debug JVM unit tests and writes XML + HTML coverage reports for :service.'
+    dependsOn 'testDebugUnitTest'
+
+    reports {
+        // XML for machines (CI artifact, diffing, any future gate), HTML so a human
+        // can click through to the actual uncovered lines. CSV is a third copy of
+        // the same data that nobody reads.
+        xml.required = true
+        html.required = true
+        csv.required = false
+    }
+
+    // Kotlin's output has been build/tmp/kotlin-classes/<variant> for the whole 1.x
+    // line; the Java side (which here is entirely the generated AIDL, hence the
+    // exclusions above) is read off the compile task so it survives AGP relocating
+    // intermediates/javac/... as it has done more than once.
+    classDirectories.setFrom(files(
+            fileTree(dir: layout.buildDirectory.dir('tmp/kotlin-classes/debug'), excludes: jacocoGeneratedCodeExclusions),
+            tasks.named('compileDebugJavaWithJavac').map { compile ->
+                fileTree(compile.destinationDirectory).matching { exclude jacocoGeneratedCodeExclusions }
+            },
+    ))
+
+    // Source roots so the HTML report shows annotated source, not just class names.
+    sourceDirectories.setFrom(files('src/main/kotlin', 'src/main/java'))
+
+    // The .exec written by the agent during the run this task depends on.
+    executionData.setFrom(layout.buildDirectory.file('jacoco/testDebugUnitTest.exec'))
 }

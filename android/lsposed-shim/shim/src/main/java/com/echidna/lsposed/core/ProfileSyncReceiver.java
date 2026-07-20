@@ -22,8 +22,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
-import de.robv.android.xposed.XposedBridge;
-
 /**
  * Fetches target-UID-scoped policy from the companion's explicit read-only Binder component.
  *
@@ -589,7 +587,7 @@ final class ProfileSyncReceiver {
     }
 
     private static void logFailure(String message, Throwable error) {
-        XposedBridge.log(TAG + ": " + message + "; failing closed: "
+        ShimLog.log(TAG + ": " + message + "; failing closed: "
                 + Log.getStackTraceString(error));
     }
 }

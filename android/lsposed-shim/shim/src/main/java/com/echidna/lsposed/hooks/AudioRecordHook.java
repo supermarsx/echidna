@@ -6,6 +6,7 @@ import android.os.SystemClock;
 import com.echidna.lsposed.core.AudioFormatUtils;
 import com.echidna.lsposed.core.ModuleState;
 import com.echidna.lsposed.core.NativeBridge;
+import com.echidna.lsposed.core.ShimLog;
 
 import java.nio.ByteBuffer;
 import java.security.SecureRandom;
@@ -71,10 +72,10 @@ public final class AudioRecordHook {
             hookByteBuffer(audioRecordClass, moduleState);
         } catch (XposedHelpers.ClassNotFoundError error) {
             INSTALLED.set(false);
-            XposedBridge.log(TAG + ": unable to resolve AudioRecord class: " + error.getMessage());
+            ShimLog.log(TAG + ": unable to resolve AudioRecord class: " + error.getMessage());
         } catch (Throwable throwable) {
             INSTALLED.set(false);
-            XposedBridge.log(TAG + ": unable to install AudioRecord hooks: " + throwable);
+            ShimLog.log(TAG + ": unable to install AudioRecord hooks: " + throwable);
         }
     }
 
@@ -162,7 +163,7 @@ public final class AudioRecordHook {
                 state::reportLegacyPreprocessorTelemetry,
                 new LegacyPreprocessorSessionManager.ReflectionEffectFactory(),
                 SystemClock::elapsedRealtime,
-                (code, error) -> XposedBridge.log(
+                (code, error) -> ShimLog.log(
                         TAG + ": legacy_preprocessor_" + code
                                 + (error != null ? ": " + error : "")),
                 new LegacyPreprocessorSessionManager.DefaultScheduler(128),
@@ -254,9 +255,9 @@ public final class AudioRecordHook {
                     int.class,
                     new ByteArrayReadHook(state));
         } catch (NoSuchMethodError ignored) {
-            XposedBridge.log(TAG + ": byte[] read(offset,size) missing");
+            ShimLog.log(TAG + ": byte[] read(offset,size) missing");
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": byte[] read(offset,size) hook failed: " + throwable);
+            ShimLog.log(TAG + ": byte[] read(offset,size) hook failed: " + throwable);
         }
     }
 
@@ -273,7 +274,7 @@ public final class AudioRecordHook {
         } catch (NoSuchMethodError ignored) {
             // Available on API 23+.
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": byte[] read(offset,size,mode) hook failed: " + throwable);
+            ShimLog.log(TAG + ": byte[] read(offset,size,mode) hook failed: " + throwable);
         }
     }
 
@@ -287,9 +288,9 @@ public final class AudioRecordHook {
                     int.class,
                     new ShortArrayReadHook(state));
         } catch (NoSuchMethodError ignored) {
-            XposedBridge.log(TAG + ": short[] read offset/size missing");
+            ShimLog.log(TAG + ": short[] read offset/size missing");
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": short[] read(offset,size) hook failed: " + throwable);
+            ShimLog.log(TAG + ": short[] read(offset,size) hook failed: " + throwable);
         }
     }
 
@@ -306,7 +307,7 @@ public final class AudioRecordHook {
         } catch (NoSuchMethodError ignored) {
             // Available on API 23+.
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": short[] read(offset,size,mode) hook failed: " + throwable);
+            ShimLog.log(TAG + ": short[] read(offset,size,mode) hook failed: " + throwable);
         }
     }
 
@@ -321,9 +322,9 @@ public final class AudioRecordHook {
                     int.class,
                     new FloatArrayReadHook(state));
         } catch (NoSuchMethodError ignored) {
-            XposedBridge.log(TAG + ": float[] read overload missing");
+            ShimLog.log(TAG + ": float[] read overload missing");
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": float[] read hook failed: " + throwable);
+            ShimLog.log(TAG + ": float[] read hook failed: " + throwable);
         }
     }
 
@@ -336,9 +337,9 @@ public final class AudioRecordHook {
                     int.class,
                     new ByteBufferReadHook(state));
         } catch (NoSuchMethodError ignored) {
-            XposedBridge.log(TAG + ": ByteBuffer read(size) missing");
+            ShimLog.log(TAG + ": ByteBuffer read(size) missing");
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": ByteBuffer read(size) hook failed: " + throwable);
+            ShimLog.log(TAG + ": ByteBuffer read(size) hook failed: " + throwable);
         }
         try {
             XposedHelpers.findAndHookMethod(
@@ -351,7 +352,7 @@ public final class AudioRecordHook {
         } catch (NoSuchMethodError ignored) {
             // Optional overload introduced on newer APIs.
         } catch (Throwable throwable) {
-            XposedBridge.log(TAG + ": ByteBuffer read(size,mode) hook failed: " + throwable);
+            ShimLog.log(TAG + ": ByteBuffer read(size,mode) hook failed: " + throwable);
         }
     }
 
@@ -594,7 +595,7 @@ public final class AudioRecordHook {
                     context.sampleRate,
                     context.channelCount);
             if (!success) {
-                XposedBridge.log(TAG + ": native processing failed for byte[] buffer");
+                ShimLog.log(TAG + ": native processing failed for byte[] buffer");
             }
             return success;
         }
@@ -622,7 +623,7 @@ public final class AudioRecordHook {
                     context.sampleRate,
                     context.channelCount);
             if (!success) {
-                XposedBridge.log(TAG + ": native processing failed for short[] buffer");
+                ShimLog.log(TAG + ": native processing failed for short[] buffer");
             }
             return success;
         }
@@ -650,7 +651,7 @@ public final class AudioRecordHook {
                     context.sampleRate,
                     context.channelCount);
             if (!success) {
-                XposedBridge.log(TAG + ": native processing failed for float[] buffer");
+                ShimLog.log(TAG + ": native processing failed for float[] buffer");
             }
             return success;
         }
@@ -677,7 +678,7 @@ public final class AudioRecordHook {
                     context.sampleRate,
                     context.channelCount);
             if (!success) {
-                XposedBridge.log(TAG + ": native processing failed for ByteBuffer");
+                ShimLog.log(TAG + ": native processing failed for ByteBuffer");
             }
             return success;
         }
@@ -685,7 +686,7 @@ public final class AudioRecordHook {
 
     private static void logHookFailure(String message, Throwable throwable) {
         if (HOOK_FAILURE_LOGGED.compareAndSet(false, true)) {
-            XposedBridge.log(TAG + ": " + message + ": " + throwable);
+            ShimLog.log(TAG + ": " + message + ": " + throwable);
         }
     }
 }

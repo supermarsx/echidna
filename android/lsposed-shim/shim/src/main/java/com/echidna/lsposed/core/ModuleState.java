@@ -8,8 +8,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import de.robv.android.xposed.XposedBridge;
-
 /**
  * Tracks per-process configuration resolved via the control service and exposes
  * helper methods consumed by hook implementations.
@@ -102,7 +100,7 @@ public final class ModuleState {
         try {
             return AppConfig.fromSnapshot(snapshotStore.getSnapshot(), packageName, processName);
         } catch (Throwable throwable) {
-            XposedBridge.log(
+            ShimLog.log(
                     TAG + ": policy resolution failed; failing closed: "
                             + Log.getStackTraceString(throwable));
             return AppConfig.disabled();
@@ -133,7 +131,7 @@ public final class ModuleState {
             try {
                 snapshotStore.ensureStarted(packageName, processName);
             } catch (Throwable throwable) {
-                XposedBridge.log(
+                ShimLog.log(
                         TAG + ": policy snapshot receiver unavailable; failing closed: "
                                 + Log.getStackTraceString(throwable));
             }
@@ -338,7 +336,7 @@ public final class ModuleState {
         try {
             nativeController.initialize();
         } catch (Throwable throwable) {
-            XposedBridge.log(
+            ShimLog.log(
                     TAG + ": native initialization failed; failing closed: "
                             + Log.getStackTraceString(throwable));
         }

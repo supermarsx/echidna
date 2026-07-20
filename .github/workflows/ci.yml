@@ -291,6 +291,35 @@ jobs:
       - name: Run JVM unit tests (app + service)
         run: gradle --project-dir android/app :app:testDebugUnitTest :service:testDebugUnitTest
 
+      # Coverage MEASUREMENT, deliberately not a gate. `coverageReport` only reads
+      # the .exec the step above already produced, so the test tasks come back
+      # UP-TO-DATE and this adds report generation, not a second test run.
+      #
+      # continue-on-error is the whole point of "measurement first, enforcement
+      # later": this step must never be the reason a PR goes red. There is no
+      # threshold and no jacocoTestCoverageVerification anywhere — turning the
+      # number into a gate is a separate, deliberate decision.
+      #
+      # :shim is absent here on purpose. Its coverage task works identically, but
+      # the shim build's preBuild hard-fails without the per-ABI native artifacts
+      # (stageEchidnaShimJniLibs), which this job does not build — adding it would
+      # mean pulling the NDK into a job that exists to run headless JVM tests.
+      - name: Generate coverage reports (app + service)
+        continue-on-error: true
+        run: gradle --project-dir android/app :app:coverageReport :service:coverageReport
+
+      # if: always() so a red test run still publishes whatever coverage was
+      # recorded before the failure — that partial data is often what explains it.
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: jvm-coverage-reports
+          if-no-files-found: warn
+          path: |
+            android/app/app/build/reports/jacoco/coverageReport/
+            android/control-service/service/build/reports/jacoco/coverageReport/
+
   instrumentation-tests:
     name: "Instrumentation tests (emulator, non-blocking)"
     runs-on: ubuntu-latest

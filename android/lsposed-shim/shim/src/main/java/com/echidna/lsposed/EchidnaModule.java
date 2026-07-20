@@ -2,10 +2,10 @@ package com.echidna.lsposed;
 
 import com.echidna.lsposed.core.AppConfig;
 import com.echidna.lsposed.core.ModuleState;
+import com.echidna.lsposed.core.ShimLog;
 import com.echidna.lsposed.hooks.AudioRecordHook;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
@@ -28,7 +28,7 @@ public final class EchidnaModule implements IXposedHookLoadPackage {
             // hooks it just installed will actually transform audio -- and if not, why not.
             AppConfig.InertReason reason = moduleState.inertReason();
             if (reason != AppConfig.InertReason.NONE) {
-                XposedBridge.log(
+                ShimLog.log(
                         "EchidnaModule: hooks installed but INERT for "
                                 + lpparam.packageName
                                 + "/"
@@ -39,7 +39,7 @@ public final class EchidnaModule implements IXposedHookLoadPackage {
                                 + reason.description());
             }
         } catch (Throwable throwable) {
-            XposedBridge.log(
+            ShimLog.log(
                     "EchidnaModule: failed closed for "
                             + lpparam.packageName
                             + "/"

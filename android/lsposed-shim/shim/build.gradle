@@ -1,5 +1,10 @@
 plugins {
     id 'com.android.application'
+    // Coverage MEASUREMENT only — see the JaCoCo block at the bottom of this file.
+    // The stock Gradle plugin (JVM agent on the existing test task) rather than
+    // AGP's enableUnitTestCoverage (build-time bytecode rewriting), so the tests
+    // execute the same classes with or without coverage enabled.
+    id 'jacoco'
 }
 
 import java.util.Properties
@@ -151,4 +156,100 @@ tasks.register('verifyDebugNativePackaging') {
             throw new GradleException('Full Zygisk libechidna.so leaked into the shim APK')
         }
     }
+}
+
+// --- Coverage measurement (JaCoCo) -------------------------------------------
+// Baseline instrumentation for "how much of this module do the JVM unit tests
+// actually execute?". MEASUREMENT ONLY: no violationRules, no verification task,
+// nothing that can fail a build. A threshold is an enforcement decision that
+// belongs in its own change once the real numbers are known.
+//
+// 0.8.11 is the floor that matters: the first JaCoCo line that fully understands
+// the Java 17 class files this module compiles to (see compileOptions above).
+// Older versions skip class files they cannot parse, which reports as 0% covered
+// rather than as an error — the worst failure mode for a metric.
+//
+// Caveat worth knowing before running this locally: `preBuild` here depends on
+// stageEchidnaShimJniLibs, which HARD-FAILS when the per-ABI native artifacts are
+// absent. Coverage therefore inherits that prerequisite — run
+// tools/build_native_ndk.sh first, exactly as for any other shim build task.
+jacoco {
+    toolVersion = '0.8.11'
+}
+
+// Classes/patterns that would make the coverage number lie if counted.
+//
+// The rule applied here: exclude only code NOBODY WROTE. In this module that is
+// the AIDL-generated Binder stubs for the three IEchidna* interfaces consumed
+// from the control service, plus the usual R/BuildConfig family. Every
+// hand-written shim class — including the Xposed entry points that cannot be
+// exercised off-device — is left IN, because "the hook classes are untested" is
+// a true and useful fact about this module, not noise to be filtered away.
+//
+// Dagger/Hilt patterns are listed even though DI is not used here, so the list
+// stays correct if it is introduced later rather than quietly under-excluding.
+def jacocoGeneratedCodeExclusions = [
+        // Android build-generated resource/config classes. (buildConfig is off for
+        // this module, but R is still generated.)
+        '**/R.class',
+        '**/R$*.class',
+        '**/BuildConfig.*',
+        '**/Manifest*.*',
+        // AIDL-generated Binder stubs/proxies for the IEchidna* interfaces.
+        '**/IEchidna*.class',
+        '**/IEchidna*$*.class',
+        // Dagger/Hilt code generation (not used today — see comment above).
+        '**/*_Factory*.*',
+        '**/*_MembersInjector*.*',
+        '**/Dagger*Component*.*',
+        '**/*_HiltModules*.*',
+        '**/Hilt_*.*',
+        '**/hilt_aggregated_deps/**',
+]
+
+// Attach the agent to the EXISTING test tasks so the report describes exactly the
+// run CI already gates on. includeNoLocationClasses is required because this
+// module's unit tests run under Robolectric, which loads instrumented classes
+// through a classloader with no code source location — without it every
+// Robolectric-tested class reports 0%. Excluding jdk.internal.* avoids the
+// "already instrumented" warning storm from classes loaded before the agent.
+tasks.withType(Test).configureEach {
+    jacoco {
+        includeNoLocationClasses = true
+        excludes = ['jdk.internal.*']
+    }
+}
+
+// One command, one report: `gradlew :shim:coverageReport`.
+// Named `coverageReport` rather than `jacocoTestReport` because the Gradle JaCoCo
+// plugin only auto-creates the latter for `java` projects — on an AGP module the
+// name is free, and a tool-neutral name keeps the CI step readable.
+tasks.register('coverageReport', JacocoReport) {
+    group = 'verification'
+    description = 'Runs the debug JVM unit tests and writes XML + HTML coverage reports for :shim.'
+    dependsOn 'testDebugUnitTest'
+
+    reports {
+        // XML for machines (CI artifact, diffing, any future gate), HTML so a human
+        // can click through to the actual uncovered lines. CSV is a third copy of
+        // the same data that nobody reads.
+        xml.required = true
+        html.required = true
+        csv.required = false
+    }
+
+    // Pure-Java module: the single class root is the javac output, read off the
+    // compile task itself so it survives AGP relocating intermediates/javac/...
+    // as it has done more than once.
+    classDirectories.setFrom(files(
+            tasks.named('compileDebugJavaWithJavac').map { compile ->
+                fileTree(compile.destinationDirectory).matching { exclude jacocoGeneratedCodeExclusions }
+            },
+    ))
+
+    // Source root so the HTML report shows annotated source, not just class names.
+    sourceDirectories.setFrom(files('src/main/java'))
+
+    // The .exec written by the agent during the run this task depends on.
+    executionData.setFrom(layout.buildDirectory.file('jacoco/testDebugUnitTest.exec'))
 }
