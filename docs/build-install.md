@@ -347,6 +347,27 @@ recovery), then reboot. The installer requires **Magisk 24.0+** and aborts on AP
 2. Install `echidna-lsposed-shim-<tag>.apk` if you need the Java fallback path, install and enable
    **LSPosed**, then enable the Echidna module and select its **scope** (the target apps you want
    hooked). The Zygisk native module remains the primary native hook path.
+3. **Set the companion's DSP engine mode to Compatibility** — *Settings → Engine → DSP engine
+   mode → Compatibility*. This step is not optional and it is the one most often missed.
+
+!!! warning "Installing and enabling the shim is not enough to make it do anything"
+
+    Exactly one engine may own capture for a given app, so the companion publishes a **capture
+    owner** per whitelisted process. It names the LSPosed shim as owner **only while DSP engine
+    mode is Compatibility**; in `Native first` (the shipped default) and `Low latency` it names
+    Zygisk instead. The shim fails closed unless it is the named owner, so with any other engine
+    mode LSPosed will report the module as *loaded and active* while it transforms nothing at all.
+
+    Check the effective owner under **Diagnostics → Pipeline → Advanced diagnostics → Capture
+    ownership**. `logcat` also carries the shim's own verdict per process, e.g.
+    `EchidnaModule: hooks installed but INERT for <pkg> [NOT_CAPTURE_OWNER]`.
+
+!!! note "The shim covers `android.media.AudioRecord` and nothing else"
+
+    The LSPosed shim hooks the Java/NDK `android.media.AudioRecord` capture client only. Apps that
+    record through **AAudio**, **OpenSL ES**, or **Oboe** (which sits on top of AAudio/OpenSL) are
+    not covered by the shim in any configuration — no scope, whitelist, or engine-mode setting
+    changes that. Those paths need the native Zygisk module.
 
 ### 4. Grant the per-app whitelist
 

@@ -3,6 +3,7 @@ package com.echidna.app.ui.diagnostics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.echidna.app.data.ControlStateRepository
+import com.echidna.app.model.CaptureOwnerStatus
 import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.CpuHeatPoint
 import com.echidna.app.model.DspMetrics
@@ -38,6 +39,10 @@ class DiagnosticsViewModel : ViewModel() {
     // Read-only flows backing the Advanced diagnostics section: the real de-faked
     // module/SELinux/HAL probe, the configured latency target, and global control state.
     val moduleStatus: StateFlow<ModuleStatus?> = repo.moduleStatus
+
+    // Which engine actually owns capture right now, and why nobody does when nobody does. The
+    // LSPosed shim is inert unless it is the named owner, and it cannot say so from inside the app.
+    val captureOwnerStatus: StateFlow<CaptureOwnerStatus> = repo.captureOwnerStatus
     val latencyMode: StateFlow<LatencyMode> = repo.latencyMode
     val masterEnabled: StateFlow<Boolean> = repo.masterEnabled
     val bypass: StateFlow<Boolean> = repo.bypass

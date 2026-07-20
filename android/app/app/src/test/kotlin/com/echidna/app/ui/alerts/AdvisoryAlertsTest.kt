@@ -2,6 +2,7 @@ package com.echidna.app.ui.alerts
 
 import com.echidna.app.model.AudioStackInfo
 import com.echidna.app.model.CpuArchInfo
+import com.echidna.app.model.DspEngineMode
 import com.echidna.app.model.EngineStatus
 import com.echidna.app.model.ModuleStatus
 import com.echidna.app.model.SettingsState
@@ -99,8 +100,64 @@ class AdvisoryAlertsTest {
         assertEquals("Open Magisk", AlertActionTarget.OPEN_MAGISK.label())
         assertEquals("Open Whitelist", AlertActionTarget.WHITELIST.label())
         assertEquals("Run Wizard", AlertActionTarget.COMPAT_WIZARD.label())
+        assertEquals("Open engine mode", AlertActionTarget.ENGINE_MODE.label())
         assertNull(AlertActionTarget.NONE.label())
     }
+
+    @Test
+    fun `no native route in native-first mode routes to engine mode and names the setting`() {
+        val alerts = buildAdvisoryAlerts(
+            settings = SettingsState(engineMode = DspEngineMode.NATIVE_FIRST),
+            engineStatus = healthyEngine(),
+            moduleStatus = noNativeRoute(),
+            compatibility = null,
+            telemetry = emptyTelemetry(),
+            whitelistBindings = whitelisted()
+        )
+        val alert = alerts.first { it.title == "LSPosed compatibility mode recommended" }
+
+        assertEquals(AlertActionTarget.ENGINE_MODE, alert.action)
+        assertEquals("Open engine mode", alert.action.label())
+        assertTrue(alert.detail.contains("DSP engine mode -> Compatibility"))
+        assertTrue(alert.detail.contains("android.media.AudioRecord"))
+    }
+
+    @Test
+    fun `no native route already in compatibility mode routes to the whitelist instead`() {
+        val alerts = buildAdvisoryAlerts(
+            settings = SettingsState(engineMode = DspEngineMode.COMPATIBILITY),
+            engineStatus = healthyEngine(),
+            moduleStatus = noNativeRoute(),
+            compatibility = null,
+            telemetry = emptyTelemetry(),
+            whitelistBindings = whitelisted()
+        )
+        val alert = alerts.first { it.title == "LSPosed compatibility mode recommended" }
+
+        assertEquals(AlertActionTarget.WHITELIST, alert.action)
+        assertTrue(alert.detail.contains("already Compatibility"))
+        assertTrue(alert.detail.contains("AAudio"))
+    }
+
+    @Test
+    fun `advisory is absent while a native route is verified`() {
+        val alerts = buildAdvisoryAlerts(
+            settings = SettingsState(remindCompatibilityProbe = false),
+            engineStatus = healthyEngine(),
+            moduleStatus = healthyModule(),
+            compatibility = null,
+            telemetry = emptyTelemetry(),
+            whitelistBindings = whitelisted()
+        )
+        assertTrue(alerts.none { it.title == "LSPosed compatibility mode recommended" })
+    }
+
+    /** The state issue #18 describes: nothing native is verified, so the shim is the only route. */
+    private fun noNativeRoute() = healthyModule().copy(
+        zygiskEnabled = false,
+        nativeRouteVerified = false,
+        javaFallbackRecommended = true,
+    )
 
     @Test
     fun `healthy state raises no install or magisk alerts`() {

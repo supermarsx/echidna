@@ -5,6 +5,10 @@ import android.content.Intent
 import android.net.Uri
 import com.echidna.app.model.AccentColor
 import com.echidna.app.model.AudioStackProbe
+import com.echidna.app.model.CaptureOwner
+import com.echidna.app.model.CaptureOwnerReason
+import com.echidna.app.model.CaptureOwnerStatus
+import com.echidna.app.model.CaptureOwnership
 import com.echidna.app.model.CompatibilityResult
 import com.echidna.app.model.ControlState
 import com.echidna.app.model.CpuHeatPoint
@@ -165,6 +169,33 @@ object ControlStateRepository {
 
     private val _dspEngineMode = MutableStateFlow(DspEngineMode.NATIVE_FIRST)
     val dspEngineMode: StateFlow<DspEngineMode> = _dspEngineMode.asStateFlow()
+
+    /**
+     * The capture ownership Echidna is currently publishing, resolved through the same rule the
+     * policy encoder uses. Surfaced in Diagnostics so "the LSPosed shim is installed, enabled, and
+     * doing nothing" has a visible explanation instead of being silent.
+     */
+    val captureOwnerStatus: StateFlow<CaptureOwnerStatus> = combine(
+        _dspEngineMode,
+        _masterEnabled,
+        _bypass,
+        _panicUntilEpochMs,
+        _whitelistBindings,
+    ) { mode, master, bypassed, panicUntil, bindings ->
+        CaptureOwnership.resolve(
+            engineMode = mode,
+            masterEnabled = master,
+            bypass = bypassed,
+            panicUntilEpochMs = panicUntil,
+            nowEpochMs = System.currentTimeMillis(),
+            enabledWhitelistCount = bindings.whitelist.count { it.value },
+            policyPublished = appBindingsAuthoritative && whitelistAuthoritative,
+        )
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        CaptureOwnerStatus(CaptureOwner.NONE, CaptureOwnerReason.POLICY_NOT_PUBLISHED),
+    )
 
     private val _debugMode = MutableStateFlow(false)
     val debugMode: StateFlow<Boolean> = _debugMode.asStateFlow()
@@ -1502,11 +1533,7 @@ object ControlStateRepository {
     private fun synchronizeServiceState() {
         if (!::serviceClient.isInitialized) return
         val policyStateJson = if (appBindingsAuthoritative && whitelistAuthoritative) {
-            val captureOwner = if (_dspEngineMode.value == DspEngineMode.COMPATIBILITY) {
-                "lsposed"
-            } else {
-                "zygisk"
-            }
+            val captureOwner = CaptureOwnership.ownerFor(_dspEngineMode.value).id
             val captureOwners = _whitelistBindings.value.whitelist
                 .filterValues { enabled -> enabled }
                 .keys

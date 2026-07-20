@@ -64,6 +64,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
     val latencyMode by viewModel.latencyMode.collectAsStateWithLifecycle()
     val masterEnabled by viewModel.masterEnabled.collectAsStateWithLifecycle()
     val bypass by viewModel.bypass.collectAsStateWithLifecycle()
+    val captureOwnerStatus by viewModel.captureOwnerStatus.collectAsStateWithLifecycle()
     val probing by viewModel.probing.collectAsStateWithLifecycle()
     var exportSummary by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTab by rememberSaveable { mutableStateOf(DiagnosticsTab.OVERVIEW) }
@@ -138,7 +139,8 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                             metrics = metrics,
                             latencyMode = latencyMode,
                             masterEnabled = masterEnabled,
-                            bypass = bypass
+                            bypass = bypass,
+                            captureOwnerStatus = captureOwnerStatus
                         )
                     }
                 }

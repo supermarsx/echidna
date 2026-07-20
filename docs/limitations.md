@@ -59,11 +59,24 @@ stock `boot.img` → clean Magisk reinstall).
 Echidna hooks the capture path **inside** the target app's process. Android gives normal
 apps no way to do this. That means:
 
-- **A working Zygisk implementation is mandatory** to load the native `libechidna.so`
-  module into audio processes. The documented install path remains Magisk + built-in
-  Zygisk; standalone Zygisk providers can be detected by the compatibility probe, but
+- **A working Zygisk implementation is mandatory for full coverage** — it loads the native
+  `libechidna.so` module into audio processes, and it is the only path that reaches the
+  native capture APIs. The documented install path remains Magisk + built-in Zygisk;
+  standalone Zygisk providers can be detected by the compatibility probe, but
   APatch/KernelSU/Zygisk Next combinations remain device-gated until validated on the
-  target hardware. Optionally, LSPosed drives the Java-side capture shim.
+  target hardware.
+- **LSPosed + the Echidna shim is a narrower alternative, not a drop-in replacement.** It
+  needs root too (LSPosed itself does), and it is subject to two hard constraints:
+    - *It hooks `android.media.AudioRecord` only.* Apps that capture through **AAudio**,
+      **OpenSL ES**, or **Oboe** are not covered by the shim in any configuration. No
+      scope, whitelist, or setting changes this — those paths exist only in the native
+      Zygisk module.
+    - *It is inert unless the companion names it capture owner*, which it does **only
+      while DSP engine mode is Compatibility** (*Settings → Engine → DSP engine mode*).
+      Under the default `Native first` mode the shim installs and LSPosed reports it as
+      loaded and active while it transforms nothing. **Diagnostics → Pipeline → Advanced
+      diagnostics → Capture ownership** shows the effective owner, and `logcat` carries the
+      shim's per-process verdict (`[NOT_CAPTURE_OWNER]`, `[NOT_WHITELISTED]`, and so on).
 - On an **unrooted** device the companion app still runs — you can browse presets,
   configure the effect chain, and run the Compatibility Wizard — but the **engine stays
   "Not Installed"** and no audio is transformed. This is exactly what the app reports on

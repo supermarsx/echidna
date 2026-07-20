@@ -39,6 +39,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.echidna.app.model.CaptureOwner
+import com.echidna.app.model.CaptureOwnerReason
+import com.echidna.app.model.CaptureOwnerStatus
 import com.echidna.app.model.DspMetrics
 import com.echidna.app.model.HookTelemetry
 import com.echidna.app.model.LatencyMode
@@ -66,7 +69,8 @@ fun AdvancedDiagnosticsSection(
     metrics: DspMetrics,
     latencyMode: LatencyMode,
     masterEnabled: Boolean,
-    bypass: Boolean
+    bypass: Boolean,
+    captureOwnerStatus: CaptureOwnerStatus
 ) {
     var expanded by remember { mutableStateOf(false) }
     // Legacy shared-memory counters are explicitly unverified and cannot make the runtime live.
@@ -110,6 +114,8 @@ fun AdvancedDiagnosticsSection(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    CaptureOwnershipGroup(captureOwnerStatus)
+                    HorizontalDivider()
                     HookStatusGroup(telemetry.hooks, telemetryLive)
                     HorizontalDivider()
                     HookAttachGroup(telemetry, telemetryLive)
@@ -130,6 +136,42 @@ fun AdvancedDiagnosticsSection(
 // ---------------------------------------------------------------------------
 // Groups
 // ---------------------------------------------------------------------------
+
+/**
+ * Who owns audio capture for the whitelisted apps, and why nobody does when nobody does. Neither
+ * engine can report this from the target process, and the LSPosed shim is silently inert whenever
+ * it is not the named owner — so this is the only place the user can find that out.
+ */
+@Composable
+private fun CaptureOwnershipGroup(status: CaptureOwnerStatus) {
+    GroupHeader(
+        title = "Capture ownership",
+        description = "Exactly one engine may transform a whitelisted app's audio. The LSPosed " +
+            "shim does nothing unless it is the owner."
+    )
+    val owned = status.reason == CaptureOwnerReason.ACTIVE
+    MetricRow(
+        label = "Effective capture owner",
+        value = if (owned) status.owner.label else null,
+        description = if (owned) {
+            "Owner published to every enabled whitelist entry."
+        } else {
+            status.reason.summary
+        }
+    )
+    if (owned && status.owner == CaptureOwner.ZYGISK) {
+        NoteLine(
+            "The LSPosed shim is inert while Zygisk owns capture. To hand capture to the shim, " +
+                "set Settings -> Engine -> DSP engine mode -> Compatibility."
+        )
+    }
+    if (owned && status.owner == CaptureOwner.LSPOSED) {
+        NoteLine(
+            "The shim hooks android.media.AudioRecord only. Apps that capture through " +
+                "AAudio, OpenSL ES, or Oboe are not covered by it in any configuration."
+        )
+    }
+}
 
 @Composable
 private fun HookStatusGroup(hooks: List<HookTelemetry>, telemetryLive: Boolean) {

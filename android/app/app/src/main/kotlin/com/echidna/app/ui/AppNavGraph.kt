@@ -28,6 +28,8 @@ import com.echidna.app.ui.onboarding.OnboardingViewModel
 import com.echidna.app.ui.onboarding.OnboardingWizardHost
 import com.echidna.app.ui.preset.PresetManagerScreen
 import com.echidna.app.ui.preset.PresetManagerViewModel
+import com.echidna.app.ui.settings.SettingsFocus
+import com.echidna.app.ui.settings.SettingsFocusRequest
 import com.echidna.app.ui.settings.SettingsScreen
 import com.echidna.app.ui.settings.SettingsViewModel
 import com.echidna.app.ui.whitelist.WhitelistEditorScreen
@@ -81,6 +83,16 @@ fun androidx.navigation.NavGraphBuilder.AppNavGraph(navController: NavHostContro
             },
             onLaunchCompatibility = {
                 navController.navigate(AppDestination.CompatibilityWizard.route)
+            },
+            onOpenEngineMode = {
+                // Land on the Engine tab so "set engine mode to Compatibility" is one tap, not a
+                // hunt through Settings. The route itself stays plain `settings` (see
+                // SettingsFocusRequest) so app-bar and bottom-bar route matching is unaffected.
+                SettingsFocusRequest.request(SettingsFocus.ENGINE)
+                navController.navigate(AppDestination.Settings.route) {
+                    popUpTo(AppDestination.Dashboard.route)
+                    launchSingleTop = true
+                }
             }
         )
     }

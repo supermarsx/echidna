@@ -28,6 +28,13 @@ enum class AlertActionTarget {
     /** Compatibility Wizard (re-probe hardware, SELinux, bridge). */
     COMPAT_WIZARD,
 
+    /**
+     * Settings → Engine, where DSP engine mode lives. The companion assigns the LSPosed shim as
+     * capture owner only in Compatibility mode, so this is the one setting that decides whether an
+     * installed, enabled shim does anything at all.
+     */
+    ENGINE_MODE,
+
     /** No in-app destination — the alert carries its own guidance. */
     NONE,
 }
@@ -58,6 +65,7 @@ fun AlertActionTarget.label(): String? = when (this) {
     AlertActionTarget.OPEN_MAGISK -> "Open Magisk"
     AlertActionTarget.WHITELIST -> "Open Whitelist"
     AlertActionTarget.COMPAT_WIZARD -> "Run Wizard"
+    AlertActionTarget.ENGINE_MODE -> "Open engine mode"
     AlertActionTarget.NONE -> null
 }
 
@@ -421,10 +429,30 @@ fun buildAdvisoryAlerts(
                 add(
                     AdvisoryAlert(
                         title = "LSPosed compatibility mode recommended",
-                        detail = "No native route is verified. LSPosed may cover selected AudioRecord " +
-                            "targets after its scope and capture owner are configured.",
+                        // The shim fails closed unless policy names it capture owner, and the
+                        // companion only does that in Compatibility mode. Naming the exact setting
+                        // (and pointing the button at it) is the difference between this advisory
+                        // and the silent dead end it used to be.
+                        detail = if (settings.engineMode == DspEngineMode.COMPATIBILITY) {
+                            "No native route is verified. Engine mode is already Compatibility, so " +
+                                "whitelisted apps are assigned to the LSPosed shim. It hooks " +
+                                "android.media.AudioRecord only - apps capturing through AAudio, " +
+                                "OpenSL ES, or Oboe are never covered by it. Confirm each target " +
+                                "app is whitelisted and in the shim's LSPosed scope."
+                        } else {
+                            "No native route is verified, and the LSPosed shim is inert in " +
+                                "${settings.engineMode.label} mode: Echidna names the shim capture " +
+                                "owner only while engine mode is Compatibility. Set Settings -> " +
+                                "Engine -> DSP engine mode -> Compatibility, then enable the shim's " +
+                                "LSPosed scope for each target app. The shim covers " +
+                                "android.media.AudioRecord only."
+                        },
                         category = "Install mix-up",
-                        action = AlertActionTarget.NONE
+                        action = if (settings.engineMode == DspEngineMode.COMPATIBILITY) {
+                            AlertActionTarget.WHITELIST
+                        } else {
+                            AlertActionTarget.ENGINE_MODE
+                        }
                     )
                 )
             }

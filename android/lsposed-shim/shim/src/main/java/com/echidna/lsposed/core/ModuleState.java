@@ -293,6 +293,7 @@ public final class ModuleState {
             String process = currentProcess.get();
             AppConfig resolved = resolveConfig(pkg, process);
             currentConfig.set(resolved);
+            logPolicyDecision(pkg, process, resolved);
             hooksActivated.set(resolved.shouldHook(pkg, process));
             applyProfile(resolved.profile());
             policyEpoch.incrementAndGet();
@@ -301,6 +302,30 @@ public final class ModuleState {
             // races this resolution, retaining the older generation forces one safe extra refresh.
             appliedSnapshotVersion.set(observedVersion);
         }
+    }
+
+    /** Reason last written to the log, so a TTL refresh that changes nothing stays quiet. */
+    private final AtomicReference<AppConfig.InertReason> loggedReason = new AtomicReference<>(null);
+
+    /**
+     * The reason this process is currently inert, or {@link AppConfig.InertReason#NONE} when hooks
+     * are permitted. Never widens policy; it only explains the decision already taken.
+     */
+    public AppConfig.InertReason inertReason() {
+        refreshPolicyIfNeeded(false);
+        return currentConfig.get().inertReason();
+    }
+
+    /** Emits the resolved decision once per change, so `logcat` explains a silently inert module. */
+    private void logPolicyDecision(String packageName, String processName, AppConfig resolved) {
+        AppConfig.InertReason reason = resolved.inertReason();
+        if (loggedReason.getAndSet(reason) == reason) {
+            return;
+        }
+        ShimLog.log(
+                TAG + ": " + packageName + "/" + processName + " -> "
+                        + (reason == AppConfig.InertReason.NONE ? "ACTIVE" : "INERT")
+                        + " [" + reason.name() + "] " + resolved.inertDescription());
     }
 
     private void applyProfile(String profile) {

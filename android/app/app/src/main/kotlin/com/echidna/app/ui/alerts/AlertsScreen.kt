@@ -34,8 +34,11 @@ import com.echidna.app.ui.components.rememberDismissedAlertsStore
  *  - a **Don't remind** permanent dismissal that is memorized forever and never reappears.
  *
  * Actionable advisories also carry a directing button routed to the destination that resolves them
- * (installer, Magisk, whitelist, or the compatibility wizard). Where no in-app destination exists,
- * the alert shows guidance text only rather than a dead button.
+ * (installer, Magisk, whitelist, engine mode, or the compatibility wizard). Where no in-app
+ * destination exists, the alert shows guidance text only rather than a dead button.
+ *
+ * @param onOpenEngineMode opens Settings on the Engine tab, where DSP engine mode lives. Defaulted
+ *   so adding it is purely additive for existing callers and previews.
  */
 @Composable
 fun AlertsScreen(
@@ -43,6 +46,7 @@ fun AlertsScreen(
     onOpenInstall: () -> Unit,
     onLaunchWhitelist: () -> Unit,
     onLaunchCompatibility: () -> Unit,
+    onOpenEngineMode: () -> Unit = {},
 ) {
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val engineStatus by viewModel.engineStatus.collectAsStateWithLifecycle()
@@ -129,6 +133,7 @@ fun AlertsScreen(
                     AlertActionTarget.WHITELIST -> onLaunchWhitelist
                     AlertActionTarget.COMPAT_WIZARD -> onLaunchCompatibility
                     AlertActionTarget.OPEN_MAGISK -> openMagisk
+                    AlertActionTarget.ENGINE_MODE -> onOpenEngineMode
                     AlertActionTarget.NONE -> null
                 }
                 PersistentDismissibleAlert(

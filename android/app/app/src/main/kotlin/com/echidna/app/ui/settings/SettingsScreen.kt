@@ -104,6 +104,15 @@ fun SettingsScreen(
     var profileMessage by remember { mutableStateOf<String?>(null) }
     var selectedTab by rememberSaveable { mutableStateOf(SettingsTab.ALERTS) }
 
+    // An alert action can hand off "open Settings on the Engine tab" so the user lands on DSP
+    // engine mode itself rather than on Settings and a hunt. The request is consumed once.
+    LaunchedEffect(Unit) {
+        when (SettingsFocusRequest.consume()) {
+            SettingsFocus.ENGINE -> selectedTab = SettingsTab.ENGINE
+            null -> Unit
+        }
+    }
+
     LaunchedEffect(profiles, activeProfileId) {
         if (selectedProfileId == null || profiles.none { it.id == selectedProfileId }) {
             selectedProfileId = activeProfileId ?: profiles.firstOrNull()?.id

@@ -244,13 +244,21 @@ ensure_permissions() {
 }
 
 report_status() {
-    if command -v magisk >/dev/null 2>&1; then
-        if [ -r "$ZYGISK_STATUS_HELPER" ]; then
-            . "$ZYGISK_STATUS_HELPER"
-            echidna_zygisk_enabled || log "Zygisk appears disabled"
-        else
-            log "Zygisk status helper missing; cannot verify loader state"
-        fi
+    if [ -r "$ZYGISK_STATUS_HELPER" ]; then
+        . "$ZYGISK_STATUS_HELPER"
+        # The helper counts Magisk's built-in Zygisk *and* standalone
+        # implementations (ReZygisk / Zygisk Next), which run with Magisk's
+        # built-in Zygisk switched off. Logging "disabled" from the sqlite flag
+        # alone was wrong on those devices, and contradicted the app UI.
+        zygisk_status=0
+        echidna_zygisk_enabled || zygisk_status=$?
+        case "$zygisk_status" in
+            0) log "Zygisk active (implementation: $ECHIDNA_ZYGISK_IMPL)" ;;
+            1) log "No Zygisk implementation detected; module will not be loaded" ;;
+            *) log "Zygisk state could not be determined; loader state unverified" ;;
+        esac
+    else
+        log "Zygisk status helper missing; cannot verify loader state"
     fi
     if [ ! -f "$LIB_DST" ]; then
         log "libechidna.so not staged; companion app will show Java-only mode"

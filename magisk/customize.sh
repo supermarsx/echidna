@@ -189,12 +189,21 @@ print_device_compat_report() {
     compat_warn "32-bit target apps may load the module but armv7 native hooks are disabled"
   fi
 
-  if command -v magisk >/dev/null 2>&1; then
-    echidna_zygisk_enabled || \
-      compat_warn "Zygisk does not appear enabled; enable it in Magisk before rebooting"
-  else
-    compat_warn "magisk command is unavailable during install; cannot verify Zygisk state"
-  fi
+  # Zygisk may come from Magisk's built-in implementation or from a standalone
+  # one (ReZygisk / Zygisk Next), which requires Magisk's built-in Zygisk to be
+  # left OFF. Telling the user to "enable it in Magisk" is therefore only sound
+  # advice when no implementation at all was found; the helper reports which
+  # one is present so this stays accurate for both setups.
+  zygisk_status=0
+  echidna_zygisk_enabled || zygisk_status=$?
+  case "$zygisk_status" in
+    0)
+      compat_info "zygisk-implementation=$ECHIDNA_ZYGISK_IMPL" ;;
+    1)
+      compat_warn "no Zygisk implementation detected; enable Magisk's built-in Zygisk or install a standalone one (ReZygisk / Zygisk Next) before rebooting" ;;
+    *)
+      compat_warn "Zygisk state could not be read (magisk command unavailable or query failed); verify a Zygisk implementation is active before rebooting" ;;
+  esac
 
   if command -v magiskpolicy >/dev/null 2>&1; then
     compat_info "magiskpolicy available for runtime SELinux compatibility checks"
@@ -233,7 +242,8 @@ fi
 if [ "${MAGISK_VER_CODE:-0}" -lt 24000 ]; then
   abort "! Magisk 24.0+ required for Zygisk (installed ver code ${MAGISK_VER_CODE:-unknown})"
 fi
-ui_print "- Reminder: enable Zygisk in the Magisk app if not already on."
+# The Zygisk reminder is printed after the compat report below, once the probe
+# has established which implementation (if any) provides Zygisk on this device.
 
 # Map Magisk's $ARCH to our build ABI names.
 #   PRIMARY_ABI     — the device's primary process ABI (used for lib/libechidna.so + system/lib(64) DSP)
@@ -269,6 +279,21 @@ fi
 
 . "$ZYGISK_STATUS_HELPER"
 print_device_compat_report
+
+# print_device_compat_report ran the probe, so ECHIDNA_ZYGISK_IMPL now names the
+# implementation that was found. The reminder has to follow it: a standalone
+# Zygisk (ReZygisk / Zygisk Next) documents that Magisk's built-in Zygisk must be
+# left OFF, so sending those users to the Magisk toggle would tell them to break
+# their own setup. Only advise the toggle when nothing was detected at all.
+case "${ECHIDNA_ZYGISK_IMPL:-}" in
+  magisk-builtin)
+    ui_print "- Zygisk: provided by Magisk's built-in implementation." ;;
+  standalone)
+    ui_print "- Zygisk: provided by a standalone implementation (ReZygisk / Zygisk Next)."
+    ui_print "- Leave Magisk's built-in Zygisk off; those implementations conflict with it." ;;
+  *)
+    ui_print "- Reminder: enable Zygisk in the Magisk app if not already on, or install a standalone implementation (ReZygisk / Zygisk Next)." ;;
+esac
 
 # --- Place the DSP engine on the default linker search path ----------------
 # libechidna.so bare-dlopens "libech_dsp.so" (native/zygisk/src/api.cpp), so the

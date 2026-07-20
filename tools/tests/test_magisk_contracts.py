@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,20 @@ PACKAGER = REPO_ROOT / "tools" / "build_magisk_module.sh"
 ZYGISK_STATUS = REPO_ROOT / "magisk" / "common" / "zygisk-status.sh"
 TRUST_BOOTSTRAP = REPO_ROOT / "magisk" / "common" / "trust-bootstrap.sh"
 TELEMETRY_KEY_LABEL = REPO_ROOT / "magisk" / "common" / "telemetry-key-label.sh"
+PRIVILEGED_CONTROLLER = (
+    REPO_ROOT
+    / "android"
+    / "control-service"
+    / "service"
+    / "src"
+    / "main"
+    / "kotlin"
+    / "com"
+    / "echidna"
+    / "control"
+    / "service"
+    / "PrivilegedController.kt"
+)
 
 
 class MagiskContractsTest(unittest.TestCase):
@@ -179,6 +194,37 @@ class MagiskContractsTest(unittest.TestCase):
                 self.assertNotIn("ECHIDNA_AF_OFFSETS", text)
                 self.assertNotIn("echidna_af_offsets.txt", text)
 
+    def test_installer_and_boot_script_do_not_demand_magisk_builtin_zygisk(self) -> None:
+        # ReZygisk / Zygisk Next run with Magisk's built-in Zygisk switched off,
+        # so "enable it in Magisk" is not advice either script may give.
+        for path in (CUSTOMIZE, POST_FS):
+            with self.subTest(path=path):
+                text = executable_lines(path)
+                self.assertNotIn("enable it in Magisk", text)
+                self.assertIn("ECHIDNA_ZYGISK_IMPL", text)
+
+    def test_installer_zygisk_reminder_is_conditional_on_the_implementation(self) -> None:
+        # The reminder used to print unconditionally, which told ReZygisk /
+        # Zygisk Next users to turn on the very toggle those projects require
+        # to stay off. Every mention of the Magisk toggle must now sit behind
+        # the implementation switch.
+        customize = executable_lines(CUSTOMIZE)
+        self.assertNotIn(
+            "Reminder: enable Zygisk in the Magisk app if not already on.",
+            customize,
+        )
+        switch = customize.index('case "${ECHIDNA_ZYGISK_IMPL:-}" in')
+        for index, line in enumerate(customize.splitlines()):
+            if "enable Zygisk in the Magisk app" in line:
+                with self.subTest(line=index):
+                    self.assertLess(switch, customize.index(line))
+        standalone = [
+            line
+            for line in customize.splitlines()
+            if "Leave Magisk's built-in Zygisk off" in line
+        ]
+        self.assertEqual(1, len(standalone))
+
     def test_zygisk_status_helper_reads_magisk_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fake_bin = Path(tmp)
@@ -209,6 +255,178 @@ class MagiskContractsTest(unittest.TestCase):
                 )
                 with self.subTest(value=value):
                     self.assertEqual(expected, result.returncode, result.stderr)
+
+
+class ZygiskStatusProbeTest(unittest.TestCase):
+    """Drives magisk/common/zygisk-status.sh against fixture module trees.
+
+    The fixtures prove only what they contain: that the probe recognizes the
+    module identifiers ReZygisk and Zygisk Next document for themselves. No
+    part of this suite runs against a real device or a real standalone Zygisk
+    build.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.modules = self.root / "modules"
+        self.modules.mkdir()
+        self.fake_bin = self.root / "bin"
+        self.fake_bin.mkdir()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def write_magisk(self, zygisk_value: str) -> None:
+        magisk = self.fake_bin / "magisk"
+        magisk.write_text(
+            "#!/bin/sh\n"
+            '[ "$1" = --sqlite ] || exit 64\n'
+            "printf 'value=%s\\n' \"${FAKE_ZYGISK_VALUE:-0}\"\n",
+            encoding="utf-8",
+        )
+        magisk.chmod(0o755)
+        self.zygisk_value = zygisk_value
+
+    def write_module(self, module_id: str, prop: str, disabled: bool = False) -> None:
+        directory = self.modules / module_id
+        directory.mkdir()
+        (directory / "module.prop").write_text(prop, encoding="utf-8")
+        if disabled:
+            (directory / "disable").write_text("", encoding="utf-8")
+
+    def probe(self) -> tuple[int, str]:
+        env = os.environ.copy()
+        if (self.fake_bin / "magisk").exists():
+            env["PATH"] = str(self.fake_bin) + os.pathsep + env.get("PATH", "")
+            env["FAKE_ZYGISK_VALUE"] = self.zygisk_value
+        env["ECHIDNA_ZYGISK_MODULES_DIR"] = shell_path(self.modules)
+        result = subprocess.run(
+            [
+                bash_executable(),
+                "-c",
+                '. "magisk/common/zygisk-status.sh"\n'
+                "echidna_zygisk_enabled\n"
+                "status=$?\n"
+                'printf "%s\\n" "$ECHIDNA_ZYGISK_IMPL"\n'
+                "exit $status\n",
+            ],
+            check=False,
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode, result.stdout.strip()
+
+    def test_magisk_builtin_enabled_reports_builtin_implementation(self) -> None:
+        self.write_magisk("1")
+        self.assertEqual((0, "magisk-builtin"), self.probe())
+
+    def test_rezygisk_module_is_detected_when_builtin_is_off(self) -> None:
+        self.write_magisk("0")
+        self.write_module(
+            "rezygisk",
+            "id=rezygisk\nname=ReZygisk\nversion=v1.0.0\n",
+        )
+        self.assertEqual((0, "standalone"), self.probe())
+
+    def test_zygisk_next_module_is_detected_when_builtin_is_off(self) -> None:
+        self.write_magisk("0")
+        self.write_module(
+            "zygisksu",
+            "id=zygisksu\nname=Zygisk Next\nversion=1.2.3\n",
+        )
+        self.assertEqual((0, "standalone"), self.probe())
+
+    def test_each_documented_identifier_form_is_recognized(self) -> None:
+        forms = {
+            "id": "id=rezygisk\nname=Something Else\ndescription=whatever\n",
+            "name": "id=unrelated\nname=Zygisk Next\ndescription=whatever\n",
+            "description": (
+                "id=unrelated\nname=Something Else\n"
+                "description=Standalone implementation of Zygisk.\n"
+            ),
+        }
+        for form, prop in forms.items():
+            with self.subTest(form=form):
+                # Each form needs a pristine module tree; the final fixture is
+                # released by the regular tearDown.
+                self.tearDown()
+                self.setUp()
+                self.write_magisk("0")
+                self.write_module("candidate", prop)
+                self.assertEqual((0, "standalone"), self.probe())
+
+    def test_disabled_standalone_module_is_not_counted(self) -> None:
+        self.write_magisk("0")
+        self.write_module(
+            "rezygisk",
+            "id=rezygisk\nname=ReZygisk\n",
+            disabled=True,
+        )
+        self.assertEqual((1, ""), self.probe())
+
+    def test_no_builtin_and_no_standalone_reports_not_enabled(self) -> None:
+        self.write_magisk("0")
+        self.write_module("echidna", "id=echidna\nname=Echidna\n")
+        self.assertEqual((1, ""), self.probe())
+
+    def test_missing_magisk_command_cannot_determine_state(self) -> None:
+        self.assertEqual((2, ""), self.probe())
+
+    def test_missing_magisk_command_still_detects_standalone_module(self) -> None:
+        self.write_module("rezygisk", "id=rezygisk\nname=ReZygisk\n")
+        self.assertEqual((0, "standalone"), self.probe())
+
+
+class ZygiskIdentifierContractTest(unittest.TestCase):
+    """The shell probe and the app probe must recognize the same identifiers.
+
+    Drift between them is the defect this suite exists to prevent: the app
+    reported Zygisk as present while the installer told the user to enable it
+    in Magisk, advice that conflicts with a standalone implementation.
+    """
+
+    def test_shell_and_kotlin_probes_share_the_identifier_set(self) -> None:
+        kotlin = PRIVILEGED_CONTROLLER.read_text(encoding="utf-8")
+        constants = dict(
+            re.findall(r'private const val (\w+) = "([^"]*)"', kotlin)
+        )
+        resolved = re.sub(
+            r"\$\{(\w+)\}",
+            lambda match: constants.get(match.group(1), match.group(0)),
+            kotlin,
+        )
+        kotlin_patterns = set(re.findall(r"grep -Eiq '([^']+)'", resolved))
+        shell_patterns = set(
+            re.findall(
+                r"grep -Eiq '([^']+)'",
+                ZYGISK_STATUS.read_text(encoding="utf-8"),
+            )
+        )
+        self.assertEqual(
+            {
+                "^id=(zygisksu|rezygisk)",
+                "^name=.*(Zygisk Next|ReZygisk)",
+                "^description=.*Standalone implementation of Zygisk",
+            },
+            kotlin_patterns,
+        )
+        self.assertEqual(kotlin_patterns, shell_patterns)
+
+    def test_both_probes_skip_modules_carrying_the_disable_marker(self) -> None:
+        for path in (PRIVILEGED_CONTROLLER, ZYGISK_STATUS):
+            with self.subTest(path=path):
+                self.assertIn("/disable", path.read_text(encoding="utf-8"))
+
+
+def shell_path(path: Path) -> str:
+    resolved = path.resolve()
+    if os.name == "nt":
+        drive = resolved.drive.rstrip(":").lower()
+        return f"/{drive}{resolved.as_posix()[2:]}"
+    return resolved.as_posix()
 
 
 def executable_lines(path: Path) -> str:
