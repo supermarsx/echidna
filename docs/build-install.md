@@ -14,6 +14,11 @@ This page is the reproducible, end-to-end guide to building Echidna's shippable 
 installing them on a device. A successful build, APK install, or Magisk zip install is not a
 guarantee that capture hooks will work on the target phone.
 
+!!! tip ":material-package-variant: Not building from source?"
+    If you only want to install a published release, you do not need this page.
+    [Release Packages](release-packages.md) explains what each release file is,
+    which two of them a normal install needs, and how to verify a download.
+
 !!! tip ":material-rocket-launch: New to the app? Start with the wizard"
     Once the companion APK is installed, the app opens a
     [13-step first-run setup wizard](getting-started.md) that runs a compatibility

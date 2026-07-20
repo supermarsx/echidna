@@ -29,7 +29,7 @@ actually brings the phone back, then stop.
     bootloop only gets your phone booting again; it does **not** mean the voice
     changer will work on your device afterwards. Do not re-enable the module
     expecting it to work — re-enable it only if you understand the risk of
-    another bootloop (see [step 4](#4-reinstall-magisk-cleanly)).
+    another bootloop (see [step 5](#5-reinstall-magisk-cleanly)).
 
 ## Before you start
 
@@ -46,7 +46,7 @@ actually brings the phone back, then stop.
 - **Back up first, always.** Make a backup before you flash anything in
   recovery/fastboot. Recovery steps can and do lose data.
 - **A/B (slot) devices** flash to a specific slot — note the [A/B guidance](#ab-slot-devices)
-  in step 3.
+  in step 4.
 
 ---
 
@@ -121,7 +121,51 @@ Then reboot. On the next boot Echidna sees the marker and disables itself.
 If markers cannot be written (recovery cannot mount/decrypt any writable
 partition) or do not resolve the loop, move to step 3.
 
-### 3. Flash a stock `boot.img` with fastboot (removes Magisk)
+### 3. Delete the module from a recovery shell — and clear Magisk's pre-init policy
+
+Reported by **Obada8** (OnePlus / OxygenOS 16, Android 16) in
+[issue #14](https://github.com/supermarsx/echidna/issues/14#issuecomment-5023548136)
+after two days of searching. Try this **before** flashing a stock `boot.img`: it
+keeps Magisk and root intact, and it recovers the case where deleting the module
+alone is *not* enough.
+
+!!! warning "Deleting the module directory alone may not fix the loop"
+    Magisk copies a module's `sepolicy.rule` into its **pre-init SELinux policy**,
+    which is stored **outside** the module directory (commonly under
+    `/metadata/watchdog/magisk`, or `/cache`/`/persist` depending on the device)
+    and is applied **very early in boot — before any module's `post-fs-data.sh`
+    runs**. So a policy rule that breaks boot keeps being applied even after the
+    module directory is gone, and Echidna's own
+    [boot watchdog](#2-create-an-echidna-disable-marker) cannot help, because the
+    failure happens before the script that would trip it. Clearing the stored
+    pre-init policy is what breaks that loop.
+
+Boot a custom recovery, then from a PC with `adb`:
+
+```sh
+# 1. Remove any Echidna module, in both the live and staged module directories
+adb shell "for d in /data/adb/modules/* /data/adb/modules_update/*; do \
+  if [ -f \$d/module.prop ] && grep -qi echidna \$d/module.prop; then \
+    echo REMOVING:\$d; rm -rf \$d; fi; done"
+
+# 2. Drop Magisk's stored pre-init sepolicy so the module's rules stop being applied
+adb shell "rm -rf /metadata/watchdog/magisk"
+
+# 3. Flush to disk, then reboot
+adb shell "sync"
+adb reboot
+```
+
+!!! note "What step 2 actually removes"
+    It removes Magisk's **cached pre-init policy**, not Magisk itself and not your
+    other modules' files. Magisk regenerates the policy on the next boot from the
+    `sepolicy.rule` of whichever modules are still installed — which is exactly
+    why step 1 must come first. If your device stores the pre-init policy
+    elsewhere, the same reasoning applies to that path instead.
+
+If the device still will not boot after this, move to step 4.
+
+### 4. Flash a stock `boot.img` with fastboot (removes Magisk)
 
 This is the **recovery-of-last-resort** used successfully by the reporter in
 [issue #17](https://github.com/supermarsx/echidna/issues/17) (a Poco X3 NFC on
@@ -175,9 +219,9 @@ fastboot flash boot --slot all boot.img
 
 If you are unsure which slot is active, `fastboot getvar current-slot` reports it.
 
-### 4. Reinstall Magisk cleanly
+### 5. Reinstall Magisk cleanly
 
-Flashing stock `boot.img` in step 3 removed Magisk, so **root is gone**. If you
+Flashing stock `boot.img` in step 4 removed Magisk, so **root is gone**. If you
 want root back, reinstall Magisk **properly** for your device (patch the stock
 boot image with the Magisk app and flash the patched image, per Magisk's own
 documentation).
@@ -209,7 +253,15 @@ prepared to run this recovery again.
 
 ## Credits
 
-The `fastboot flash boot boot.img` recovery method documented in step 3 was
+The `fastboot flash boot boot.img` recovery method documented in step 4 was
 reported by **MrLeyYT** (Poco X3 NFC / LineageOS 22.2) in
 [GitHub issue #17](https://github.com/supermarsx/echidna/issues/17). Thanks for
 writing up the recovery.
+
+The recovery-shell module removal in step 3 — and the key insight that Magisk's
+stored **pre-init sepolicy** must be cleared too, because deleting the module
+directory alone leaves the boot-breaking rules in place — was reported by
+**Obada8** (OnePlus / OxygenOS 16, Android 16) in
+[GitHub issue #14](https://github.com/supermarsx/echidna/issues/14#issuecomment-5023548136),
+after spending two days finding it. Thanks for going back and writing it up for
+the next person.

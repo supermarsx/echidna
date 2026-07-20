@@ -95,6 +95,7 @@ nav:
       - Why It's Hard: why-hard.md
   - Using Echidna:
       - Getting Started: getting-started.md
+      - Release Packages: release-packages.md
       - Build & Install: build-install.md
       - Guided Installer: installer-guide.md
       - Recovering from a Bootloop: recovery.md

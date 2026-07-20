@@ -230,3 +230,9 @@ package:
   forgery-resistant certificate to bind to.
 
 Transport is HTTPS-only, including every redirect hop, and confined to GitHub-owned hosts.
+
+The convenience bundles (`echidna-apks-*.zip`, `echidna-native-libs-*.zip`,
+`echidna-complete-*.zip`) are therefore **not fetchable in-app**: a plain zip carries neither an APK
+signature nor a `common/release-cert-sha256` pin, so there is no origin to bind it to the installed
+app and the verifier refuses it rather than trusting the checksum alone. Download those by hand and
+verify them against `SHA256SUMS.txt` — see [Release Packages](release-packages.md).

@@ -48,6 +48,9 @@ release-device work.
 - [Verification](verification.md) - the proven host/emulator checks, the
   remaining device-gated items, and the rooted-device procedure for live hook
   validation.
+- [Release Packages](release-packages.md) - what each published release file
+  actually is, which two you need for a normal install, and which ones are
+  convenience bundles you can ignore.
 - [Build & Install](build-install.md) - local, Docker, Android, native, and
   Magisk packaging commands for building the current tree.
 - [Architecture](architecture.md) - component boundaries, capture-route matrix, profile
@@ -109,6 +112,7 @@ engine honestly reports itself as **not installed**.
 | "How do I set the app up the first time?" | [Getting Started](getting-started.md) |
 | "Can I hear it work without rooting?" | [The Lab](usage-lab.md) |
 | "Can I trust this build?" | [Verification](verification.md) |
+| "Which release file do I actually download?" | [Release Packages](release-packages.md) |
 | "How do I build the APK and module?" | [Build & Install](build-install.md) |
 | "How does audio flow through the system?" | [Architecture](architecture.md) |
 | "What does the app look like today?" | [Screenshots](screenshots.md) |

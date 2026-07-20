@@ -156,25 +156,52 @@ flashing, live LSPosed injection, and every current capture route still need dev
 
 ## Release Files
 
-Every successful `main` CI release publishes a GitHub Release with separate installable files:
+Every successful `main` CI release publishes a GitHub Release with the same asset set. **A normal
+install needs exactly two of them:** the companion APK and the Magisk zip. The three `.zip` bundles
+are repackagings of files you already have, kept for offline, manual, and integrator use.
+Per-package detail — contents, install path, and when to prefer one over another — is in
+**[Release Packages](docs/release-packages.md)**.
 
-- `echidna-companion-<tag>.apk` - install this Android companion app first. It
-  contains the UI and in-process control service.
-- `echidna-magisk-<tag>.zip` - flash this in Magisk to install the native
-  Zygisk/DSP engine.
-- `echidna-lsposed-shim-<tag>.apk` - optional Java fallback for LSPosed-scoped
-  apps that use `AudioRecord`.
-- `echidna-apks-<tag>.zip` - convenience package containing the companion APK
-  and LSPosed shim APK.
-- `echidna-native-libs-<tag>.zip` - raw per-ABI `.so` files for inspection or
-  integrators, not the normal install path.
-- `echidna-complete-<tag>.zip` - all release assets plus `RELEASE_ARTIFACTS.md`;
-  useful for archiving a full release.
-- `SHA256SUMS.txt` - hashes for verifying downloaded release files.
+**Installable packages**
+
+- `echidna-companion-<tag>.apk` - install this first. The Compose UI and in-process control
+  service (`libechidna_control_jni.so`), plus per-ABI `libech_dsp.so` so the Lab can process your
+  own audio with no root, the whole `docs/` tree bundled as offline in-app help, and — when the
+  build has one — a bundled copy of the module zip that makes the guided installer turnkey. It is
+  the only package that is useful on its own.
+- `echidna-magisk-<tag>.zip` - the flashable Magisk/Zygisk module: `zygisk/<abi>.so` engine,
+  `libs/<abi>/libech_dsp.so`, the default-off `preproc/<abi>/libechidna_preproc.so` registration
+  source, the installer stub, boot/trust scripts, `sepolicy.rule`, and the
+  `common/release-cert-sha256` pin that binds the module to the companion's certificate. Needed by
+  anyone who wants audio transformed in *other* apps; a reboot is always required.
+- `echidna-lsposed-shim-<tag>.apk` - optional Java `AudioRecord` fallback for LSPosed-scoped apps,
+  bundling its own per-ABI `libechidna_shim_jni.so` and `libech_dsp.so`. Install it only when you
+  need or are testing that path.
+
+**Convenience packages — not needed for a normal install**
+
+- `echidna-apks-<tag>.zip` - the companion and shim APKs under `apks/` plus a short README. CI
+  verifies both members are byte-identical to the standalone APKs.
+- `echidna-native-libs-<tag>.zip` - raw `native-libs/<abi>/` outputs (engine, DSP, shim JNI bridge,
+  legacy preprocessor) for inspection, diffing, or integrators. Not an install path: no installer,
+  no boot scripts, no certificate pin.
+- `echidna-complete-<tag>.zip` - the five assets above plus `RELEASE_ARTIFACTS.md`, for archiving a
+  whole release or mirroring it offline. `SHA256SUMS.txt` is generated afterwards, so it is not
+  inside this archive.
+- `SHA256SUMS.txt` / `RELEASE_ARTIFACTS.md` - hashes for every other asset, and the short manifest
+  that [Release Packages](docs/release-packages.md) expands on. Verify with
+  `sha256sum --ignore-missing -c SHA256SUMS.txt`.
 
 Use the newest release unless you are intentionally rolling back or already understand the
 recovery risk. Earlier releases can contain boot/module bugs that were fixed later and may be
 harder to recover from after flashing.
+
+The companion's guided installer can also fetch a release for you: it resolves `releases/latest` at
+run time, shows the tag and asset name before fetching a byte, and accepts the module zip only after
+its SHA-256 matches the release's `SHA256SUMS.txt` *and* its `common/release-cert-sha256` pin
+matches the certificate that signed the running app. The convenience bundles are **refused** by that
+path by design — a plain zip carries neither an APK signature nor a certificate pin, so nothing
+binds it to your installed app. Download those by hand and check them against `SHA256SUMS.txt`.
 
 Hosted releases are signed with a configured release certificate and fail closed if signing inputs
 are absent or invalid. An older debug-signed companion or shim cannot be upgraded in place to an APK
@@ -259,6 +286,7 @@ The full documentation site is built with MkDocs Material and published to
 | Architecture & data flow | [architecture.md](docs/architecture.md) |
 | Design rationale | [design-rationale.md](docs/design-rationale.md) |
 | Why this is hard to build | [why-hard.md](docs/why-hard.md) |
+| Release packages | [release-packages.md](docs/release-packages.md) |
 | Build & install | [build-install.md](docs/build-install.md) |
 | Recovering from a bootloop | [recovery.md](docs/recovery.md) |
 | DSP & effects reference | [dsp-effects.md](docs/dsp-effects.md) |

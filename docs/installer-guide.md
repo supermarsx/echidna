@@ -144,6 +144,8 @@ Removal follows the same unload-first discipline in reverse:
 
 ## See also
 
+- [Release Packages](release-packages.md) — what each release asset is, and why the
+  convenience bundles cannot be fetched in-app.
 - [Magisk Release](magisk_release.md) — the authoritative manual flash path and packaging.
 - [Troubleshooting & FAQ](troubleshooting-faq.md) — unload-first + reboot-required, *Engine
   Not Installed* on unrooted devices, and more.
