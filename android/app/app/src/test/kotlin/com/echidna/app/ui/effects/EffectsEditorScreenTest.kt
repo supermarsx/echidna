@@ -133,13 +133,21 @@ class EffectsEditorScreenTest {
     private fun awaitStored(reason: String, predicate: (Preset) -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
         while (System.nanoTime() < deadline) {
+            // waitForIdle() must run INSIDE the loop, not merely after it succeeds. A control edit
+            // is dispatched through Compose, and this poll blocks the main thread; without pumping
+            // here the write can never land and the wait deadlocks until it times out. That is not
+            // hypothetical -- polling without it made the slider test time out on CI while the
+            // other awaited mutations, which settle synchronously, still passed.
+            composeRule.waitForIdle()
             if (predicate(stored())) {
                 settleUi()
                 return
             }
             Thread.sleep(2L)
         }
-        throw AssertionError("timed out after 5s waiting for $reason")
+        throw AssertionError(
+            "timed out after 5s waiting for $reason; stored preset was ${stored().modules}"
+        )
     }
 
     /** [awaitStored] for a single stage, which is how most of these assertions read. */
