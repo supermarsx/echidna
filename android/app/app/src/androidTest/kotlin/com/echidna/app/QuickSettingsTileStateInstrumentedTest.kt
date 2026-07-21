@@ -5,8 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
 import com.echidna.app.data.ControlStateRepository
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,8 +33,9 @@ class QuickSettingsTileStateInstrumentedTest {
             repo.setMasterEnabled(true)
             if (!repo.masterEnabled.value) return@retryingThroughAuthoritativePoll false
             repo.setMasterEnabled(false)
-            assertFalse(repo.masterEnabled.value)
-            true
+            // Conditional, NOT assertFalse: an assertion here throws out of the lambda and fails
+            // the test on the spot, so the retry that exists precisely for this race never runs.
+            repo.masterEnabled.value.not()
         }
     }
 
@@ -54,8 +53,9 @@ class QuickSettingsTileStateInstrumentedTest {
             repo.toggleMaster()
             if (repo.masterEnabled.value) return@retryingThroughAuthoritativePoll false
             repo.toggleMaster()
-            assertTrue("second toggle turns the tile back on", repo.masterEnabled.value)
-            true
+            // Conditional for the same reason as above: a poll landing here means the attempt was
+            // inconclusive and must be retried, not that the toggle contract is broken.
+            repo.masterEnabled.value
         }
     }
 

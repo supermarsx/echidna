@@ -116,6 +116,42 @@ class EffectsEditorScreenTest {
         composeRule.waitForIdle()
     }
 
+    /**
+     * Blocks until the STORED preset satisfies [predicate], then settles the UI against it.
+     *
+     * [settle] alone is NOT sufficient after a UI-driven mutation. It waits for the view model's
+     * flow to agree with the repository's stored copy, but in the window before the write lands
+     * BOTH are still the pre-click value and therefore already equal — so it returns immediately
+     * with stale state and the following assertion reads the old value. That window is invisible on
+     * a fast machine and opens up on a loaded CI runner, which is exactly how this surfaced: two of
+     * these tests passed locally and failed on Linux CI.
+     *
+     * Waiting on the expected condition is the only deterministic way to observe a mutation the UI
+     * caused. On timeout this fails with [reason] rather than letting the caller's assertion report
+     * a confusing stale value.
+     */
+    private fun awaitStored(reason: String, predicate: (Preset) -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
+        while (System.nanoTime() < deadline) {
+            if (predicate(stored())) {
+                settleUi()
+                return
+            }
+            Thread.sleep(2L)
+        }
+        throw AssertionError("timed out after 5s waiting for $reason")
+    }
+
+    /** [awaitStored] for a single stage, which is how most of these assertions read. */
+    private inline fun <reified T : EffectModule> awaitModule(
+        id: String,
+        reason: String,
+        crossinline predicate: (T) -> Boolean,
+    ) = awaitStored(reason) { preset ->
+        val stage = preset.modules.firstOrNull { it.id == id }
+        stage is T && predicate(stage)
+    }
+
     /** Matches a Slider (any node exposing the SetProgress action). */
     private val isSlider = SemanticsMatcher("is a slider") { node ->
         node.config.contains(SemanticsActions.SetProgress)
@@ -172,6 +208,7 @@ class EffectsEditorScreenTest {
         setContent()
         click("Reverb")
 
+        awaitStored("the reverb stage to be inserted") { it.modules.any { m -> m.id == "reverb" } }
         assertEquals(listOf("reverb"), chain())
         // It now renders as a chain card with its one-line description, not as an add chip.
         composeRule.onNodeWithText("Adds room ambience and echo").assertExists()
@@ -246,6 +283,7 @@ class EffectsEditorScreenTest {
         gateSwitch.performSemanticsAction(SemanticsActions.OnClick)
         settleUi()
 
+        awaitModule<EffectModule.Gate>("gate", "the gate stage to be disabled") { !it.enabled }
         assertFalse(module<EffectModule.Gate>("gate").enabled)
         assertTrue("sibling stages must be untouched", module<EffectModule.Reverb>("reverb").enabled)
         composeRule.onNode(isToggleable() and hasAnyAncestor(hasText("Noise Gate"))).assertIsOff()
@@ -261,6 +299,7 @@ class EffectsEditorScreenTest {
         click("Noise Gate")
         click("Remove from chain")
 
+        awaitStored("the gate stage to be removed") { it.modules.none { m -> m.id == "gate" } }
         assertEquals(listOf("reverb"), chain())
         // Back as an offer, not as a card: its chain-card description is gone.
         composeRule.onNodeWithText("Mutes quiet background noise").assertDoesNotExist()
@@ -282,6 +321,9 @@ class EffectsEditorScreenTest {
             .performSemanticsAction(SemanticsActions.SetProgress) { it(-70f) }
         settleUi()
 
+        awaitModule<EffectModule.Gate>("gate", "the threshold slider write to land") {
+            kotlin.math.abs(it.thresholdDb - (-70f)) < 0.001f
+        }
         val after = module<EffectModule.Gate>("gate")
         assertEquals(-70f, after.thresholdDb, 0.001f)
         assertEquals("attack must not move", before.attackMs, after.attackMs, 0f)
@@ -304,6 +346,9 @@ class EffectsEditorScreenTest {
             .performSemanticsAction(SemanticsActions.OnClick)
         settleUi()
 
+        awaitModule<EffectModule.Pitch>("pitch", "formant preservation to be cleared") {
+            !it.preserveFormants
+        }
         assertFalse(module<EffectModule.Pitch>("pitch").preserveFormants)
         assertTrue("the stage itself must stay enabled", module<EffectModule.Pitch>("pitch").enabled)
     }
@@ -318,6 +363,7 @@ class EffectsEditorScreenTest {
         composeRule.onNodeWithText("Band 5").assertExists()
 
         click("3")
+        awaitModule<EffectModule.Equalizer>("eq", "the band list to resize to 3") { it.bandCount == 3 }
         assertEquals(3, module<EffectModule.Equalizer>("eq").bandCount)
         composeRule.onNodeWithText("Bands: 3").assertExists()
         composeRule.onNodeWithText("Band 5").assertDoesNotExist()
@@ -334,6 +380,9 @@ class EffectsEditorScreenTest {
         composeRule.onNodeWithText("MANUAL").assertExists()
 
         click("Auto")
+        awaitModule<EffectModule.Compressor>("comp", "the compressor to switch to AUTO") {
+            it.mode == EffectModule.CompressorMode.AUTO
+        }
         assertEquals(EffectModule.CompressorMode.AUTO, module<EffectModule.Compressor>("comp").mode)
         composeRule.onNodeWithText("AUTO").assertExists()
         composeRule.onNodeWithText("MANUAL").assertDoesNotExist()
