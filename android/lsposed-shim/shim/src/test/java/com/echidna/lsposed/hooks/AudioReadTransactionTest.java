@@ -318,6 +318,249 @@ public final class AudioReadTransactionTest {
         assertEquals(2, outermostReads.get());
     }
 
+    @Test
+    public void missingGateOrTransformOrNonPositiveResultSkipsTheTransactionEntirely() {
+        byte[] bytes = new byte[] {1, 2, 3, 4};
+        AtomicBoolean called = new AtomicBoolean(false);
+
+        assertEquals(0, AudioReadTransaction.execute(
+                0, bytes, 0, null, allowedGate(),
+                (context, actual) -> { called.set(true); return 1; },
+                frames -> { }, throwable -> { }));
+        assertEquals(-1, AudioReadTransaction.execute(
+                -1, bytes, 0, null, allowedGate(),
+                (context, actual) -> { called.set(true); return 1; },
+                frames -> { }, throwable -> { }));
+        assertEquals(2, AudioReadTransaction.execute(
+                2, bytes, 0, null, null,
+                (context, actual) -> { called.set(true); return 1; },
+                frames -> { }, throwable -> { }));
+        assertEquals(2, AudioReadTransaction.execute(
+                2, bytes, 0, null, allowedGate(), null, frames -> { }, throwable -> { }));
+
+        assertFalse(called.get());
+        assertArrayEquals(new byte[] {1, 2, 3, 4}, bytes);
+    }
+
+    @Test
+    public void shortSampleRegionIsRolledBackWhenNativeDeclines() {
+        short[] samples = new short[] {1, 2, 3, 4, 5, 6};
+
+        int returned = AudioReadTransaction.execute(
+                3,
+                samples,
+                2,
+                null,
+                allowedGate(),
+                (context, actual) -> {
+                    samples[2] = 200;
+                    samples[3] = 300;
+                    samples[4] = 400;
+                    return 0;
+                },
+                frames -> { },
+                throwable -> { });
+
+        assertEquals(3, returned);
+        assertArrayEquals(new short[] {1, 2, 3, 4, 5, 6}, samples);
+    }
+
+    @Test
+    public void shortSampleRegionIsCommittedOnlyWithinTheReturnedRange() {
+        short[] samples = new short[] {1, 2, 3, 4, 5, 6};
+
+        int returned = AudioReadTransaction.execute(
+                2,
+                samples,
+                1,
+                null,
+                allowedGate(),
+                (context, actual) -> {
+                    samples[1] = 20;
+                    samples[2] = 30;
+                    return 1;
+                },
+                frames -> { },
+                throwable -> { });
+
+        assertEquals(2, returned);
+        assertArrayEquals(new short[] {1, 20, 30, 4, 5, 6}, samples);
+    }
+
+    @Test
+    public void directBufferRegionIsRestoredByteForByteWhenNativeDeclines() {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(6);
+        for (int i = 0; i < buffer.capacity(); i++) {
+            buffer.put(i, (byte) i);
+        }
+        buffer.position(2);
+        buffer.limit(4);
+
+        int returned = AudioReadTransaction.execute(
+                4,
+                buffer,
+                0,
+                null,
+                allowedGate(),
+                (context, actual) -> {
+                    for (int i = 0; i < 4; i++) {
+                        buffer.put(i, (byte) 0x7f);
+                    }
+                    return 0;
+                },
+                frames -> { },
+                throwable -> { });
+
+        assertEquals(4, returned);
+        // Rollback must not disturb the app-owned cursor either.
+        assertEquals(2, buffer.position());
+        assertEquals(4, buffer.limit());
+        ByteBuffer inspection = buffer.duplicate();
+        inspection.clear();
+        byte[] actual = new byte[6];
+        inspection.get(actual);
+        assertArrayEquals(new byte[] {0, 1, 2, 3, 4, 5}, actual);
+    }
+
+    @Test
+    public void unbackableBuffersAreRefusedBeforeAnyTransformRuns() {
+        AtomicBoolean transformed = new AtomicBoolean(false);
+        AudioReadTransaction.Transform transform = (context, actual) -> {
+            transformed.set(true);
+            return 1;
+        };
+
+        // A heap ByteBuffer cannot be handed to native, so it must never be transformed.
+        ByteBuffer heap = ByteBuffer.allocate(8);
+        assertEquals(4, AudioReadTransaction.execute(
+                4, heap, 0, null, allowedGate(), transform, frames -> { }, throwable -> { }));
+
+        ByteBuffer readOnly = ByteBuffer.allocateDirect(8).asReadOnlyBuffer();
+        assertEquals(4, AudioReadTransaction.execute(
+                4, readOnly, 0, null, allowedGate(), transform, frames -> { }, throwable -> { }));
+
+        // Nothing else is a recognised AudioRecord destination.
+        assertEquals(2, AudioReadTransaction.execute(
+                2, new int[] {1, 2, 3}, 0, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+        assertEquals(2, AudioReadTransaction.execute(
+                2, null, 0, null, allowedGate(), transform, frames -> { }, throwable -> { }));
+
+        assertFalse(transformed.get());
+    }
+
+    @Test
+    public void outOfRangeRegionsAreRefusedForEveryBufferKind() {
+        AtomicBoolean transformed = new AtomicBoolean(false);
+        AudioReadTransaction.Transform transform = (context, actual) -> {
+            transformed.set(true);
+            return 1;
+        };
+
+        assertEquals(2, AudioReadTransaction.execute(
+                2, new byte[4], -1, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+        assertEquals(4, AudioReadTransaction.execute(
+                4, new byte[4], 2, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+        assertEquals(4, AudioReadTransaction.execute(
+                4, new short[4], 3, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+        assertEquals(4, AudioReadTransaction.execute(
+                4, new float[4], 3, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+        assertEquals(9, AudioReadTransaction.execute(
+                9, ByteBuffer.allocateDirect(8), 0, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+
+        assertFalse(transformed.get());
+    }
+
+    @Test
+    public void oversizedShortAndFloatRegionsAreRefusedByTheBackupBudget() {
+        AtomicBoolean transformed = new AtomicBoolean(false);
+        AudioReadTransaction.Transform transform = (context, actual) -> {
+            transformed.set(true);
+            return 1;
+        };
+
+        // The budget is 8 MiB of BACKUP bytes, so the element count that trips it differs per kind.
+        short[] samples = new short[4 * 1024 * 1024 + 1];
+        assertEquals(samples.length, AudioReadTransaction.execute(
+                samples.length, samples, 0, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+
+        float[] floats = new float[2 * 1024 * 1024 + 1];
+        assertEquals(floats.length, AudioReadTransaction.execute(
+                floats.length, floats, 0, null, allowedGate(), transform,
+                frames -> { }, throwable -> { }));
+
+        assertFalse(transformed.get());
+    }
+
+    @Test
+    public void failureObserverThrowingNeverReplacesAudioRecordsReturnValue() {
+        byte[] bytes = new byte[] {1, 2, 3, 4};
+
+        int returned = AudioReadTransaction.execute(
+                2,
+                bytes,
+                1,
+                null,
+                allowedGate(),
+                (context, actual) -> {
+                    bytes[1] = 20;
+                    throw new IllegalStateException("injected native failure");
+                },
+                frames -> { },
+                throwable -> {
+                    throw new IllegalStateException("injected reporting failure");
+                });
+
+        assertEquals(2, returned);
+        assertArrayEquals(new byte[] {1, 2, 3, 4}, bytes);
+    }
+
+    @Test
+    public void nestedTransactionOnOneThreadKeepsEachRegionsRollbackIndependent() {
+        byte[] outer = new byte[] {1, 2, 3, 4};
+        short[] inner = new short[] {10, 20, 30, 40};
+
+        int returned = AudioReadTransaction.execute(
+                2,
+                outer,
+                1,
+                null,
+                allowedGate(),
+                (context, actual) -> {
+                    outer[1] = 21;
+                    outer[2] = 31;
+                    // A re-entrant read must get its own backup rather than share the outer one.
+                    int nested = AudioReadTransaction.execute(
+                            2,
+                            inner,
+                            1,
+                            null,
+                            allowedGate(),
+                            (nestedContext, nestedActual) -> {
+                                inner[1] = 200;
+                                inner[2] = 300;
+                                return 0;
+                            },
+                            frames -> { },
+                            throwable -> { });
+                    assertEquals(2, nested);
+                    return 1;
+                },
+                frames -> { },
+                throwable -> { });
+
+        assertEquals(2, returned);
+        // Inner declined and rolled back; outer committed. Neither clobbered the other.
+        assertArrayEquals(new short[] {10, 20, 30, 40}, inner);
+        assertArrayEquals(new byte[] {1, 21, 31, 4}, outer);
+    }
+
     private static void applyNonlinearIfOutermost(
             int[] sample, AtomicInteger transforms) {
         if (AudioRecordHook.ReadNestingGuard.isOutermost()) {

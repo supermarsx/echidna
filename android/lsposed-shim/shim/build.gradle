@@ -116,12 +116,23 @@ android {
     }
 }
 
+// The Xposed API is deliberately NOT on the default unit-test RUNTIME classpath. Several tests
+// exist only to pin what happens when it is absent -- EchidnaControlsHostFallbackTest and the
+// NoClassDefFoundError assertion in ProfileSyncReceiverCapabilityTest guard a real bug where the
+// fail-closed handler itself called XposedBridge.log and detonated. Putting the API on the default
+// runtime classpath would make that failure mode unreachable and those tests vacuous.
+//
+// See the second unit-test runtime near the bottom of this file for the opt-in counterpart.
 dependencies {
     compileOnly 'de.robv.android.xposed:api:82'
     compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
     compileOnly 'androidx.annotation:annotation:1.7.1'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'
+    // COMPILE-only: *XposedRuntimeTest classes reference XC_MethodHook and friends, so they must
+    // compile against the REAL published signatures. compileOnly keeps it off the default test
+    // runtime classpath.
+    testCompileOnly 'de.robv.android.xposed:api:82'
     androidTestImplementation 'androidx.test:core:1.5.0'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test:runner:1.5.2'
@@ -156,6 +167,92 @@ tasks.register('verifyDebugNativePackaging') {
             throw new GradleException('Full Zygisk libechidna.so leaked into the shim APK')
         }
     }
+}
+
+// --- Second unit-test runtime: WITH the Xposed API ---------------------------
+// AudioRecordHook cannot even be LINKED without de.robv.android.xposed:api. Verification of
+// hookLifecycle()/hookByteArray()/... resolves XC_MethodHook for the anonymous callbacks, so the
+// class fails with NoClassDefFoundError before <clinit> runs -- not merely the nested hook classes
+// but every line in the file, including the pure pending-drain logic. Off this classpath the whole
+// file is permanently 0%.
+//
+// Rather than a second Gradle module, this is a second *runtime* over the SAME compiled test
+// classes. `com.android.application` produces an APK, not a consumable library variant, so a
+// sibling module could not simply `implementation project(':shim')`; it would have to reach into
+// this project's javac output by file path, and would need its own duplicate Robolectric/AGP
+// wiring. Reusing AGP's own unit-test compilation and classpath keeps all of that in AGP's hands
+// and keeps the two runtimes provably identical apart from one directory.
+//
+// That directory is NOT de.robv.android.xposed:api:82. The published artifact is a compile-time
+// stub: every method body in it is `throw new RuntimeException("Stub!")` -- verified with javap on
+// XposedBridge.log, XposedHelpers.findClass/findAndHookMethod and XCallback$Param.<init>. It can
+// satisfy LINKING, which is what AudioRecordHook needs, but nothing can EXECUTE through it, so on
+// its own it would only ever prove that the hook installer fails closed. The jar is therefore kept
+// for COMPILATION (testCompileOnly above, so the shim and its tests build against the real
+// published signatures) while the second runtime supplies a small stand-in implementing exactly
+// the API members this module calls. If a stand-in signature ever drifts from the published one,
+// the main classes -- compiled against the real jar -- fail with NoSuchMethodError, which makes
+// the drift loud rather than silent.
+//
+// The stand-in also acts as a recording dispatcher: it captures the XC_MethodHook callbacks the
+// installer registers so tests can invoke them, which is the only way to reach the read and
+// lifecycle callbacks off-device. What it does NOT verify is that LSPosed itself invokes those
+// callbacks with the arguments assumed here -- that remains device-only.
+//
+// Selection is by class-name suffix so the tests still live in the package whose package-private
+// internals they exercise.
+def xposedTestPattern = '*XposedRuntimeTest'
+
+def compileXposedRuntimeStandIn = tasks.register('compileXposedRuntimeStandIn', JavaCompile) {
+    source = fileTree('src/testXposedRuntime/java')
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('classes/xposedRuntimeStandIn')
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+    options.release = 17
+}
+
+// Every default unit-test task (debug and release) must refuse these classes: without the API on
+// the runtime classpath they cannot load, and more importantly the default runtime is the one that
+// proves the Xposed-absent behaviour.
+tasks.withType(Test).configureEach {
+    if (name.endsWith('UnitTest')) {
+        filter {
+            excludeTestsMatching xposedTestPattern
+            failOnNoMatchingTests = false
+        }
+    }
+}
+
+def testDebugUnitTestXposed = tasks.register('testDebugUnitTestXposed', Test) {
+    group = 'verification'
+    description = 'Runs the *XposedRuntimeTest unit tests with the Xposed API on the classpath.'
+}
+
+afterEvaluate {
+    // AGP creates the unit-test tasks during evaluation, so the source task only exists now.
+    def base = tasks.named('testDebugUnitTest', Test).get()
+    testDebugUnitTestXposed.configure {
+        dependsOn base.dependsOn, compileXposedRuntimeStandIn
+        testClassesDirs = base.testClassesDirs
+        // The stand-in goes LAST so it can never shadow a class the default runtime resolves.
+        classpath = base.classpath + files(
+                compileXposedRuntimeStandIn.flatMap { it.destinationDirectory })
+        // Robolectric is configured by AGP through system properties on its own task; copy them so
+        // the two runtimes differ by exactly one jar.
+        systemProperties = base.systemProperties
+        jvmArgs = base.jvmArgs
+        filter {
+            includeTestsMatching xposedTestPattern
+            failOnNoMatchingTests = true
+        }
+    }
+}
+
+// CI runs `gradle --project-dir android/lsposed-shim check`, so this must hang off check or it
+// would silently stop running.
+tasks.named('check') {
+    dependsOn testDebugUnitTestXposed
 }
 
 // --- Coverage measurement (JaCoCo) -------------------------------------------
@@ -226,8 +323,9 @@ tasks.withType(Test).configureEach {
 // name is free, and a tool-neutral name keeps the CI step readable.
 tasks.register('coverageReport', JacocoReport) {
     group = 'verification'
-    description = 'Runs the debug JVM unit tests and writes XML + HTML coverage reports for :shim.'
-    dependsOn 'testDebugUnitTest'
+    description = 'Runs both debug JVM unit-test runtimes and writes XML + HTML coverage for :shim.'
+    // Both runtimes, or the report cannot see the coverage the second one produces.
+    dependsOn 'testDebugUnitTest', 'testDebugUnitTestXposed'
 
     reports {
         // XML for machines (CI artifact, diffing, any future gate), HTML so a human
@@ -250,6 +348,10 @@ tasks.register('coverageReport', JacocoReport) {
     // Source root so the HTML report shows annotated source, not just class names.
     sourceDirectories.setFrom(files('src/main/java'))
 
-    // The .exec written by the agent during the run this task depends on.
-    executionData.setFrom(layout.buildDirectory.file('jacoco/testDebugUnitTest.exec'))
+    // The .exec files written by the agent during BOTH runs this task depends on. JaCoCo merges
+    // them, so a line executed in either runtime counts once.
+    executionData.setFrom(files(
+            layout.buildDirectory.file('jacoco/testDebugUnitTest.exec'),
+            layout.buildDirectory.file('jacoco/testDebugUnitTestXposed.exec'),
+    ))
 }

@@ -899,6 +899,209 @@ public final class LegacyPreprocessorSessionManagerTest {
                         1_000L));
     }
 
+    @Test
+    public void closedManagerRefusesEveryLifecycleCallbackAndDrainRequest() {
+        Harness harness = new Harness();
+        harness.start(60);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        assertTrue(harness.manager.ownsRoute(harness.record));
+
+        harness.manager.shutdown();
+        harness.scheduler.runReady();
+        assertTrue(harness.scheduler.shutdown);
+        assertFalse(harness.manager.ownsRoute(harness.record));
+
+        int capabilityRequests = harness.capabilities.requests.size();
+        int effectsCreated = harness.factory.createCount;
+        Object late = new Object();
+        harness.manager.onInitialized(late, 61, true);
+        harness.manager.onStart(late, 61);
+        harness.manager.onStop(late);
+        harness.manager.onRelease(late);
+        harness.manager.requestDrain(9L, 9L, (generation, token) -> {
+            throw new AssertionError("a closed manager must not acknowledge a drain");
+        });
+        harness.scheduler.runReady();
+
+        // Nothing is scheduled, no route is taken, and no new capability is ever requested.
+        assertFalse(harness.manager.ownsRoute(late));
+        assertEquals(capabilityRequests, harness.capabilities.requests.size());
+        assertEquals(effectsCreated, harness.factory.createCount);
+
+        // A second shutdown is a no-op rather than a second teardown.
+        harness.manager.shutdown();
+        assertEquals(effectsCreated, harness.factory.createCount);
+    }
+
+    @Test
+    public void shutdownWithASaturatedSchedulerQuarantinesRoutesInsteadOfLeakingThem() {
+        Harness harness = new Harness();
+        harness.start(62);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        assertTrue(harness.manager.ownsRoute(harness.record));
+
+        // Teardown cannot be dispatched, so the route must be poisoned rather than left owned by
+        // a preprocessor that will never be revoked.
+        harness.scheduler.rejectExecute = true;
+        harness.manager.shutdown();
+
+        assertTrue(harness.leases.isQuarantined(harness.record));
+        assertTrue(harness.diagnostics.codes.contains("executor_saturated_shutdown"));
+        assertTrue(harness.scheduler.shutdown);
+    }
+
+    @Test
+    public void drainWithASaturatedSchedulerQuarantinesEveryRoute() {
+        Harness harness = new Harness();
+        harness.start(63);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        assertTrue(harness.manager.ownsRoute(harness.record));
+
+        harness.scheduler.rejectExecute = true;
+        harness.manager.requestDrain(1L, 5L, (generation, token) -> {
+            throw new AssertionError("an undispatched drain must not be acknowledged");
+        });
+
+        assertTrue(harness.leases.isQuarantined(harness.record));
+        assertTrue(harness.diagnostics.codes.contains("executor_saturated_drain"));
+    }
+
+    @Test
+    public void lifecycleCallbacksWithUnusableArgumentsAreIgnored() {
+        Harness harness = new Harness();
+
+        harness.manager.onInitialized(null, 64, true);
+        harness.manager.onInitialized(harness.record, 0, true);
+        harness.manager.onInitialized(harness.record, -1, true);
+        // An AudioRecord that failed to initialise never becomes a session.
+        harness.manager.onInitialized(harness.record, 64, false);
+        harness.manager.onStart(null, 64);
+        harness.manager.onStart(harness.record, 0);
+        harness.manager.onStop(null);
+        harness.manager.onRelease(null);
+        harness.scheduler.runReady();
+
+        assertEquals(0, harness.factory.createCount);
+        assertEquals(0, harness.capabilities.requests.size());
+        assertFalse(harness.manager.ownsRoute(harness.record));
+        assertFalse(harness.manager.ownsRoute(null));
+    }
+
+    @Test
+    public void drainRequestsWithUnusableArgumentsAreIgnored() {
+        Harness harness = new Harness();
+        harness.start(65);
+        harness.replySuccess(0);
+        harness.scheduler.runReady();
+        assertTrue(harness.manager.ownsRoute(harness.record));
+
+        LegacyPreprocessorSessionManager.DrainCallback rejectAcknowledgement =
+                (generation, token) -> {
+                    throw new AssertionError("an invalid drain must not be acknowledged");
+                };
+        harness.manager.requestDrain(0L, 5L, rejectAcknowledgement);
+        harness.manager.requestDrain(-1L, 5L, rejectAcknowledgement);
+        // An acknowledgeable drain without a handoff token has nothing to acknowledge.
+        harness.manager.requestDrain(5L, 0L, rejectAcknowledgement);
+        harness.scheduler.runReady();
+
+        // The route is untouched because no drain was ever accepted.
+        assertTrue(harness.manager.ownsRoute(harness.record));
+    }
+
+    @Test
+    public void sessionRegistryRefusesToGrowWithoutBoundAndDropsTheOverflowingRecord() {
+        Harness harness = new Harness();
+        List<Object> records = new ArrayList<>();
+        for (int i = 0; i < 64; i++) {
+            Object record = new Object();
+            records.add(record);
+            harness.manager.onInitialized(record, 100 + i, true);
+        }
+        harness.scheduler.runReady();
+        assertFalse(harness.diagnostics.codes.contains("session_registry_full"));
+
+        Object overflow = new Object();
+        harness.manager.onInitialized(overflow, 200, true);
+        harness.manager.onStart(overflow, 200);
+        harness.scheduler.runReady();
+
+        // A process that churns AudioRecord instances must not be able to grow the registry
+        // without bound; the overflowing record is refused and stays on the direct path.
+        assertTrue(harness.diagnostics.codes.contains("session_registry_full"));
+        assertFalse(harness.manager.ownsRoute(overflow));
+        assertEquals(0, harness.factory.createCount);
+    }
+
+    @Test
+    public void routeLeasesRefuseNullAndNonPositiveIdentityAndSaturate() {
+        LegacyPreprocessorSessionManager.RouteLeases leases =
+                new LegacyPreprocessorSessionManager.RouteLeases();
+        Object record = new Object();
+
+        assertTrue(leases.isEmpty());
+        assertFalse(leases.acquire(null, 1, 1L));
+        assertFalse(leases.acquire(record, 0, 1L));
+        assertFalse(leases.acquire(record, -1, 1L));
+        assertFalse(leases.acquire(record, 1, 0L));
+        assertFalse(leases.acquire(record, 1, -1L));
+        assertTrue(leases.isEmpty());
+
+        assertTrue(leases.acquire(record, 7, 3L));
+        assertFalse(leases.isEmpty());
+        assertTrue(leases.contains(record));
+        assertEquals(7, leases.session(record));
+        // Re-acquiring is idempotent only for the exact session and generation it was taken for.
+        assertTrue(leases.acquire(record, 7, 3L));
+        assertFalse(leases.acquire(record, 8, 3L));
+        assertFalse(leases.acquire(record, 7, 4L));
+
+        leases.quarantine(record);
+        assertTrue(leases.isQuarantined(record));
+        // A quarantined route can never be re-acquired under its own identity.
+        assertFalse(leases.acquire(record, 7, 3L));
+
+        leases.release(record);
+        assertTrue(leases.isEmpty());
+        assertFalse(leases.contains(record));
+        assertEquals(0, leases.session(record));
+        assertFalse(leases.isQuarantined(record));
+    }
+
+    @Test
+    public void routeLeaseTableIsBoundedAndIgnoresUnknownRecords() {
+        LegacyPreprocessorSessionManager.RouteLeases leases =
+                new LegacyPreprocessorSessionManager.RouteLeases();
+        List<Object> records = new ArrayList<>();
+        for (int i = 0; i < 64; i++) {
+            Object record = new Object();
+            records.add(record);
+            assertTrue(leases.acquire(record, i + 1, 1L));
+        }
+
+        // The 65th distinct record finds no free slot and must be refused, not silently evict one.
+        assertFalse(leases.acquire(new Object(), 999, 1L));
+        assertTrue(leases.contains(records.get(0)));
+
+        // Unknown records are inert on every accessor rather than throwing.
+        Object unknown = new Object();
+        leases.quarantine(null);
+        leases.quarantine(unknown);
+        leases.release(null);
+        leases.release(unknown);
+        assertFalse(leases.isQuarantined(unknown));
+        assertFalse(leases.contains(unknown));
+        assertEquals(0, leases.session(unknown));
+
+        leases.quarantineAll();
+        for (Object record : records) {
+            assertTrue(leases.isQuarantined(record));
+        }
+    }
+
     private static byte[] envelope(
             int sessionId,
             long generation,
